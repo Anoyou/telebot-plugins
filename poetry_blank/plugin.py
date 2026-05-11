@@ -272,11 +272,16 @@ class PoetryBlankPlugin(Plugin):
         self._rounds: dict[int, RoundState] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._used_indices: dict[int, set[int]] = {}  # chat_id -> 已出过的题 index
+        self._tasks: set[asyncio.Task] = set()
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._locks:
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
+
+    def _track_task(self, task: asyncio.Task) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -288,6 +293,11 @@ class PoetryBlankPlugin(Plugin):
             await ctx.log("info", f"[poetry_blank] 已启动，指令：{self._command}，奖励：{self._reward}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         self._rounds.clear()
         self._locks.clear()
         self._used_indices.clear()
@@ -350,7 +360,7 @@ class PoetryBlankPlugin(Plugin):
             f"直接发答案抢答！",
             parse_mode="html",
         )
-        asyncio.create_task(self._auto_timeout(chat_id, ctx))
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         text = (getattr(event, "raw_text", "") or "").strip()
@@ -406,14 +416,16 @@ class PoetryBlankPlugin(Plugin):
 
         return False
 
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext) -> None:
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)
-        rd = self._rounds.get(chat_id)
-        if rd and not rd.finished:
+        async with self._get_lock(chat_id):
+            rd = self._rounds.get(chat_id)
+            if not rd or rd.finished or rd.started_at != started_at:
+                return
             rd.finished = True
             self._rounds.pop(chat_id, None)
-            if ctx.log:
-                await ctx.log("info", f"[poetry_blank] chat {chat_id} 填空超时，答案：{rd.full_line}")
+        if ctx.log:
+            await ctx.log("info", f"[poetry_blank] chat {chat_id} 填空超时，答案：{rd.full_line}")
 
 
 PLUGIN_CLASS = PoetryBlankPlugin

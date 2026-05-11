@@ -112,11 +112,16 @@ class BlackjackPlugin(Plugin):
         self._timeout = 120
         self._games: dict[int, GameState] = {}  # chat_id -> game
         self._locks: dict[int, asyncio.Lock] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._locks:
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
+
+    def _track_task(self, task: asyncio.Task) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -127,6 +132,11 @@ class BlackjackPlugin(Plugin):
             await ctx.log("info", f"[blackjack] 已启动，指令：{self._command}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         self._games.clear()
         self._locks.clear()
         if ctx.log:
@@ -213,7 +223,7 @@ class BlackjackPlugin(Plugin):
             gs.message_id = msg.id if msg else None
 
             # 超时自动停牌
-            asyncio.create_task(self._auto_timeout(chat_id, ctx))
+            self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, gs.started_at)))
 
     # ── 玩家操作 ─────────────────────────────────────
     async def _player_action(self, chat_id: int, action: str, event: Any, ctx: PluginContext) -> None:
@@ -306,14 +316,16 @@ class BlackjackPlugin(Plugin):
         self._games.pop(chat_id, None)
 
     # ── 超时 ─────────────────────────────────────────
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext) -> None:
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)
-        gs = self._games.get(chat_id)
-        if gs and not gs.finished:
+        async with self._get_lock(chat_id):
+            gs = self._games.get(chat_id)
+            if not gs or gs.finished or gs.started_at != started_at:
+                return
             gs.finished = True
             self._games.pop(chat_id, None)
-            if ctx.log:
-                await ctx.log("info", f"[blackjack] chat {chat_id} 牌局超时自动结束")
+        if ctx.log:
+            await ctx.log("info", f"[blackjack] chat {chat_id} 牌局超时自动结束")
 
     # ── 消息钩子（留空，只用命令）──────────────────
     async def on_message(self, ctx: PluginContext, event: Any) -> None:

@@ -3,11 +3,35 @@
   "display_name": "猜数字",
   "description": "群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
   "author": "Anoyou",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat"],
   "min_telebot_version": "0.10.0",
+  "cleanup_mode": "resource",
   "commands": ["guess", "猜数字"],
   "tags": ["game", "number", "casual"],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "schema",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "触发指令名",
+        "default": "guess",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$"
+      },
+      "timeout": {
+        "type": "integer",
+        "title": "答题限时（秒）",
+        "default": 300,
+        "minimum": 10,
+        "maximum": 86400
+      }
+    },
+    "required": ["command", "timeout"]
+  },
   "license": "MIT"
 }

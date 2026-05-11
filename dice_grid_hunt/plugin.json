@@ -3,15 +3,17 @@
   "display_name": "九宫格骰子竞猜",
   "description": "九宫格展示 9 组六骰结果，公布唯一目标点数，群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat"],
   "min_telebot_version": "0.10.0",
+  "cleanup_mode": "resource",
   "commands": ["dicegrid", "九宫格", "骰子竞猜"],
   "tags": ["game", "dice", "quiz"],
   "config_schema": {
     "type": "object",
-    "x-ui-mode": "single",
+    "x-ui-mode": "schema",
+    "additionalProperties": false,
     "properties": {
       "command": {
         "type": "string",
@@ -54,7 +56,8 @@
         "minimum": 1,
         "maximum": 60
       }
-    }
+    },
+    "required": ["command", "reward", "reward_unit", "timeout", "auto_next", "next_delay"]
   },
   "license": "MIT"
 }

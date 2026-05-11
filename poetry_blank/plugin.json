@@ -3,11 +3,42 @@
   "display_name": "诗词填空",
   "description": "古诗词填空抢答，答对获奖",
   "author": "Anoyou",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat"],
   "min_telebot_version": "0.10.0",
+  "cleanup_mode": "resource",
   "commands": ["poetry", "诗词", "填空"],
   "tags": ["game", "culture", "poetry"],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "schema",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "触发指令名",
+        "default": "poetry",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$"
+      },
+      "reward": {
+        "type": "integer",
+        "title": "奖励数值",
+        "default": 10,
+        "minimum": 0,
+        "maximum": 1000000
+      },
+      "timeout": {
+        "type": "integer",
+        "title": "答题限时（秒）",
+        "default": 120,
+        "minimum": 10,
+        "maximum": 86400
+      }
+    },
+    "required": ["command", "reward", "timeout"]
+  },
   "license": "MIT"
 }

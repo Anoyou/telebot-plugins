@@ -24,6 +24,8 @@ Telebot 远程插件仓库。
 
 每个插件一个目录，包含：
 - `plugin.json` — 元数据（必填）
+- `manifest.py` — 运行期 Manifest（必填）
 - `plugin.py` — 入口文件
+- `__init__.py` — 导出 `PLUGIN_CLASS` 和 `MANIFEST`（必填）
 
 参考 [插件开发指南](https://github.com/Anoyou/telebot/blob/main/docs/PLUGIN-DEV-GUIDE.md)

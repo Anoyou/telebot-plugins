@@ -48,11 +48,16 @@ class GuessNumberPlugin(Plugin):
         self._timeout = 300
         self._games: dict[int, GuessGame] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._locks:
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
+
+    def _track_task(self, task: asyncio.Task) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -63,6 +68,11 @@ class GuessNumberPlugin(Plugin):
             await ctx.log("info", f"[guess_number] 已启动，指令：{self._command}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         self._games.clear()
         self._locks.clear()
         if ctx.log:
@@ -125,7 +135,7 @@ class GuessNumberPlugin(Plugin):
             parse_mode="html",
         )
 
-        asyncio.create_task(self._auto_timeout(chat_id, ctx))
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, gs.started_at)))
 
     # ── 处理猜测 ─────────────────────────────────────
     async def _handle_guess(self, chat_id: int, arg_str: str, event: Any, ctx: PluginContext) -> None:
@@ -223,14 +233,16 @@ class GuessNumberPlugin(Plugin):
             await self._handle_guess(chat_id, text, event, ctx)
 
     # ── 超时 ─────────────────────────────────────────
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext) -> None:
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)
-        gs = self._games.get(chat_id)
-        if gs and not gs.finished:
+        async with self._get_lock(chat_id):
+            gs = self._games.get(chat_id)
+            if not gs or gs.finished or gs.started_at != started_at:
+                return
             gs.finished = True
             self._games.pop(chat_id, None)
-            if ctx.log:
-                await ctx.log("info", f"[guess_number] chat {chat_id} 猜数字超时，答案是 {gs.target}")
+        if ctx.log:
+            await ctx.log("info", f"[guess_number] chat {chat_id} 猜数字超时，答案是 {gs.target}")
 
 
 PLUGIN_CLASS = GuessNumberPlugin

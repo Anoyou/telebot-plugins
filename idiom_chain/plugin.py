@@ -886,11 +886,16 @@ class IdiomChainPlugin(Plugin):
         self._forbidden_words: list[str] = []
         self._games: dict[int, ChainGame] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._locks:
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
+
+    def _track_task(self, task: asyncio.Task) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -903,6 +908,11 @@ class IdiomChainPlugin(Plugin):
             await ctx.log("info", f"[idiom_chain] 已启动，指令：{self._command}，奖励：{self._reward}，禁词：{self._forbidden_words}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         self._games.clear()
         self._locks.clear()
         if ctx.log:
@@ -954,7 +964,7 @@ class IdiomChainPlugin(Plugin):
             self._games[chat_id] = game
 
         await event.reply(self._format_game_prompt(game), parse_mode="html")
-        asyncio.create_task(self._auto_timeout(chat_id, ctx))
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, game.started_at)))
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         text = (getattr(event, "raw_text", "") or "").strip()
@@ -973,7 +983,8 @@ class IdiomChainPlugin(Plugin):
 
         lock = self._get_lock(chat_id)
         async with lock:
-            if not game.waiting:
+            game = self._games.get(chat_id)
+            if not game or not game.waiting:
                 return
 
             last_char = game.current_idiom[-1]
@@ -1003,12 +1014,13 @@ class IdiomChainPlugin(Plugin):
                 game.current_idiom = next_idiom
                 game.used_idioms.add(next_idiom)
                 game.started_at = time.monotonic()
+                started_at = game.started_at
                 await event.reply(
                     f"✅ <b>{name}</b> 答对了「{text}」！+{self._reward} 分\n\n"
                     f"{self._format_game_prompt(game)}",
                     parse_mode="html",
                 )
-                asyncio.create_task(self._auto_timeout(chat_id, ctx))
+                self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, started_at)))
             else:
                 # 接不下去了，游戏结束
                 game.waiting = False
@@ -1019,17 +1031,18 @@ class IdiomChainPlugin(Plugin):
                 )
                 self._games.pop(chat_id, None)
 
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext) -> None:
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)
-        game = self._games.get(chat_id)
-        if game and game.waiting:
+        async with self._get_lock(chat_id):
+            game = self._games.get(chat_id)
+            if not game or not game.waiting or game.started_at != started_at:
+                return
             game.waiting = False
             last_char = game.current_idiom[-1]
             answer = _pick_next_idiom(last_char, game.used_idioms)
-            hint = f"答案参考：{answer}" if answer else "已经接不下去了"
             self._games.pop(chat_id, None)
-            if ctx.log:
-                await ctx.log("info", f"[idiom_chain] chat {chat_id} 超时，答案是 {answer}")
+        if ctx.log:
+            await ctx.log("info", f"[idiom_chain] chat {chat_id} 超时，答案是 {answer}")
 
 
 PLUGIN_CLASS = IdiomChainPlugin

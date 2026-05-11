@@ -61,11 +61,16 @@ class DiceGridHuntPlugin(Plugin):
         self._next_delay = 3
         self._rounds: dict[int, RoundState] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._locks:
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
+
+    def _track_task(self, task: asyncio.Task) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -84,6 +89,11 @@ class DiceGridHuntPlugin(Plugin):
             )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         self._rounds.clear()
         self._locks.clear()
         if ctx.log:
@@ -124,7 +134,7 @@ class DiceGridHuntPlugin(Plugin):
             self._render_round_text(rd, include_guide=True),
             parse_mode="html",
         )
-        asyncio.create_task(self._auto_timeout(chat_id, ctx))
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
 
     def _new_round(self) -> RoundState:
         while True:
@@ -230,16 +240,17 @@ class DiceGridHuntPlugin(Plugin):
             rd = self._new_round()
             self._rounds[chat_id] = rd
         await event.reply(self._render_round_text(rd, include_guide=True), parse_mode="html")
-        asyncio.create_task(self._auto_timeout(chat_id, ctx))
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
 
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext) -> None:
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)
-        rd = self._rounds.get(chat_id)
-        if not rd or rd.answered:
-            return
+        async with self._get_lock(chat_id):
+            rd = self._rounds.get(chat_id)
+            if not rd or rd.answered or rd.started_at != started_at:
+                return
 
-        rd.answered = True
-        answer_roll = rd.rolls[rd.answer_index - 1]
+            rd.answered = True
+            answer_roll = rd.rolls[rd.answer_index - 1]
         if ctx.log:
             await ctx.log(
                 "info",

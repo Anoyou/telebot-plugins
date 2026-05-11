@@ -70,11 +70,16 @@ class DiceBattlePlugin(Plugin):
         self._timeout = 60
         self._battles: dict[int, DiceBattle] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        self._tasks: set[asyncio.Task] = set()
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._locks:
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
+
+    def _track_task(self, task: asyncio.Task) -> None:
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -85,6 +90,11 @@ class DiceBattlePlugin(Plugin):
             await ctx.log("info", f"[dice_battle] 已启动，指令：{self._command}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         self._battles.clear()
         self._locks.clear()
         if ctx.log:
@@ -163,7 +173,7 @@ class DiceBattlePlugin(Plugin):
                     f"{target_name}，输入 ,{self._command} accept 应战！",
                     parse_mode="html",
                 )
-                asyncio.create_task(self._battle_timeout(chat_id, ctx))
+                self._track_task(asyncio.create_task(self._battle_timeout(chat_id, ctx, battle.started_at)))
                 return
 
         # 没有回复 → 自己掷骰子
@@ -224,13 +234,15 @@ class DiceBattlePlugin(Plugin):
         self._battles.pop(chat_id, None)
 
     # ── 超时 ─────────────────────────────────────────
-    async def _battle_timeout(self, chat_id: int, ctx: PluginContext) -> None:
+    async def _battle_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)
-        battle = self._battles.get(chat_id)
-        if battle and battle.phase == "waiting":
+        async with self._get_lock(chat_id):
+            battle = self._battles.get(chat_id)
+            if not battle or battle.phase != "waiting" or battle.started_at != started_at:
+                return
             self._battles.pop(chat_id, None)
-            if ctx.log:
-                await ctx.log("info", f"[dice_battle] chat {chat_id} 对战邀请超时")
+        if ctx.log:
+            await ctx.log("info", f"[dice_battle] chat {chat_id} 对战邀请超时")
 
     # ── 消息钩子 ─────────────────────────────────────
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
