@@ -113,11 +113,15 @@ def _draw_digit(buf: bytearray, width: int, height: int, digit: str, x: int, y: 
 
 
 def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int, value: int) -> None:
-    _fill_rect(buf, width, height, x, y, size, size, (250, 250, 247))
-    _fill_rect(buf, width, height, x, y, size, 2, (35, 35, 35))
-    _fill_rect(buf, width, height, x, y + size - 2, size, 2, (35, 35, 35))
-    _fill_rect(buf, width, height, x, y, 2, size, (35, 35, 35))
-    _fill_rect(buf, width, height, x + size - 2, y, 2, size, (35, 35, 35))
+    # 主面 + 简单立体高光/阴影，让骰子更接近参考图风格
+    _fill_rect(buf, width, height, x, y, size, size, (244, 244, 240))
+    _fill_rect(buf, width, height, x + 2, y + 2, size - 6, max(2, size // 7), (255, 255, 252))
+    _fill_rect(buf, width, height, x + size - 5, y + 3, 3, size - 8, (198, 198, 194))
+    _fill_rect(buf, width, height, x + 3, y + size - 5, size - 8, 3, (186, 186, 182))
+    _fill_rect(buf, width, height, x, y, size, 2, (52, 52, 52))
+    _fill_rect(buf, width, height, x, y + size - 2, size, 2, (52, 52, 52))
+    _fill_rect(buf, width, height, x, y, 2, size, (52, 52, 52))
+    _fill_rect(buf, width, height, x + size - 2, y, 2, size, (52, 52, 52))
     p = {
         "tl": (x + size // 4, y + size // 4),
         "tr": (x + size * 3 // 4, y + size // 4),
@@ -137,7 +141,7 @@ def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int
     }[value]
     for key in dots:
         cx, cy = p[key]
-        _fill_circle(buf, width, height, cx, cy, max(3, size // 10), (28, 31, 36))
+        _fill_circle(buf, width, height, cx, cy, max(3, size // 10), (26, 28, 34))
 
 
 def _render_grid_png(rd: RoundState) -> bytes:
@@ -158,34 +162,25 @@ def _render_grid_png(rd: RoundState) -> bytes:
         y0 = margin + row * (tile + gap)
         _fill_rect(buf, width, height, x0, y0, tile, tile, colors[idx])
         _draw_digit(buf, width, height, str(idx + 1), x0 + 18, y0 + 18, 5, (255, 255, 255))
+        # 6 个固定槽位 + 槽位乱序：既有随机感，又绝不重叠
         die_size = 58
-        min_gap = 10
-        left = x0 + 24
-        top = y0 + 70
-        right = x0 + tile - 24 - die_size
-        bottom = y0 + tile - 24 - die_size
-        placed: list[tuple[int, int]] = []
-        for value in values:
-            pos: tuple[int, int] | None = None
-            for _ in range(300):
-                dx = random.randint(left, right)
-                dy = random.randint(top, bottom)
-                ok = True
-                for px, py in placed:
-                    if abs(dx - px) < die_size + min_gap and abs(dy - py) < die_size + min_gap:
-                        ok = False
-                        break
-                if ok:
-                    pos = (dx, dy)
-                    break
-            if pos is None:
-                # 兜底为网格布局，确保可观测且不重叠
-                fallback = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)][len(placed)]
-                fx = left + fallback[0] * (die_size + min_gap)
-                fy = top + fallback[1] * (die_size + min_gap)
-                pos = (fx, fy)
-            placed.append(pos)
-            _draw_die(buf, width, height, pos[0], pos[1], die_size, value)
+        col_gap = 18
+        row_gap = 22
+        start_x = x0 + (tile - (3 * die_size + 2 * col_gap)) // 2
+        start_y = y0 + 86
+        slots = [
+            (start_x + 0 * (die_size + col_gap), start_y + 0 * (die_size + row_gap)),
+            (start_x + 1 * (die_size + col_gap), start_y + 0 * (die_size + row_gap)),
+            (start_x + 2 * (die_size + col_gap), start_y + 0 * (die_size + row_gap)),
+            (start_x + 0 * (die_size + col_gap), start_y + 1 * (die_size + row_gap)),
+            (start_x + 1 * (die_size + col_gap), start_y + 1 * (die_size + row_gap)),
+            (start_x + 2 * (die_size + col_gap), start_y + 1 * (die_size + row_gap)),
+        ]
+        random.shuffle(slots)
+        for value, (dx, dy) in zip(values, slots):
+            jitter_x = random.randint(-4, 4)
+            jitter_y = random.randint(-4, 4)
+            _draw_die(buf, width, height, dx + jitter_x, dy + jitter_y, die_size, value)
     raw = b"".join(b"\x00" + buf[y * width * 3:(y + 1) * width * 3] for y in range(height))
     return (
         b"\x89PNG\r\n\x1a\n"
