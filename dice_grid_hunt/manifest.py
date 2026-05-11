@@ -37,15 +37,22 @@ CONFIG_SCHEMA = {
             "minimum": 1,
             "maximum": 60,
         },
+        "guess_cooldown": {
+            "type": "number",
+            "title": "同一用户答题冷却（秒）",
+            "default": 2.0,
+            "minimum": 0,
+            "maximum": 30,
+        },
     },
-    "required": ["command", "timeout", "auto_next", "next_delay"],
+    "required": ["command", "timeout", "auto_next", "next_delay", "guess_cooldown"],
 }
 
 
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.0.5",
+    version="1.0.7",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",

@@ -47,6 +47,7 @@ class RoundState:
     winner_id: int = 0
     winner_name: str = ""
     winner_message_id: int | None = None
+    last_guess_at: dict[int, float] | None = None
 
 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -162,25 +163,29 @@ def _render_grid_png(rd: RoundState) -> bytes:
         y0 = margin + row * (tile + gap)
         _fill_rect(buf, width, height, x0, y0, tile, tile, colors[idx])
         _draw_digit(buf, width, height, str(idx + 1), x0 + 18, y0 + 18, 5, (255, 255, 255))
-        # 6 个固定槽位 + 槽位乱序：既有随机感，又绝不重叠
+        # 预设散布锚点 + 随机抽样：保留“乱序感”，同时保证不重叠
         die_size = 58
-        col_gap = 18
-        row_gap = 22
-        start_x = x0 + (tile - (3 * die_size + 2 * col_gap)) // 2
-        start_y = y0 + 86
-        slots = [
-            (start_x + 0 * (die_size + col_gap), start_y + 0 * (die_size + row_gap)),
-            (start_x + 1 * (die_size + col_gap), start_y + 0 * (die_size + row_gap)),
-            (start_x + 2 * (die_size + col_gap), start_y + 0 * (die_size + row_gap)),
-            (start_x + 0 * (die_size + col_gap), start_y + 1 * (die_size + row_gap)),
-            (start_x + 1 * (die_size + col_gap), start_y + 1 * (die_size + row_gap)),
-            (start_x + 2 * (die_size + col_gap), start_y + 1 * (die_size + row_gap)),
+        anchors = [
+            (x0 + 36, y0 + 86), (x0 + 102, y0 + 78), (x0 + 168, y0 + 88), (x0 + 188, y0 + 150),
+            (x0 + 152, y0 + 194), (x0 + 88, y0 + 198), (x0 + 34, y0 + 178), (x0 + 70, y0 + 136),
+            (x0 + 132, y0 + 132), (x0 + 196, y0 + 98), (x0 + 52, y0 + 126), (x0 + 204, y0 + 186),
         ]
-        random.shuffle(slots)
-        for value, (dx, dy) in zip(values, slots):
-            jitter_x = random.randint(-4, 4)
-            jitter_y = random.randint(-4, 4)
-            _draw_die(buf, width, height, dx + jitter_x, dy + jitter_y, die_size, value)
+        random.shuffle(anchors)
+        chosen: list[tuple[int, int]] = []
+        min_gap = die_size + 6
+        for ax, ay in anchors:
+            if all(abs(ax - cx) >= min_gap or abs(ay - cy) >= min_gap for cx, cy in chosen):
+                chosen.append((ax, ay))
+            if len(chosen) == 6:
+                break
+        if len(chosen) < 6:
+            # 兜底布局（不会重叠）
+            chosen = [
+                (x0 + 42, y0 + 86), (x0 + 120, y0 + 86), (x0 + 198, y0 + 86),
+                (x0 + 42, y0 + 166), (x0 + 120, y0 + 166), (x0 + 198, y0 + 166),
+            ]
+        for value, (dx, dy) in zip(values, chosen):
+            _draw_die(buf, width, height, dx, dy, die_size, value)
     raw = b"".join(b"\x00" + buf[y * width * 3:(y + 1) * width * 3] for y in range(height))
     return (
         b"\x89PNG\r\n\x1a\n"
@@ -205,7 +210,7 @@ class DiceGridHuntPlugin(Plugin):
     display_name = "九宫格骰子竞猜"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command", "timeout", "auto_next", "next_delay"}
+    command_config_keys = {"command", "timeout", "auto_next", "next_delay", "guess_cooldown"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -213,6 +218,7 @@ class DiceGridHuntPlugin(Plugin):
         self._timeout = 90
         self._auto_next = False
         self._next_delay = 3
+        self._guess_cooldown = 2.0
         self._rounds: dict[int, RoundState] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -232,6 +238,7 @@ class DiceGridHuntPlugin(Plugin):
         self._timeout = cfg.get("timeout", 90)
         self._auto_next = bool(cfg.get("auto_next", False))
         self._next_delay = max(1, int(cfg.get("next_delay", 3)))
+        self._guess_cooldown = max(0.0, float(cfg.get("guess_cooldown", 2.0)))
 
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
@@ -318,6 +325,7 @@ class DiceGridHuntPlugin(Plugin):
                 target_sum=sums[answer_zero_based],
                 prize=prize,
                 started_at=time.monotonic(),
+                last_guess_at={},
             )
 
     def _render_round_text(self, rd: RoundState, include_guide: bool) -> str:
@@ -363,12 +371,20 @@ class DiceGridHuntPlugin(Plugin):
             rd = self._rounds.get(chat_id)
             if not rd or rd.answered:
                 return
+            sender = await event.get_sender()
+            user_id = int(getattr(sender, "id", 0) or 0)
+            now = time.monotonic()
+            last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
+            last_at = last_guess_at.get(user_id, 0.0)
+            if now - last_at < self._guess_cooldown:
+                return
+            last_guess_at[user_id] = now
+            rd.last_guess_at = last_guess_at
 
             if pick != rd.answer_index:
                 return
 
             rd.answered = True
-            sender = await event.get_sender()
             name = getattr(sender, "first_name", "") or "玩家"
             rd.winner_name = name
             rd.winner_id = int(getattr(sender, "id", 0) or 0)
