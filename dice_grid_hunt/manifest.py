@@ -44,6 +44,12 @@ CONFIG_SCHEMA = {
             "minimum": 0,
             "maximum": 30,
         },
+        "template_placeholders": {
+            "type": "string",
+            "title": "可用占位符说明",
+            "default": "{version}：插件版本号\n{target_sum}：本回合目标点数\n{prize}：本回合奖励金额\n{timeout}：本回合超时秒数\n{guess_cooldown}：同一用户答题冷却秒数",
+            "readOnly": True,
+        },
         "template_title": {
             "type": "string",
             "title": "消息模板：标题",
@@ -82,7 +88,7 @@ CONFIG_SCHEMA = {
         "template_preview": {
             "type": "string",
             "title": "模板变量预览",
-            "default": "示例：🎯 九宫格骰子竞猜（v{version}）\\n\\n目标点数：{target_sum}（9 格里唯一）\\n\\n首个答对者奖励：+{prize} · 超时 {timeout} 秒\\n可用变量：{version} {target_sum} {prize} {timeout}",
+            "default": "示例：🎯 九宫格骰子竞猜（v{version}）\\n\\n目标点数：{target_sum}（9 格里唯一）\\n\\n首个答对者奖励：+{prize} · 超时 {timeout} 秒 · 冷却 {guess_cooldown} 秒",
             "readOnly": True,
         },
     },
@@ -104,7 +110,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.0.10",
+    version="1.1.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",

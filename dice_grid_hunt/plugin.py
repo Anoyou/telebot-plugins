@@ -115,16 +115,20 @@ def _draw_digit(buf: bytearray, width: int, height: int, digit: str, x: int, y: 
 
 
 def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int, value: int) -> None:
-    # 主面 + 简单立体高光/阴影，让骰子更接近参考图风格
+    pip_colors = [(26, 28, 34), (203, 71, 90), (60, 129, 216), (82, 163, 84), (212, 150, 64), (142, 92, 187)]
+    orient = random.randint(0, 3)
+    pip_color = random.choice(pip_colors)
+    # drop shadow
+    _fill_rect(buf, width, height, x + 6, y + size + 1, size - 4, 5, (120, 120, 120))
+    # 3D body: top + right face + front face
+    _fill_rect(buf, width, height, x + 4, y - 5, size - 6, 6, (255, 255, 252))
+    _fill_rect(buf, width, height, x + size - 1, y + 2, 5, size - 3, (196, 196, 192))
     _fill_rect(buf, width, height, x, y, size, size, (244, 244, 240))
-    _fill_rect(buf, width, height, x + 2, y + 2, size - 6, max(2, size // 7), (255, 255, 252))
-    _fill_rect(buf, width, height, x + size - 5, y + 3, 3, size - 8, (198, 198, 194))
-    _fill_rect(buf, width, height, x + 3, y + size - 5, size - 8, 3, (186, 186, 182))
     _fill_rect(buf, width, height, x, y, size, 2, (52, 52, 52))
     _fill_rect(buf, width, height, x, y + size - 2, size, 2, (52, 52, 52))
     _fill_rect(buf, width, height, x, y, 2, size, (52, 52, 52))
     _fill_rect(buf, width, height, x + size - 2, y, 2, size, (52, 52, 52))
-    p = {
+    p0 = {
         "tl": (x + size // 4, y + size // 4),
         "tr": (x + size * 3 // 4, y + size // 4),
         "ml": (x + size // 4, y + size // 2),
@@ -133,6 +137,13 @@ def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int
         "br": (x + size * 3 // 4, y + size * 3 // 4),
         "cc": (x + size // 2, y + size // 2),
     }
+    rotate_map = {
+        0: {"tl": "tl", "tr": "tr", "ml": "ml", "mr": "mr", "bl": "bl", "br": "br", "cc": "cc"},
+        1: {"tl": "tr", "tr": "br", "mr": "bl", "br": "tl", "bl": "ml", "ml": "mr", "cc": "cc"},
+        2: {"tl": "br", "tr": "bl", "ml": "mr", "mr": "ml", "bl": "tr", "br": "tl", "cc": "cc"},
+        3: {"tl": "bl", "tr": "tl", "ml": "mr", "mr": "ml", "bl": "br", "br": "tr", "cc": "cc"},
+    }
+    p = {k: p0[rotate_map[orient][k]] for k in p0}
     dots = {
         1: ["cc"],
         2: ["tl", "br"],
@@ -143,7 +154,7 @@ def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int
     }[value]
     for key in dots:
         cx, cy = p[key]
-        _fill_circle(buf, width, height, cx, cy, max(3, size // 10), (26, 28, 34))
+        _fill_circle(buf, width, height, cx, cy, max(3, size // 10), pip_color)
 
 
 def _render_grid_png(rd: RoundState) -> bytes:
@@ -388,6 +399,7 @@ class DiceGridHuntPlugin(Plugin):
             "target_sum": rd.target_sum,
             "prize": rd.prize,
             "timeout": self._timeout,
+            "guess_cooldown": self._guess_cooldown,
         }
         lines = [
             f"<b>{self._template_title.format_map(vars_map)}</b>",
