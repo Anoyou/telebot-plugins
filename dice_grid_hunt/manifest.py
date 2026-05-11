@@ -85,6 +85,14 @@ CONFIG_SCHEMA = {
             "minimum": 0,
             "maximum": 3600,
         },
+        "force_stop_command": {
+            "type": "string",
+            "title": "强制结束游戏参数",
+            "default": "stop",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^\\S+$",
+        },
         "template_preview": {
             "type": "string",
             "title": "模板变量预览",
@@ -103,6 +111,7 @@ CONFIG_SCHEMA = {
         "template_guide_line",
         "template_reward_line",
         "delete_after_round",
+        "force_stop_command",
     ],
 }
 
@@ -110,7 +119,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.2",
+    version="1.1.3",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",

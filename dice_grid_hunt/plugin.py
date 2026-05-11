@@ -285,6 +285,7 @@ class DiceGridHuntPlugin(Plugin):
         "template_guide_line",
         "template_reward_line",
         "delete_after_round",
+        "force_stop_command",
     }
 
     def __init__(self) -> None:
@@ -299,6 +300,7 @@ class DiceGridHuntPlugin(Plugin):
         self._template_guide_line = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
         self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
         self._delete_after_round = 0
+        self._force_stop_command = "stop"
         self._rounds: dict[int, RoundState] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -324,6 +326,7 @@ class DiceGridHuntPlugin(Plugin):
         self._template_guide_line = str(cfg.get("template_guide_line", self._template_guide_line))
         self._template_reward_line = str(cfg.get("template_reward_line", self._template_reward_line))
         self._delete_after_round = max(0, int(cfg.get("delete_after_round", 0)))
+        self._force_stop_command = str(cfg.get("force_stop_command", "stop")).strip().lower() or "stop"
 
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
@@ -351,41 +354,31 @@ class DiceGridHuntPlugin(Plugin):
             return
 
         arg = " ".join(args).strip().lower()
-        if arg in ("stop", "end", "结束", "停止"):
+        force_stop_commands = {self._force_stop_command, "stop", "end", "结束", "停止"}
+        if arg in force_stop_commands:
             lock = self._get_lock(chat_id)
             async with lock:
-                self._rounds.pop(chat_id, None)
-            await event.reply("✅ 已结束当前九宫格骰子竞猜。", parse_mode="html")
-            return
-
-        prize = _parse_prize(args)
-        if prize <= 0:
-            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+                rd = self._rounds.pop(chat_id, None)
+            if rd and rd.message_id:
+                self._track_task(asyncio.create_task(self._delete_round_message_later(ctx, chat_id, rd.message_id)))
+            await self._edit_trigger_or_reply(ctx, event, "✅ 已强制结束当前九宫格骰子竞猜。")
             return
 
         lock = self._get_lock(chat_id)
         async with lock:
             rd = self._rounds.get(chat_id)
             if rd and not rd.answered:
-                if ctx.client and rd.message_id:
-                    try:
-                        await ctx.client.edit_message(
-                            chat_id,
-                            rd.message_id,
-                            self._render_round_text(rd, include_guide=True)
-                            + "\n\n<i>本轮进行中，直接回复 <code>1-9</code> 抢答。</i>",
-                            parse_mode="html",
-                        )
-                        return
-                    except Exception:
-                        pass
-                await event.reply(
-                    self._render_round_text(rd, include_guide=False)
-                    + "\n\n本轮进行中，直接回复 <code>1-9</code> 抢答，或输入命令 <code>,"
-                    + self._command
-                    + " stop</code> 结束本轮。",
-                    parse_mode="html",
+                await self._edit_trigger_or_reply(
+                    ctx,
+                    event,
+                    "上一轮进行中，请先完成上一轮游戏。\n\n"
+                    f"如需强制结束，请输入 <code>,{self._command} {self._force_stop_command}</code>。",
                 )
+                return
+
+            prize = _parse_prize(args)
+            if prize <= 0:
+                await self._edit_trigger_or_reply(ctx, event, f"请指定奖励金额，例如：,{self._command} 100")
                 return
 
             rd = self._new_round(prize)
@@ -409,6 +402,15 @@ class DiceGridHuntPlugin(Plugin):
         if ctx.client:
             return await ctx.client.send_file(event.chat_id, image_file, caption=caption, parse_mode="html")
         return await event.reply(caption, parse_mode="html")
+
+    async def _edit_trigger_or_reply(self, ctx: PluginContext, event: Any, text: str) -> None:
+        if ctx.client:
+            try:
+                await ctx.client.edit_message(event.chat_id, event.id, text, parse_mode="html")
+                return
+            except Exception:
+                pass
+        await event.reply(text, parse_mode="html")
 
     def _new_round(self, prize: int) -> RoundState:
         while True:

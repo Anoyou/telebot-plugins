@@ -1,0 +1,47 @@
+{
+  "name": "sfl-byRBQ",
+  "display_name": "sfl-byRBQ",
+  "description": "迁移自 pagermaid_plugins/sfl，已适配 Telebot 远程插件标准结构。",
+  "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "min_telebot_version": "0.10.2",
+  "commands": [
+    "sfl"
+  ],
+  "cleanup_mode": "resource",
+  "tags": [
+    "migrated",
+    "pagermaid",
+    "byRBQ"
+  ],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat"
+  ],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "schema",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "触发指令名",
+        "default": "sfl",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$"
+      },
+      "enabled": {
+        "type": "boolean",
+        "title": "是否启用",
+        "default": true
+      }
+    },
+    "required": [
+      "command",
+      "enabled"
+    ]
+  }
+}

@@ -14,6 +14,34 @@ Telebot 远程插件仓库。
 | [chatter_challenge](./chatter_challenge/) | `,chat` | 话痨挑战，违反规则自动扣分 |
 | [dice_grid_hunt](./dice_grid_hunt/) | `,dicegrid 金额` | 九宫格骰子图片竞猜 |
 
+## byRBQ 迁移插件（Pagermaid → Telebot）
+
+以下插件已按最新 Telebot 远程插件结构迁移并重命名为 `原名-byRBQ`：
+
+- [ais-byRBQ](./ais-byRBQ/)
+- [cai-byRBQ](./cai-byRBQ/)
+- [get_reactions-byRBQ](./get_reactions-byRBQ/)
+- [gi2-byRBQ](./gi2-byRBQ/)
+- [jpm-byRBQ](./jpm-byRBQ/)
+- [jpmai-byRBQ](./jpmai-byRBQ/)
+- [luckydraw-byRBQ](./luckydraw-byRBQ/)
+- [pixivshow-byRBQ](./pixivshow-byRBQ/)
+- [redpack-byRBQ](./redpack-byRBQ/)
+- [sar-byRBQ](./sar-byRBQ/)
+- [sfl-byRBQ](./sfl-byRBQ/)
+- [share_plugins-byRBQ](./share_plugins-byRBQ/)
+
+每个迁移插件目录都包含：
+- `plugin.json`（安装阶段元数据）
+- `manifest.py`（运行期 Manifest）
+- `plugin.py`（Telebot 插件入口）
+- `__init__.py`（导出 `PLUGIN_CLASS` / `MANIFEST`）
+- `legacy_main.py`（保留原 Pagermaid 实现供后续功能深度迁移）
+
+迁移插件测试工具：
+- 冒烟脚本：`scripts/smoke_check_byrbq.py`
+- 手工清单：`docs/BYRBQ-MANUAL-TEST-CHECKLIST.md`
+
 ## 安装方式
 
 1. 在 Telebot 前端 → 插件中心 → 插件仓库
