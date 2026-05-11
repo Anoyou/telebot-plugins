@@ -164,27 +164,24 @@ def _render_grid_png(rd: RoundState) -> bytes:
         y0 = margin + row * (tile + gap)
         _fill_rect(buf, width, height, x0, y0, tile, tile, colors[idx])
         _draw_digit(buf, width, height, str(idx + 1), x0 + 18, y0 + 18, 5, (255, 255, 255))
-        # 预设散布锚点 + 随机抽样：保留“乱序感”，同时保证不重叠
+        # 真随机散布（拒绝采样），保证不重叠且不超出边界
         die_size = 58
-        anchors = [
-            (x0 + 36, y0 + 86), (x0 + 102, y0 + 78), (x0 + 168, y0 + 88), (x0 + 188, y0 + 150),
-            (x0 + 152, y0 + 194), (x0 + 88, y0 + 198), (x0 + 34, y0 + 178), (x0 + 70, y0 + 136),
-            (x0 + 132, y0 + 132), (x0 + 196, y0 + 98), (x0 + 52, y0 + 126), (x0 + 204, y0 + 186),
-        ]
-        random.shuffle(anchors)
+        left = x0 + 26
+        top = y0 + 70
+        right = x0 + tile - 26 - die_size
+        bottom = y0 + tile - 24 - die_size
         chosen: list[tuple[int, int]] = []
-        min_gap = die_size + 6
-        for ax, ay in anchors:
-            if all(abs(ax - cx) >= min_gap or abs(ay - cy) >= min_gap for cx, cy in chosen):
-                chosen.append((ax, ay))
-            if len(chosen) == 6:
-                break
+        min_gap = die_size + 8
+        for _ in range(1500):
+            px = random.randint(left, right)
+            py = random.randint(top, bottom)
+            if all(abs(px - cx) >= min_gap or abs(py - cy) >= min_gap for cx, cy in chosen):
+                chosen.append((px, py))
+                if len(chosen) == 6:
+                    break
         if len(chosen) < 6:
-            # 兜底布局（不会重叠）
-            chosen = [
-                (x0 + 42, y0 + 86), (x0 + 120, y0 + 86), (x0 + 198, y0 + 86),
-                (x0 + 42, y0 + 166), (x0 + 120, y0 + 166), (x0 + 198, y0 + 166),
-            ]
+            # 兜底布局（绝不重叠）
+            chosen = [(x0 + 40, y0 + 84), (x0 + 118, y0 + 84), (x0 + 196, y0 + 84), (x0 + 40, y0 + 164), (x0 + 118, y0 + 164), (x0 + 196, y0 + 164)]
         for value, (dx, dy) in zip(values, chosen):
             _draw_die(buf, width, height, dx, dy, die_size, value)
     raw = b"".join(b"\x00" + buf[y * width * 3:(y + 1) * width * 3] for y in range(height))
@@ -333,6 +330,13 @@ class DiceGridHuntPlugin(Plugin):
         image_file = io.BytesIO(_render_grid_png(rd))
         image_file.name = "dice_grid_hunt.png"
         caption = self._render_round_text(rd, include_guide=True)
+        # 优先编辑触发命令的消息（在可编辑场景下）
+        if ctx.client:
+            try:
+                edited = await ctx.client.edit_message(event.chat_id, event.id, caption, file=image_file, parse_mode="html")
+                return edited
+            except Exception:
+                image_file.seek(0)
         if ctx.client:
             return await ctx.client.send_file(event.chat_id, image_file, caption=caption, parse_mode="html")
         return await event.reply(caption, parse_mode="html")

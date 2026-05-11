@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat", "send_file"],
   "min_telebot_version": "0.10.0",
