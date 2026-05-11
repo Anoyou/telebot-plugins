@@ -79,6 +79,51 @@ def _fill_circle(buf: bytearray, width: int, height: int, cx: int, cy: int, radi
                 _set_px(buf, width, height, x, y, color)
 
 
+def _fill_polygon(buf: bytearray, width: int, height: int, points: list[tuple[int, int]], color: tuple[int, int, int]) -> None:
+    if len(points) < 3:
+        return
+    min_y = max(0, min(y for _, y in points))
+    max_y = min(height - 1, max(y for _, y in points))
+    for y in range(min_y, max_y + 1):
+        intersections: list[int] = []
+        for i, (x1, y1) in enumerate(points):
+            x2, y2 = points[(i + 1) % len(points)]
+            if y1 == y2:
+                continue
+            if (y >= min(y1, y2)) and (y < max(y1, y2)):
+                x = x1 + (y - y1) * (x2 - x1) / (y2 - y1)
+                intersections.append(int(round(x)))
+        intersections.sort()
+        for i in range(0, len(intersections) - 1, 2):
+            _fill_rect(buf, width, height, intersections[i], y, intersections[i + 1] - intersections[i] + 1, 1, color)
+
+
+def _draw_line(buf: bytearray, width: int, height: int, x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int]) -> None:
+    dx = abs(x2 - x1)
+    dy = -abs(y2 - y1)
+    sx = 1 if x1 < x2 else -1
+    sy = 1 if y1 < y2 else -1
+    err = dx + dy
+    x, y = x1, y1
+    while True:
+        _set_px(buf, width, height, x, y, color)
+        if x == x2 and y == y2:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x += sx
+        if e2 <= dx:
+            err += dx
+            y += sy
+
+
+def _draw_polygon_outline(buf: bytearray, width: int, height: int, points: list[tuple[int, int]], color: tuple[int, int, int]) -> None:
+    for i, (x1, y1) in enumerate(points):
+        x2, y2 = points[(i + 1) % len(points)]
+        _draw_line(buf, width, height, x1, y1, x2, y2, color)
+
+
 SEGMENTS = {
     "0": "abcfed",
     "1": "bc",
@@ -116,18 +161,22 @@ def _draw_digit(buf: bytearray, width: int, height: int, digit: str, x: int, y: 
 
 def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int, value: int) -> None:
     pip_colors = [(26, 28, 34), (203, 71, 90), (60, 129, 216), (82, 163, 84), (212, 150, 64), (142, 92, 187)]
-    orient = random.randint(0, 3)
     pip_color = random.choice(pip_colors)
-    # drop shadow
-    _fill_rect(buf, width, height, x + 6, y + size + 1, size - 4, 5, (120, 120, 120))
-    # 3D body: top + right face + front face
-    _fill_rect(buf, width, height, x + 4, y - 5, size - 6, 6, (255, 255, 252))
-    _fill_rect(buf, width, height, x + size - 1, y + 2, 5, size - 3, (196, 196, 192))
-    _fill_rect(buf, width, height, x, y, size, size, (244, 244, 240))
-    _fill_rect(buf, width, height, x, y, size, 2, (52, 52, 52))
-    _fill_rect(buf, width, height, x, y + size - 2, size, 2, (52, 52, 52))
-    _fill_rect(buf, width, height, x, y, 2, size, (52, 52, 52))
-    _fill_rect(buf, width, height, x + size - 2, y, 2, size, (52, 52, 52))
+    depth = max(7, size // 5)
+    face = [(x, y), (x + size, y), (x + size, y + size), (x, y + size)]
+    right = [(x + size, y), (x + size + depth, y + depth), (x + size + depth, y + size + depth), (x + size, y + size)]
+    bottom = [(x, y + size), (x + size, y + size), (x + size + depth, y + size + depth), (x + depth, y + size + depth)]
+    shadow = [(x + depth + 3, y + depth + 4), (x + size + depth + 5, y + depth + 4), (x + size + depth + 5, y + size + depth + 5), (x + depth + 3, y + size + depth + 5)]
+    _fill_polygon(buf, width, height, shadow, (88, 88, 88))
+    _fill_polygon(buf, width, height, right, (195, 195, 188))
+    _fill_polygon(buf, width, height, bottom, (177, 177, 170))
+    _fill_polygon(buf, width, height, face, (248, 248, 243))
+    _fill_rect(buf, width, height, x + 3, y + 3, size - 7, max(2, size // 9), (255, 255, 253))
+    _draw_polygon_outline(buf, width, height, right, (42, 42, 42))
+    _draw_polygon_outline(buf, width, height, bottom, (42, 42, 42))
+    _draw_polygon_outline(buf, width, height, face, (42, 42, 42))
+    _draw_line(buf, width, height, x + size, y, x + size + depth, y + depth, (255, 255, 255))
+
     p0 = {
         "tl": (x + size // 4, y + size // 4),
         "tr": (x + size * 3 // 4, y + size // 4),
@@ -137,13 +186,16 @@ def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int
         "br": (x + size * 3 // 4, y + size * 3 // 4),
         "cc": (x + size // 2, y + size // 2),
     }
-    rotate_map = {
-        0: {"tl": "tl", "tr": "tr", "ml": "ml", "mr": "mr", "bl": "bl", "br": "br", "cc": "cc"},
-        1: {"tl": "tr", "tr": "br", "mr": "bl", "br": "tl", "bl": "ml", "ml": "mr", "cc": "cc"},
-        2: {"tl": "br", "tr": "bl", "ml": "mr", "mr": "ml", "bl": "tr", "br": "tl", "cc": "cc"},
-        3: {"tl": "bl", "tr": "tl", "ml": "mr", "mr": "ml", "bl": "br", "br": "tr", "cc": "cc"},
+    rotate_map = random.choice([
+        {"tl": "tl", "tr": "tr", "ml": "ml", "mr": "mr", "bl": "bl", "br": "br", "cc": "cc"},
+        {"tl": "tr", "tr": "br", "mr": "bl", "br": "tl", "bl": "ml", "ml": "mr", "cc": "cc"},
+        {"tl": "br", "tr": "bl", "ml": "mr", "mr": "ml", "bl": "tr", "br": "tl", "cc": "cc"},
+        {"tl": "bl", "tr": "tl", "ml": "mr", "mr": "ml", "bl": "br", "br": "tr", "cc": "cc"},
+    ])
+    p = {
+        key: p0[mapped]
+        for key, mapped in rotate_map.items()
     }
-    p = {k: p0[rotate_map[orient][k]] for k in p0}
     dots = {
         1: ["cc"],
         2: ["tl", "br"],
@@ -175,41 +227,28 @@ def _render_grid_png(rd: RoundState) -> bytes:
         y0 = margin + row * (tile + gap)
         _fill_rect(buf, width, height, x0, y0, tile, tile, colors[idx])
         _draw_digit(buf, width, height, str(idx + 1), x0 + 18, y0 + 18, 5, (255, 255, 255))
-        # 真随机散布（拒绝采样），保证不重叠且不超出边界
-        die_size = 58
+        die_size = 47
+        die_w = die_size + max(7, die_size // 5) + 10
+        die_h = die_size + max(7, die_size // 5) + 10
         left = x0 + 26
-        top = y0 + 70
-        right = x0 + tile - 26 - die_size
-        bottom = y0 + tile - 24 - die_size
-        # 先分区再随机，每区只放一个，避免“整齐两排”的视觉
-        zones = [
-            (left, top, left + 75, top + 70),
-            (left + 78, top - 2, left + 155, top + 64),
-            (left + 158, top + 6, right, top + 78),
-            (left + 4, top + 84, left + 82, bottom - 6),
-            (left + 90, top + 92, left + 166, bottom - 10),
-            (left + 170, top + 84, right, bottom),
-        ]
-        random.shuffle(zones)
+        top = y0 + 72
+        right = x0 + tile - 20 - die_w
+        bottom = y0 + tile - 16 - die_h
         chosen: list[tuple[int, int]] = []
-        min_center_dist = die_size + 12
-        min_center_dist_sq = min_center_dist * min_center_dist
-        for zx0, zy0, zx1, zy1 in zones:
-            px = random.randint(zx0, max(zx0, zx1))
-            py = random.randint(zy0, max(zy0, zy1))
-            if all(((px - cx) * (px - cx) + (py - cy) * (py - cy)) >= min_center_dist_sq for cx, cy in chosen):
-                chosen.append((px, py))
-        for _ in range(1000):
+        gap_px = 2
+        for _ in range(2500):
             if len(chosen) == 6:
                 break
-            px = random.randint(left, right)
-            py = random.randint(top, bottom)
-            if all(((px - cx) * (px - cx) + (py - cy) * (py - cy)) >= min_center_dist_sq for cx, cy in chosen):
+            px = random.randint(left + die_w // 2, right + die_w // 2)
+            py = random.randint(top + die_h // 2, bottom + die_h // 2)
+            if all(abs(px - cx) >= die_w + gap_px or abs(py - cy) >= die_h + gap_px for cx, cy in chosen):
                 chosen.append((px, py))
         if len(chosen) < 6:
-            # 兜底布局（绝不重叠）
-            chosen = [(x0 + 40, y0 + 84), (x0 + 118, y0 + 84), (x0 + 196, y0 + 84), (x0 + 40, y0 + 164), (x0 + 118, y0 + 164), (x0 + 196, y0 + 164)]
-        for value, (dx, dy) in zip(values, chosen):
+            chosen = [(x0 + 72, y0 + 104), (x0 + 162, y0 + 88), (x0 + 222, y0 + 138), (x0 + 58, y0 + 190), (x0 + 148, y0 + 162), (x0 + 220, y0 + 210)]
+        random.shuffle(chosen)
+        for value, (cx, cy) in sorted(zip(values, chosen), key=lambda item: item[1][1]):
+            dx = cx - die_w // 2
+            dy = cy - die_h // 2
             _draw_die(buf, width, height, dx, dy, die_size, value)
     raw = b"".join(b"\x00" + buf[y * width * 3:(y + 1) * width * 3] for y in range(height))
     return (
