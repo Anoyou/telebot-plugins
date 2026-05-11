@@ -284,6 +284,13 @@ class DiceGridHuntPlugin(Plugin):
         "template_target_line",
         "template_guide_line",
         "template_reward_line",
+        "round_message_template",
+        "in_progress_message_template",
+        "success_message_template",
+        "timeout_message_template",
+        "cancel_message_template",
+        "invalid_prize_message_template",
+        "prize_message_template",
         "delete_after_round",
         "force_stop_command",
     }
@@ -299,6 +306,23 @@ class DiceGridHuntPlugin(Plugin):
         self._template_target_line = "目标点数：<b>{target_sum}</b>（9 格里唯一）"
         self._template_guide_line = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
         self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
+        self._round_message_template = (
+            "<b>{title}</b>\n\n{target_line}\n\n{guide_line}\n{reward_line}"
+        )
+        self._in_progress_message_template = (
+            "上一轮进行中，请先完成上一轮游戏。\n\n"
+            "如需强制结束，请输入 <code>,{command} {force_stop_command}</code>。"
+        )
+        self._success_message_template = (
+            "🏆 {winner} 答对！答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>\n"
+            "⏱️ {elapsed} 秒 · 奖励 <b>+{prize}</b>"
+        )
+        self._timeout_message_template = (
+            "⏰ 本轮超时，答案是第 <b>{answer_index}</b> 格（点数和 <b>{target_sum}</b>）。"
+        )
+        self._cancel_message_template = "✅ 已强制结束当前九宫格骰子竞猜。"
+        self._invalid_prize_message_template = "请指定奖励金额，例如：,{command} {example}"
+        self._prize_message_template = "+{prize}"
         self._delete_after_round = 0
         self._force_stop_command = "stop"
         self._rounds: dict[int, RoundState] = {}
@@ -325,6 +349,15 @@ class DiceGridHuntPlugin(Plugin):
         self._template_target_line = str(cfg.get("template_target_line", self._template_target_line))
         self._template_guide_line = str(cfg.get("template_guide_line", self._template_guide_line))
         self._template_reward_line = str(cfg.get("template_reward_line", self._template_reward_line))
+        self._round_message_template = str(cfg.get("round_message_template", self._round_message_template))
+        self._in_progress_message_template = str(cfg.get("in_progress_message_template", self._in_progress_message_template))
+        self._success_message_template = str(cfg.get("success_message_template", self._success_message_template))
+        self._timeout_message_template = str(cfg.get("timeout_message_template", self._timeout_message_template))
+        self._cancel_message_template = str(cfg.get("cancel_message_template", self._cancel_message_template))
+        self._invalid_prize_message_template = str(
+            cfg.get("invalid_prize_message_template", self._invalid_prize_message_template)
+        )
+        self._prize_message_template = str(cfg.get("prize_message_template", self._prize_message_template))
         self._delete_after_round = max(0, int(cfg.get("delete_after_round", 0)))
         self._force_stop_command = str(cfg.get("force_stop_command", "stop")).strip().lower() or "stop"
 
@@ -361,7 +394,7 @@ class DiceGridHuntPlugin(Plugin):
                 rd = self._rounds.pop(chat_id, None)
             if rd and rd.message_id:
                 self._track_task(asyncio.create_task(self._delete_round_message_later(ctx, chat_id, rd.message_id)))
-            await self._edit_trigger_or_reply(ctx, event, "✅ 已强制结束当前九宫格骰子竞猜。")
+            await self._edit_trigger_or_reply(ctx, event, self._render_text(self._cancel_message_template, {}))
             return
 
         lock = self._get_lock(chat_id)
@@ -371,14 +404,26 @@ class DiceGridHuntPlugin(Plugin):
                 await self._edit_trigger_or_reply(
                     ctx,
                     event,
-                    "上一轮进行中，请先完成上一轮游戏。\n\n"
-                    f"如需强制结束，请输入 <code>,{self._command} {self._force_stop_command}</code>。",
+                    self._render_text(
+                        self._in_progress_message_template,
+                        {
+                            "command": self._command,
+                            "force_stop_command": self._force_stop_command,
+                        },
+                    ),
                 )
                 return
 
             prize = _parse_prize(args)
             if prize <= 0:
-                await self._edit_trigger_or_reply(ctx, event, f"请指定奖励金额，例如：,{self._command} 100")
+                await self._edit_trigger_or_reply(
+                    ctx,
+                    event,
+                    self._render_text(
+                        self._invalid_prize_message_template,
+                        {"command": self._command, "example": "100"},
+                    ),
+                )
                 return
 
             rd = self._new_round(prize)
@@ -437,27 +482,40 @@ class DiceGridHuntPlugin(Plugin):
     def _render_round_text(self, rd: RoundState, include_guide: bool) -> str:
         vars_map = {
             "version": MANIFEST.version,
+            "command": self._command,
+            "force_stop_command": self._force_stop_command,
             "target_sum": rd.target_sum,
+            "answer_index": rd.answer_index,
             "prize": rd.prize,
             "timeout": self._timeout,
             "guess_cooldown": self._guess_cooldown,
+            "winner": rd.winner_name,
+            "elapsed": "0.0",
+            "example": "100",
         }
-        lines = [
-            f"<b>{self._template_title.format_map(vars_map)}</b>",
-            "",
-            self._template_target_line.format_map(vars_map),
-        ]
+        title = self._render_text(self._template_title, vars_map)
+        target_line = self._render_text(self._template_target_line, vars_map)
+        guide_line = self._render_text(self._template_guide_line, vars_map)
+        reward_line = self._render_text(self._template_reward_line, vars_map)
 
         if include_guide:
-            lines.extend(
-                [
-                    "",
-                    self._template_guide_line.format_map(vars_map),
-                    self._template_reward_line.format_map(vars_map),
-                ]
+            return self._render_text(
+                self._round_message_template,
+                {
+                    **vars_map,
+                    "title": title,
+                    "target_line": target_line,
+                    "guide_line": guide_line,
+                    "reward_line": reward_line,
+                },
             )
+        return f"<b>{title}</b>\n\n{target_line}"
 
-        return "\n".join(lines)
+    def _render_text(self, template: str, vars_map: dict[str, Any]) -> str:
+        try:
+            return template.format_map(vars_map)
+        except Exception:
+            return template
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         text = (getattr(event, "raw_text", "") or "").strip()
@@ -509,8 +567,16 @@ class DiceGridHuntPlugin(Plugin):
             ctx,
             chat_id,
             rd,
-            f"\n\n🏆 {rd.winner_name} 答对！答案是 <b>{rd.answer_index}</b>，点数和 <b>{rd.target_sum}</b>\n"
-            f"⏱️ {elapsed:.1f} 秒 · 奖励 <b>+{rd.prize}</b>",
+            "\n\n" + self._render_text(
+                self._success_message_template,
+                {
+                    "winner": rd.winner_name,
+                    "answer_index": rd.answer_index,
+                    "target_sum": rd.target_sum,
+                    "elapsed": f"{elapsed:.1f}",
+                    "prize": rd.prize,
+                },
+            ),
         )
         self._track_task(asyncio.create_task(self._delete_round_message_later(ctx, chat_id, rd.message_id)))
 
@@ -527,7 +593,7 @@ class DiceGridHuntPlugin(Plugin):
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
 
     async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, rd: RoundState) -> None:
-        text = f"+{rd.prize}"
+        text = self._render_text(self._prize_message_template, {"prize": rd.prize})
         try:
             await event.reply(text)
             return
@@ -564,6 +630,19 @@ class DiceGridHuntPlugin(Plugin):
             await ctx.log(
                 "info",
                 f"[dice_grid_hunt] chat {chat_id} 超时，答案格：{rd.answer_index}，骰子：{_fmt_roll(answer_roll)}，点数和：{rd.target_sum}",
+            )
+        if ctx.client and rd.message_id:
+            await self._edit_round_message(
+                ctx,
+                chat_id,
+                rd,
+                "\n\n" + self._render_text(
+                    self._timeout_message_template,
+                    {
+                        "answer_index": rd.answer_index,
+                        "target_sum": rd.target_sum,
+                    },
+                ),
             )
         self._track_task(asyncio.create_task(self._delete_round_message_later(ctx, chat_id, rd.message_id)))
 
