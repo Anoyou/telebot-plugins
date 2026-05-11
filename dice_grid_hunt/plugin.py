@@ -159,13 +159,33 @@ def _render_grid_png(rd: RoundState) -> bytes:
         _fill_rect(buf, width, height, x0, y0, tile, tile, colors[idx])
         _draw_digit(buf, width, height, str(idx + 1), x0 + 18, y0 + 18, 5, (255, 255, 255))
         die_size = 58
-        die_gap = 18
-        start_x = x0 + 56
-        start_y = y0 + 88
-        for i, value in enumerate(values):
-            dx = start_x + (i % 3) * (die_size + die_gap)
-            dy = start_y + (i // 3) * (die_size + die_gap)
-            _draw_die(buf, width, height, dx, dy, die_size, value)
+        min_gap = 10
+        left = x0 + 24
+        top = y0 + 70
+        right = x0 + tile - 24 - die_size
+        bottom = y0 + tile - 24 - die_size
+        placed: list[tuple[int, int]] = []
+        for value in values:
+            pos: tuple[int, int] | None = None
+            for _ in range(300):
+                dx = random.randint(left, right)
+                dy = random.randint(top, bottom)
+                ok = True
+                for px, py in placed:
+                    if abs(dx - px) < die_size + min_gap and abs(dy - py) < die_size + min_gap:
+                        ok = False
+                        break
+                if ok:
+                    pos = (dx, dy)
+                    break
+            if pos is None:
+                # 兜底为网格布局，确保可观测且不重叠
+                fallback = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1)][len(placed)]
+                fx = left + fallback[0] * (die_size + min_gap)
+                fy = top + fallback[1] * (die_size + min_gap)
+                pos = (fx, fy)
+            placed.append(pos)
+            _draw_die(buf, width, height, pos[0], pos[1], die_size, value)
     raw = b"".join(b"\x00" + buf[y * width * 3:(y + 1) * width * 3] for y in range(height))
     return (
         b"\x89PNG\r\n\x1a\n"
@@ -310,18 +330,7 @@ class DiceGridHuntPlugin(Plugin):
             "<b>🎯 九宫格骰子竞猜</b>",
             "",
             f"目标点数：<b>{rd.target_sum}</b>（9 格里唯一）",
-            "",
-            "<blockquote>",
         ]
-
-        for row in range(3):
-            row_cells = []
-            for col in range(3):
-                idx = row * 3 + col
-                row_cells.append(f"{idx + 1}.{_fmt_roll(rd.rolls[idx])}")
-            lines.append(" | ".join(row_cells))
-
-        lines.append("</blockquote>")
 
         if include_guide:
             lines.extend(
@@ -371,13 +380,12 @@ class DiceGridHuntPlugin(Plugin):
             rd.winner_message_id = int(getattr(event, "id", 0) or 0) or None
 
         elapsed = time.monotonic() - rd.started_at
-        answer_roll = rd.rolls[rd.answer_index - 1]
         await self._send_prize_reply(ctx, event, chat_id, rd)
         await self._edit_round_message(
             ctx,
             chat_id,
             rd,
-            f"\n\n🏆 {rd.winner_name} 答对！答案是 <b>{rd.answer_index}</b>：{_fmt_roll(answer_roll)} = <b>{rd.target_sum}</b>\n"
+            f"\n\n🏆 {rd.winner_name} 答对！答案是 <b>{rd.answer_index}</b>，点数和 <b>{rd.target_sum}</b>\n"
             f"⏱️ {elapsed:.1f} 秒 · 奖励 <b>+{rd.prize}</b>",
         )
 
