@@ -836,9 +836,11 @@ class ChainGame:
     used_idioms: set[str] = field(default_factory=set)
     used_forbidden: set[str] = field(default_factory=set)
     round_num: int = 0
+    prize: int = 0
     winner_id: int = 0
     winner_name: str = ""
     started_at: float = 0.0
+    message_id: int | None = None
     waiting: bool = True
 
 
@@ -876,12 +878,11 @@ class IdiomChainPlugin(Plugin):
     display_name = "成语接龙"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command", "reward", "timeout", "forbidden_words"}
+    command_config_keys = {"command", "timeout", "forbidden_words"}
 
     def __init__(self) -> None:
         super().__init__()
         self._command = "cy"
-        self._reward = 10
         self._timeout = 120
         self._forbidden_words: list[str] = []
         self._games: dict[int, ChainGame] = {}
@@ -900,12 +901,11 @@ class IdiomChainPlugin(Plugin):
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
         self._command = cfg.get("command", "cy")
-        self._reward = cfg.get("reward", 10)
         self._timeout = cfg.get("timeout", 120)
         self._forbidden_words = cfg.get("forbidden_words", [])
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
-            await ctx.log("info", f"[idiom_chain] 已启动，指令：{self._command}，奖励：{self._reward}，禁词：{self._forbidden_words}")
+            await ctx.log("info", f"[idiom_chain] 已启动，指令：{self._command}，禁词：{self._forbidden_words}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for task in list(self._tasks):
@@ -924,7 +924,7 @@ class IdiomChainPlugin(Plugin):
             f"",
             f"当前成语：<b>{game.current_idiom}</b>",
             f"请接「<b>{game.current_idiom[-1]}</b>」开头的成语",
-            f"奖励：{self._reward} 分",
+            f"奖励：+{game.prize}",
         ]
         if self._forbidden_words:
             remaining = [fw for fw in self._forbidden_words if fw not in game.used_forbidden]
@@ -948,6 +948,11 @@ class IdiomChainPlugin(Plugin):
                     await event.reply("📜 成语接龙已结束", parse_mode="html")
             return
 
+        prize = self._parse_prize(args)
+        if prize <= 0:
+            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            return
+
         # 开始新游戏
         async with self._get_lock(chat_id):
             if chat_id in self._games and self._games[chat_id].waiting:
@@ -959,11 +964,13 @@ class IdiomChainPlugin(Plugin):
                 current_idiom=starter,
                 used_idioms={starter},
                 round_num=1,
+                prize=prize,
                 started_at=time.monotonic(),
             )
             self._games[chat_id] = game
 
-        await event.reply(self._format_game_prompt(game), parse_mode="html")
+        msg = await event.reply(self._format_game_prompt(game), parse_mode="html")
+        game.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, game.started_at)))
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
@@ -1006,6 +1013,8 @@ class IdiomChainPlugin(Plugin):
             game.round_num += 1
             game.winner_id = player_id
             game.winner_name = name
+            message_id = int(getattr(event, "id", 0) or 0) or None
+            await self._send_prize_reply(ctx, event, chat_id, message_id, game.prize)
 
             # 自动生成下一题
             next_char = text[-1]
@@ -1015,21 +1024,57 @@ class IdiomChainPlugin(Plugin):
                 game.used_idioms.add(next_idiom)
                 game.started_at = time.monotonic()
                 started_at = game.started_at
-                await event.reply(
-                    f"✅ <b>{name}</b> 答对了「{text}」！+{self._reward} 分\n\n"
-                    f"{self._format_game_prompt(game)}",
-                    parse_mode="html",
+                await self._edit_game_message(
+                    ctx,
+                    chat_id,
+                    game,
+                    f"\n\n✅ {name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n\n{self._format_game_prompt(game)}",
                 )
                 self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, started_at)))
             else:
                 # 接不下去了，游戏结束
                 game.waiting = False
-                await event.reply(
-                    f"✅ <b>{name}</b> 答对了「{text}」！+{self._reward} 分\n\n"
-                    f"🏆 接龙结束！以「{text[-1]}」开头的成语都用完了，共 {game.round_num} 轮",
-                    parse_mode="html",
+                await self._edit_game_message(
+                    ctx,
+                    chat_id,
+                    game,
+                    f"\n\n✅ {name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n🏆 接龙结束！以「{text[-1]}」开头的成语都用完了，共 {game.round_num} 轮",
                 )
                 self._games.pop(chat_id, None)
+
+    @staticmethod
+    def _parse_prize(args: list[str]) -> int:
+        if not args:
+            return 0
+        try:
+            return max(0, min(1_000_000, int(args[0])))
+        except ValueError:
+            return 0
+
+    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
+        text = f"+{prize}"
+        try:
+            await event.reply(text)
+            return
+        except Exception:
+            pass
+        if ctx.client and message_id:
+            try:
+                await ctx.client.send_message(chat_id, text, reply_to=message_id)
+                return
+            except Exception:
+                pass
+        if ctx.client:
+            await ctx.client.send_message(chat_id, text)
+
+    async def _edit_game_message(self, ctx: PluginContext, chat_id: int, game: ChainGame, text: str) -> None:
+        if not ctx.client or not game.message_id:
+            return
+        try:
+            await ctx.client.edit_message(chat_id, game.message_id, text, parse_mode="html")
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[idiom_chain] 题目消息更新失败：{type(exc).__name__}: {exc}")
 
     async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)

@@ -3,7 +3,7 @@
   "display_name": "诗词填空",
   "description": "古诗词填空抢答，答对获奖",
   "author": "Anoyou",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat"],
   "min_telebot_version": "0.10.0",
@@ -23,13 +23,6 @@
         "maxLength": 32,
         "pattern": "^\\S+$"
       },
-      "reward": {
-        "type": "integer",
-        "title": "奖励数值",
-        "default": 10,
-        "minimum": 0,
-        "maximum": 1000000
-      },
       "timeout": {
         "type": "integer",
         "title": "答题限时（秒）",
@@ -38,7 +31,7 @@
         "maximum": 86400
       }
     },
-    "required": ["command", "reward", "timeout"]
+    "required": ["command", "timeout"]
   },
   "license": "MIT"
 }

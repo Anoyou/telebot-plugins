@@ -3,7 +3,7 @@
   "display_name": "成语接龙",
   "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
   "author": "Anoyou",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat"],
   "min_telebot_version": "0.10.0",
@@ -23,13 +23,6 @@
         "maxLength": 32,
         "pattern": "^\\S+$"
       },
-      "reward": {
-        "type": "integer",
-        "title": "奖励数值",
-        "default": 10,
-        "minimum": 0,
-        "maximum": 1000000
-      },
       "timeout": {
         "type": "integer",
         "title": "接龙限时（秒）",
@@ -48,7 +41,7 @@
         }
       }
     },
-    "required": ["command", "reward", "timeout", "forbidden_words"]
+    "required": ["command", "timeout", "forbidden_words"]
   },
   "license": "MIT"
 }

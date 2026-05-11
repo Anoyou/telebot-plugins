@@ -18,13 +18,6 @@ CONFIG_SCHEMA = {
             "maxLength": 32,
             "pattern": "^\\S+$",
         },
-        "reward": {
-            "type": "integer",
-            "title": "奖励数值",
-            "default": 10,
-            "minimum": 0,
-            "maximum": 1000000,
-        },
         "timeout": {
             "type": "integer",
             "title": "答题限时（秒）",
@@ -33,14 +26,14 @@ CONFIG_SCHEMA = {
             "maximum": 86400,
         },
     },
-    "required": ["command", "reward", "timeout"],
+    "required": ["command", "timeout"],
 }
 
 
 MANIFEST = Manifest(
     key="poetry_blank",
     display_name="诗词填空",
-    version="1.0.1",
+    version="1.0.2",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="古诗词填空抢答，答对获奖",

@@ -9,8 +9,11 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import random
+import struct
 import time
+import zlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,10 +40,148 @@ class RoundState:
     sums: list[int]
     answer_index: int  # 1..9
     target_sum: int
+    prize: int
     started_at: float
+    message_id: int | None = None
     answered: bool = False
     winner_id: int = 0
     winner_name: str = ""
+    winner_message_id: int | None = None
+
+
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+
+def _set_px(buf: bytearray, width: int, height: int, x: int, y: int, color: tuple[int, int, int]) -> None:
+    if 0 <= x < width and 0 <= y < height:
+        i = (y * width + x) * 3
+        buf[i:i + 3] = bytes(color)
+
+
+def _fill_rect(buf: bytearray, width: int, height: int, x: int, y: int, w: int, h: int, color: tuple[int, int, int]) -> None:
+    for yy in range(y, y + h):
+        if yy < 0 or yy >= height:
+            continue
+        row_start = (yy * width + max(0, x)) * 3
+        row_end = (yy * width + min(width, x + w)) * 3
+        if row_start < row_end:
+            buf[row_start:row_end] = bytes(color) * ((row_end - row_start) // 3)
+
+
+def _fill_circle(buf: bytearray, width: int, height: int, cx: int, cy: int, radius: int, color: tuple[int, int, int]) -> None:
+    rr = radius * radius
+    for y in range(cy - radius, cy + radius + 1):
+        for x in range(cx - radius, cx + radius + 1):
+            if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= rr:
+                _set_px(buf, width, height, x, y, color)
+
+
+SEGMENTS = {
+    "0": "abcfed",
+    "1": "bc",
+    "2": "abged",
+    "3": "abgcd",
+    "4": "fgbc",
+    "5": "afgcd",
+    "6": "afgecd",
+    "7": "abc",
+    "8": "abcdefg",
+    "9": "abfgcd",
+}
+
+
+def _draw_digit(buf: bytearray, width: int, height: int, digit: str, x: int, y: int, scale: int, color: tuple[int, int, int]) -> None:
+    t = max(2, scale)
+    long = scale * 7
+    short = scale * 10
+    segments = SEGMENTS.get(digit, "")
+    if "a" in segments:
+        _fill_rect(buf, width, height, x + t, y, long, t, color)
+    if "b" in segments:
+        _fill_rect(buf, width, height, x + long + t, y + t, t, short, color)
+    if "c" in segments:
+        _fill_rect(buf, width, height, x + long + t, y + short + 2 * t, t, short, color)
+    if "d" in segments:
+        _fill_rect(buf, width, height, x + t, y + 2 * short + 2 * t, long, t, color)
+    if "e" in segments:
+        _fill_rect(buf, width, height, x, y + short + 2 * t, t, short, color)
+    if "f" in segments:
+        _fill_rect(buf, width, height, x, y + t, t, short, color)
+    if "g" in segments:
+        _fill_rect(buf, width, height, x + t, y + short + t, long, t, color)
+
+
+def _draw_die(buf: bytearray, width: int, height: int, x: int, y: int, size: int, value: int) -> None:
+    _fill_rect(buf, width, height, x, y, size, size, (250, 250, 247))
+    _fill_rect(buf, width, height, x, y, size, 2, (35, 35, 35))
+    _fill_rect(buf, width, height, x, y + size - 2, size, 2, (35, 35, 35))
+    _fill_rect(buf, width, height, x, y, 2, size, (35, 35, 35))
+    _fill_rect(buf, width, height, x + size - 2, y, 2, size, (35, 35, 35))
+    p = {
+        "tl": (x + size // 4, y + size // 4),
+        "tr": (x + size * 3 // 4, y + size // 4),
+        "ml": (x + size // 4, y + size // 2),
+        "mr": (x + size * 3 // 4, y + size // 2),
+        "bl": (x + size // 4, y + size * 3 // 4),
+        "br": (x + size * 3 // 4, y + size * 3 // 4),
+        "cc": (x + size // 2, y + size // 2),
+    }
+    dots = {
+        1: ["cc"],
+        2: ["tl", "br"],
+        3: ["tl", "cc", "br"],
+        4: ["tl", "tr", "bl", "br"],
+        5: ["tl", "tr", "cc", "bl", "br"],
+        6: ["tl", "tr", "ml", "mr", "bl", "br"],
+    }[value]
+    for key in dots:
+        cx, cy = p[key]
+        _fill_circle(buf, width, height, cx, cy, max(3, size // 10), (28, 31, 36))
+
+
+def _render_grid_png(rd: RoundState) -> bytes:
+    width = height = 900
+    buf = bytearray((244, 240, 230) * width * height)
+    tile = 284
+    gap = 12
+    margin = 18
+    colors = [
+        (235, 111, 91), (242, 197, 92), (96, 156, 147),
+        (63, 118, 163), (224, 149, 81), (126, 178, 111),
+        (141, 113, 167), (207, 92, 105), (83, 137, 98),
+    ]
+    for idx, values in enumerate(rd.rolls):
+        row = idx // 3
+        col = idx % 3
+        x0 = margin + col * (tile + gap)
+        y0 = margin + row * (tile + gap)
+        _fill_rect(buf, width, height, x0, y0, tile, tile, colors[idx])
+        _draw_digit(buf, width, height, str(idx + 1), x0 + 18, y0 + 18, 5, (255, 255, 255))
+        die_size = 58
+        die_gap = 18
+        start_x = x0 + 56
+        start_y = y0 + 88
+        for i, value in enumerate(values):
+            dx = start_x + (i % 3) * (die_size + die_gap)
+            dy = start_y + (i // 3) * (die_size + die_gap)
+            _draw_die(buf, width, height, dx, dy, die_size, value)
+    raw = b"".join(b"\x00" + buf[y * width * 3:(y + 1) * width * 3] for y in range(height))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(raw, 6))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def _parse_prize(args: list[str]) -> int:
+    if not args:
+        return 0
+    try:
+        return max(0, min(1_000_000, int(args[0])))
+    except ValueError:
+        return 0
 
 
 @register
@@ -49,13 +190,11 @@ class DiceGridHuntPlugin(Plugin):
     display_name = "九宫格骰子竞猜"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command", "reward", "reward_unit", "timeout", "auto_next", "next_delay"}
+    command_config_keys = {"command", "timeout", "auto_next", "next_delay"}
 
     def __init__(self) -> None:
         super().__init__()
         self._command = "dicegrid"
-        self._reward = 10
-        self._reward_unit = "积分"
         self._timeout = 90
         self._auto_next = False
         self._next_delay = 3
@@ -75,8 +214,6 @@ class DiceGridHuntPlugin(Plugin):
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
         self._command = cfg.get("command", "dicegrid")
-        self._reward = cfg.get("reward", 10)
-        self._reward_unit = cfg.get("reward_unit", "积分")
         self._timeout = cfg.get("timeout", 90)
         self._auto_next = bool(cfg.get("auto_next", False))
         self._next_delay = max(1, int(cfg.get("next_delay", 3)))
@@ -85,7 +222,7 @@ class DiceGridHuntPlugin(Plugin):
         if ctx.log:
             await ctx.log(
                 "info",
-                f"[dice_grid_hunt] 已启动，指令：{self._command}，奖励：{self._reward}{self._reward_unit}，超时：{self._timeout}s",
+                f"[dice_grid_hunt] 已启动，指令：{self._command}，超时：{self._timeout}s",
             )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
@@ -114,6 +251,11 @@ class DiceGridHuntPlugin(Plugin):
             await event.reply("✅ 已结束当前九宫格骰子竞猜。", parse_mode="html")
             return
 
+        prize = _parse_prize(args)
+        if prize <= 0:
+            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            return
+
         lock = self._get_lock(chat_id)
         async with lock:
             rd = self._rounds.get(chat_id)
@@ -127,16 +269,22 @@ class DiceGridHuntPlugin(Plugin):
                 )
                 return
 
-            rd = self._new_round()
+            rd = self._new_round(prize)
             self._rounds[chat_id] = rd
 
-        await event.reply(
-            self._render_round_text(rd, include_guide=True),
-            parse_mode="html",
-        )
+        msg = await self._send_round(ctx, event, rd)
+        rd.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
 
-    def _new_round(self) -> RoundState:
+    async def _send_round(self, ctx: PluginContext, event: Any, rd: RoundState) -> Any:
+        image_file = io.BytesIO(_render_grid_png(rd))
+        image_file.name = "dice_grid_hunt.png"
+        caption = self._render_round_text(rd, include_guide=True)
+        if ctx.client:
+            return await ctx.client.send_file(event.chat_id, image_file, caption=caption, parse_mode="html")
+        return await event.reply(caption, parse_mode="html")
+
+    def _new_round(self, prize: int) -> RoundState:
         while True:
             rolls = [_roll_dice(6) for _ in range(9)]
             sums = [_sum(r) for r in rolls]
@@ -153,6 +301,7 @@ class DiceGridHuntPlugin(Plugin):
                 sums=sums,
                 answer_index=answer_zero_based + 1,
                 target_sum=sums[answer_zero_based],
+                prize=prize,
                 started_at=time.monotonic(),
             )
 
@@ -179,7 +328,7 @@ class DiceGridHuntPlugin(Plugin):
                 [
                     "",
                     "回复 <code>1-9</code> 选择你认为答案所在的格子。",
-                    f"首个答对者奖励：<b>{self._reward} {self._reward_unit}</b> · 超时 {self._timeout} 秒",
+                    f"首个答对者奖励：<b>+{rd.prize}</b> · 超时 {self._timeout} 秒",
                 ]
             )
 
@@ -219,16 +368,17 @@ class DiceGridHuntPlugin(Plugin):
             name = getattr(sender, "first_name", "") or "玩家"
             rd.winner_name = name
             rd.winner_id = int(getattr(sender, "id", 0) or 0)
+            rd.winner_message_id = int(getattr(event, "id", 0) or 0) or None
 
         elapsed = time.monotonic() - rd.started_at
         answer_roll = rd.rolls[rd.answer_index - 1]
-        await event.reply(
-            f"🎉 <b>{rd.winner_name}</b> 抢答正确！\n\n"
-            f"正确位置：<b>{rd.answer_index}</b>\n"
-            f"该格骰子：{_fmt_roll(answer_roll)}\n"
-            f"点数和：<b>{rd.target_sum}</b>\n"
-            f"⏱️ {elapsed:.1f} 秒 · 奖励 <b>{self._reward} {self._reward_unit}</b>",
-            parse_mode="html",
+        await self._send_prize_reply(ctx, event, chat_id, rd)
+        await self._edit_round_message(
+            ctx,
+            chat_id,
+            rd,
+            f"\n\n🏆 {rd.winner_name} 答对！答案是 <b>{rd.answer_index}</b>：{_fmt_roll(answer_roll)} = <b>{rd.target_sum}</b>\n"
+            f"⏱️ {elapsed:.1f} 秒 · 奖励 <b>+{rd.prize}</b>",
         )
 
         if not self._auto_next:
@@ -237,10 +387,36 @@ class DiceGridHuntPlugin(Plugin):
         await asyncio.sleep(self._next_delay)
         lock = self._get_lock(chat_id)
         async with lock:
-            rd = self._new_round()
+            rd = self._new_round(rd.prize)
             self._rounds[chat_id] = rd
-        await event.reply(self._render_round_text(rd, include_guide=True), parse_mode="html")
+        msg = await self._send_round(ctx, event, rd)
+        rd.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
+
+    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, rd: RoundState) -> None:
+        text = f"+{rd.prize}"
+        try:
+            await event.reply(text)
+            return
+        except Exception:
+            pass
+        if ctx.client and rd.winner_message_id:
+            try:
+                await ctx.client.send_message(chat_id, text, reply_to=rd.winner_message_id)
+                return
+            except Exception:
+                pass
+        if ctx.client:
+            await ctx.client.send_message(chat_id, text)
+
+    async def _edit_round_message(self, ctx: PluginContext, chat_id: int, rd: RoundState, suffix: str) -> None:
+        if not ctx.client or not rd.message_id:
+            return
+        try:
+            await ctx.client.edit_message(chat_id, rd.message_id, self._render_round_text(rd, include_guide=True) + suffix, parse_mode="html")
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[dice_grid_hunt] 题目消息更新失败：{type(exc).__name__}: {exc}")
 
     async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
         await asyncio.sleep(self._timeout)

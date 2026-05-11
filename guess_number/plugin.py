@@ -22,9 +22,11 @@ class GuessGame:
     target: int = 0
     low: int = 1
     high: int = 100
+    prize: int = 0
     attempts: int = 0
     max_attempts: int = 0
     started_at: float = 0.0
+    message_id: int | None = None
     finished: bool = False
     winner_name: str = ""
     winner_id: int = 0
@@ -40,7 +42,7 @@ class GuessNumberPlugin(Plugin):
     display_name = "猜数字"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command"}
+    command_config_keys = {"command", "timeout"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -96,20 +98,26 @@ class GuessNumberPlugin(Plugin):
                 return await self._handle_guess(chat_id, arg_str, event, ctx)
 
         # 没有游戏 → 开始新游戏
-        # 解析范围：默认 1-100，可 ,guess 1 1000 自定义
+        prize = self._parse_prize(args)
+        if prize <= 0:
+            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            return
+
+        # 解析范围：默认 1-100，可 ,guess 奖励 1 1000 自定义
         low, high = 1, 100
         max_attempts = 0  # 0 = 不限制
-        if len(args) >= 2:
+        game_args = args[1:]
+        if len(game_args) >= 2:
             try:
-                low = int(args[0])
-                high = int(args[1])
+                low = int(game_args[0])
+                high = int(game_args[1])
                 if low >= high:
                     low, high = 1, 100
             except ValueError:
                 pass
-        if len(args) >= 3:
+        if len(game_args) >= 3:
             try:
-                max_attempts = max(1, int(args[2]))
+                max_attempts = max(1, int(game_args[2]))
             except ValueError:
                 pass
 
@@ -119,6 +127,7 @@ class GuessNumberPlugin(Plugin):
             target=target,
             low=low,
             high=high,
+            prize=prize,
             max_attempts=max_attempts,
             started_at=time.monotonic(),
         )
@@ -127,13 +136,15 @@ class GuessNumberPlugin(Plugin):
             self._games[chat_id] = gs
 
         limit_hint = f"（最多 {max_attempts} 次）" if max_attempts else ""
-        await event.reply(
+        msg = await event.reply(
             f"<b>🔢 猜数字</b>\n\n"
+            f"奖励：<b>+{prize}</b>\n"
             f"范围：{low} ~ {high}{limit_hint}\n"
             f"直接发数字就能猜，或者用 ,{self._command} 数字\n\n"
             f"来猜吧！",
             parse_mode="html",
         )
+        gs.message_id = int(getattr(msg, "id", 0) or 0) or None
 
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, gs.started_at)))
 
@@ -166,13 +177,13 @@ class GuessNumberPlugin(Plugin):
             gs.history.append(f"{player_name}: {guess} → ✅ 中！")
 
             history_text = "\n".join(gs.history[-10:]) if gs.history else ""
-            await event.reply(
-                f"<b>🎉 猜中了！</b>\n\n"
-                f"答案就是 <b>{gs.target}</b>\n"
-                f"🏆 获胜者：{player_name}\n"
-                f"📊 共 {gs.attempts} 次猜测\n\n"
-                f"<i>最近记录：\n{history_text}</i>",
-                parse_mode="html",
+            message_id = int(getattr(event, "id", 0) or 0) or None
+            await self._send_prize_reply(ctx, event, chat_id, message_id, gs.prize)
+            await self._edit_game_message(
+                ctx,
+                chat_id,
+                gs,
+                f"\n\n🏆 {player_name} 猜中了！答案 <b>{gs.target}</b>\n奖励 <b>+{gs.prize}</b> · 共 {gs.attempts} 次猜测\n<i>最近记录：\n{history_text}</i>",
             )
             self._games.pop(chat_id, None)
             return
@@ -205,6 +216,46 @@ class GuessNumberPlugin(Plugin):
             f"{hint} {limit_hint}",
             parse_mode="html",
         )
+
+    @staticmethod
+    def _parse_prize(args: list[str]) -> int:
+        if not args:
+            return 0
+        try:
+            return max(0, min(1_000_000, int(args[0])))
+        except ValueError:
+            return 0
+
+    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
+        text = f"+{prize}"
+        try:
+            await event.reply(text)
+            return
+        except Exception:
+            pass
+        if ctx.client and message_id:
+            try:
+                await ctx.client.send_message(chat_id, text, reply_to=message_id)
+                return
+            except Exception:
+                pass
+        if ctx.client:
+            await ctx.client.send_message(chat_id, text)
+
+    async def _edit_game_message(self, ctx: PluginContext, chat_id: int, gs: GuessGame, suffix: str) -> None:
+        if not ctx.client or not gs.message_id:
+            return
+        limit_hint = f"（最多 {gs.max_attempts} 次）" if gs.max_attempts else ""
+        try:
+            await ctx.client.edit_message(
+                chat_id,
+                gs.message_id,
+                f"<b>🔢 猜数字</b>\n\n奖励：<b>+{gs.prize}</b>\n范围：{gs.low} ~ {gs.high}{limit_hint}\n{suffix}",
+                parse_mode="html",
+            )
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[guess_number] 题目消息更新失败：{type(exc).__name__}: {exc}")
 
     # ── 消息钩子（监听纯数字猜测）──────────────────
     async def on_message(self, ctx: PluginContext, event: Any) -> None:

@@ -249,7 +249,9 @@ class RoundState:
     title: str
     blanked: str
     answer: list[str]
+    prize: int
     started_at: float
+    message_id: int | None = None
     finished: bool = False
 
 
@@ -262,12 +264,11 @@ class PoetryBlankPlugin(Plugin):
     display_name = "诗词填空"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command"}
+    command_config_keys = {"command", "timeout"}
 
     def __init__(self) -> None:
         super().__init__()
         self._command = "poetry"
-        self._reward = 10
         self._timeout = 120
         self._rounds: dict[int, RoundState] = {}
         self._locks: dict[int, asyncio.Lock] = {}
@@ -286,11 +287,10 @@ class PoetryBlankPlugin(Plugin):
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
         self._command = cfg.get("command", "poetry")
-        self._reward = cfg.get("reward", 10)
         self._timeout = cfg.get("timeout", 120)
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
-            await ctx.log("info", f"[poetry_blank] 已启动，指令：{self._command}，奖励：{self._reward}")
+            await ctx.log("info", f"[poetry_blank] 已启动，指令：{self._command}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for task in list(self._tasks):
@@ -326,6 +326,10 @@ class PoetryBlankPlugin(Plugin):
         chat_id = int(getattr(event.chat_id, "channel_id", None) or event.chat_id or 0)
         if not chat_id:
             return
+        prize = self._parse_prize(args)
+        if prize <= 0:
+            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            return
 
         lock = self._get_lock(chat_id)
         async with lock:
@@ -349,17 +353,19 @@ class PoetryBlankPlugin(Plugin):
                 title=title,
                 blanked=blanked,
                 answer=answer,
+                prize=prize,
                 started_at=time.monotonic(),
             )
             self._rounds[chat_id] = rd
 
-        await event.reply(
-            f"<b>📝 诗词填空</b> · 奖励 {self._reward} 分\n\n"
+        msg = await event.reply(
+            f"<b>📝 诗词填空</b> · 奖励 +{rd.prize}\n\n"
             f"<code>{blanked}</code>\n\n"
             f"💡 提示：{author} · 《{title}》\n"
             f"直接发答案抢答！",
             parse_mode="html",
         )
+        rd.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
@@ -387,16 +393,55 @@ class PoetryBlankPlugin(Plugin):
 
             sender = await event.get_sender()
             name = getattr(sender, "first_name", "") or "玩家"
+            message_id = int(getattr(event, "id", 0) or 0) or None
 
-            await event.reply(
-                f"<b>🎉 答对了！</b>\n\n"
-                f"✅ {rd.full_line}\n"
-                f"📖 {rd.author} · 《{rd.title}》\n\n"
-                f"🏆 {name} 获得 {self._reward} 分！\n"
-                f"输入 ,{self._command} 继续下一题",
-                parse_mode="html",
+            await self._send_prize_reply(ctx, event, chat_id, message_id, rd.prize)
+            await self._edit_round_message(
+                ctx,
+                chat_id,
+                rd,
+                f"\n\n🏆 {name} 答对！\n✅ {rd.full_line}\n📖 {rd.author} · 《{rd.title}》\n奖励 <b>+{rd.prize}</b>",
             )
             self._rounds.pop(chat_id, None)
+
+    @staticmethod
+    def _parse_prize(args: list[str]) -> int:
+        if not args:
+            return 0
+        try:
+            return max(0, min(1_000_000, int(args[0])))
+        except ValueError:
+            return 0
+
+    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
+        text = f"+{prize}"
+        try:
+            await event.reply(text)
+            return
+        except Exception:
+            pass
+        if ctx.client and message_id:
+            try:
+                await ctx.client.send_message(chat_id, text, reply_to=message_id)
+                return
+            except Exception:
+                pass
+        if ctx.client:
+            await ctx.client.send_message(chat_id, text)
+
+    async def _edit_round_message(self, ctx: PluginContext, chat_id: int, rd: RoundState, suffix: str) -> None:
+        if not ctx.client or not rd.message_id:
+            return
+        try:
+            await ctx.client.edit_message(
+                chat_id,
+                rd.message_id,
+                f"<b>📝 诗词填空</b> · 奖励 +{rd.prize}\n\n<code>{rd.blanked}</code>\n\n💡 提示：{rd.author} · 《{rd.title}》{suffix}",
+                parse_mode="html",
+            )
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[poetry_blank] 题目消息更新失败：{type(exc).__name__}: {exc}")
 
     def _check_answer(self, text: str, rd: RoundState) -> bool:
         """校验答案：完整诗句 or 缺的那几个字。"""

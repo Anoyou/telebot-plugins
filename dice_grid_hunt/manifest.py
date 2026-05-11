@@ -18,20 +18,6 @@ CONFIG_SCHEMA = {
             "maxLength": 32,
             "pattern": "^\\S+$",
         },
-        "reward": {
-            "type": "integer",
-            "title": "奖励数值",
-            "default": 10,
-            "minimum": 0,
-            "maximum": 1000000,
-        },
-        "reward_unit": {
-            "type": "string",
-            "title": "奖励单位",
-            "default": "积分",
-            "minLength": 1,
-            "maxLength": 20,
-        },
         "timeout": {
             "type": "integer",
             "title": "答题限时（秒）",
@@ -52,18 +38,18 @@ CONFIG_SCHEMA = {
             "maximum": 60,
         },
     },
-    "required": ["command", "reward", "reward_unit", "timeout", "auto_next", "next_delay"],
+    "required": ["command", "timeout", "auto_next", "next_delay"],
 }
 
 
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.0.2",
+    version="1.0.3",
     min_telebot_version="0.10.0",
     author="Anoyou",
-    description="九宫格展示 9 组六骰结果，公布唯一目标点数，群内抢答格子赢奖励",
-    permissions=["send_message", "edit_message", "read_chat"],
+    description="发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
+    permissions=["send_message", "edit_message", "read_chat", "send_file"],
     config_schema=CONFIG_SCHEMA,
 )
 

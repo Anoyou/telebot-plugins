@@ -18,13 +18,6 @@ CONFIG_SCHEMA = {
             "maxLength": 32,
             "pattern": "^\\S+$",
         },
-        "reward": {
-            "type": "integer",
-            "title": "奖励数值",
-            "default": 10,
-            "minimum": 0,
-            "maximum": 1000000,
-        },
         "timeout": {
             "type": "integer",
             "title": "接龙限时（秒）",
@@ -43,14 +36,14 @@ CONFIG_SCHEMA = {
             },
         },
     },
-    "required": ["command", "reward", "timeout", "forbidden_words"],
+    "required": ["command", "timeout", "forbidden_words"],
 }
 
 
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.1",
+    version="1.0.2",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内成语接龙，第一个答对的获奖，支持禁词规则",
