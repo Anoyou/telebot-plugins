@@ -1,0 +1,13 @@
+{
+  "name": "guess_number",
+  "display_name": "猜数字",
+  "description": "群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
+  "author": "Anoyou",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "permissions": ["send_message", "edit_message", "read_chat"],
+  "min_telebot_version": "0.10.0",
+  "commands": ["guess", "猜数字"],
+  "tags": ["game", "number", "casual"],
+  "license": "MIT"
+}
