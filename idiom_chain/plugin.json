@@ -1,0 +1,13 @@
+{
+  "name": "idiom_chain",
+  "display_name": "成语接龙",
+  "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
+  "author": "Anoyou",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "permissions": ["send_message", "edit_message", "read_chat"],
+  "min_telebot_version": "0.10.0",
+  "commands": ["cy", "成语", "成语接龙"],
+  "tags": ["game", "culture", "word"],
+  "license": "MIT"
+}

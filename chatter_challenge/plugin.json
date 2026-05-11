@@ -1,0 +1,13 @@
+{
+  "name": "chatter_challenge",
+  "display_name": "话痨挑战",
+  "description": "设定聊天规则，违反者自动扣分，全程被动监听",
+  "author": "Anoyou",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "permissions": ["send_message", "edit_message", "read_chat"],
+  "min_telebot_version": "0.10.0",
+  "commands": ["chat", "话痨", "挑战"],
+  "tags": ["game", "social", "monitor"],
+  "license": "MIT"
+}

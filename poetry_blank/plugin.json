@@ -1,0 +1,13 @@
+{
+  "name": "poetry_blank",
+  "display_name": "诗词填空",
+  "description": "古诗词填空抢答，答对获奖",
+  "author": "Anoyou",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "permissions": ["send_message", "edit_message", "read_chat"],
+  "min_telebot_version": "0.10.0",
+  "commands": ["poetry", "诗词", "填空"],
+  "tags": ["game", "culture", "poetry"],
+  "license": "MIT"
+}
