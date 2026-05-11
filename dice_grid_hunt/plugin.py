@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+from .manifest import MANIFEST
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
 
@@ -210,7 +211,17 @@ class DiceGridHuntPlugin(Plugin):
     display_name = "九宫格骰子竞猜"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command", "timeout", "auto_next", "next_delay", "guess_cooldown"}
+    command_config_keys = {
+        "command",
+        "timeout",
+        "auto_next",
+        "next_delay",
+        "guess_cooldown",
+        "template_title",
+        "template_target_line",
+        "template_guide_line",
+        "template_reward_line",
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -219,6 +230,10 @@ class DiceGridHuntPlugin(Plugin):
         self._auto_next = False
         self._next_delay = 3
         self._guess_cooldown = 2.0
+        self._template_title = "🎯 九宫格骰子竞猜（v{version}）"
+        self._template_target_line = "目标点数：<b>{target_sum}</b>（9 格里唯一）"
+        self._template_guide_line = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
+        self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
         self._rounds: dict[int, RoundState] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -239,6 +254,10 @@ class DiceGridHuntPlugin(Plugin):
         self._auto_next = bool(cfg.get("auto_next", False))
         self._next_delay = max(1, int(cfg.get("next_delay", 3)))
         self._guess_cooldown = max(0.0, float(cfg.get("guess_cooldown", 2.0)))
+        self._template_title = str(cfg.get("template_title", self._template_title))
+        self._template_target_line = str(cfg.get("template_target_line", self._template_target_line))
+        self._template_guide_line = str(cfg.get("template_guide_line", self._template_guide_line))
+        self._template_reward_line = str(cfg.get("template_reward_line", self._template_reward_line))
 
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
@@ -282,9 +301,21 @@ class DiceGridHuntPlugin(Plugin):
         async with lock:
             rd = self._rounds.get(chat_id)
             if rd and not rd.answered:
+                if ctx.client and rd.message_id:
+                    try:
+                        await ctx.client.edit_message(
+                            chat_id,
+                            rd.message_id,
+                            self._render_round_text(rd, include_guide=True)
+                            + "\n\n<i>本轮进行中，直接回复 <code>1-9</code> 抢答。</i>",
+                            parse_mode="html",
+                        )
+                        return
+                    except Exception:
+                        pass
                 await event.reply(
                     self._render_round_text(rd, include_guide=False)
-                    + "\n\n直接回复 <code>1-9</code> 抢答，或输入命令 <code>,"
+                    + "\n\n本轮进行中，直接回复 <code>1-9</code> 抢答，或输入命令 <code>,"
                     + self._command
                     + " stop</code> 结束本轮。",
                     parse_mode="html",
@@ -329,18 +360,24 @@ class DiceGridHuntPlugin(Plugin):
             )
 
     def _render_round_text(self, rd: RoundState, include_guide: bool) -> str:
+        vars_map = {
+            "version": MANIFEST.version,
+            "target_sum": rd.target_sum,
+            "prize": rd.prize,
+            "timeout": self._timeout,
+        }
         lines = [
-            "<b>🎯 九宫格骰子竞猜</b>",
+            f"<b>{self._template_title.format_map(vars_map)}</b>",
             "",
-            f"目标点数：<b>{rd.target_sum}</b>（9 格里唯一）",
+            self._template_target_line.format_map(vars_map),
         ]
 
         if include_guide:
             lines.extend(
                 [
                     "",
-                    "回复 <code>1-9</code> 选择你认为答案所在的格子。",
-                    f"首个答对者奖励：<b>+{rd.prize}</b> · 超时 {self._timeout} 秒",
+                    self._template_guide_line.format_map(vars_map),
+                    self._template_reward_line.format_map(vars_map),
                 ]
             )
 

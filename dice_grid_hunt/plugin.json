@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat", "send_file"],
   "min_telebot_version": "0.10.0",
@@ -48,9 +48,43 @@
         "default": 2.0,
         "minimum": 0,
         "maximum": 30
+      },
+      "template_title": {
+        "type": "string",
+        "title": "消息模板：标题",
+        "default": "🎯 九宫格骰子竞猜（v{version}）",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "template_target_line": {
+        "type": "string",
+        "title": "消息模板：目标点数行",
+        "default": "目标点数：<b>{target_sum}</b>（9 格里唯一）",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "template_guide_line": {
+        "type": "string",
+        "title": "消息模板：引导行",
+        "default": "回复 <code>1-9</code> 选择你认为答案所在的格子。",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "template_reward_line": {
+        "type": "string",
+        "title": "消息模板：奖励行",
+        "default": "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒",
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "template_preview": {
+        "type": "string",
+        "title": "模板变量预览",
+        "default": "示例：🎯 九宫格骰子竞猜（v{version}）\\n\\n目标点数：{target_sum}（9 格里唯一）\\n\\n首个答对者奖励：+{prize} · 超时 {timeout} 秒\\n可用变量：{version} {target_sum} {prize} {timeout}",
+        "readOnly": true
       }
     },
-    "required": ["command", "timeout", "auto_next", "next_delay", "guess_cooldown"]
+    "required": ["command", "timeout", "auto_next", "next_delay", "guess_cooldown", "template_title", "template_target_line", "template_guide_line", "template_reward_line"]
   },
   "license": "MIT"
 }
