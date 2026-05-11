@@ -170,15 +170,31 @@ def _render_grid_png(rd: RoundState) -> bytes:
         top = y0 + 70
         right = x0 + tile - 26 - die_size
         bottom = y0 + tile - 24 - die_size
+        # 先分区再随机，每区只放一个，避免“整齐两排”的视觉
+        zones = [
+            (left, top, left + 75, top + 70),
+            (left + 78, top - 2, left + 155, top + 64),
+            (left + 158, top + 6, right, top + 78),
+            (left + 4, top + 84, left + 82, bottom - 6),
+            (left + 90, top + 92, left + 166, bottom - 10),
+            (left + 170, top + 84, right, bottom),
+        ]
+        random.shuffle(zones)
         chosen: list[tuple[int, int]] = []
-        min_gap = die_size + 8
-        for _ in range(1500):
+        min_center_dist = die_size + 12
+        min_center_dist_sq = min_center_dist * min_center_dist
+        for zx0, zy0, zx1, zy1 in zones:
+            px = random.randint(zx0, max(zx0, zx1))
+            py = random.randint(zy0, max(zy0, zy1))
+            if all(((px - cx) * (px - cx) + (py - cy) * (py - cy)) >= min_center_dist_sq for cx, cy in chosen):
+                chosen.append((px, py))
+        for _ in range(1000):
+            if len(chosen) == 6:
+                break
             px = random.randint(left, right)
             py = random.randint(top, bottom)
-            if all(abs(px - cx) >= min_gap or abs(py - cy) >= min_gap for cx, cy in chosen):
+            if all(((px - cx) * (px - cx) + (py - cy) * (py - cy)) >= min_center_dist_sq for cx, cy in chosen):
                 chosen.append((px, py))
-                if len(chosen) == 6:
-                    break
         if len(chosen) < 6:
             # 兜底布局（绝不重叠）
             chosen = [(x0 + 40, y0 + 84), (x0 + 118, y0 + 84), (x0 + 196, y0 + 84), (x0 + 40, y0 + 164), (x0 + 118, y0 + 164), (x0 + 196, y0 + 164)]
@@ -218,6 +234,7 @@ class DiceGridHuntPlugin(Plugin):
         "template_target_line",
         "template_guide_line",
         "template_reward_line",
+        "delete_after_round",
     }
 
     def __init__(self) -> None:
@@ -231,6 +248,7 @@ class DiceGridHuntPlugin(Plugin):
         self._template_target_line = "目标点数：<b>{target_sum}</b>（9 格里唯一）"
         self._template_guide_line = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
         self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
+        self._delete_after_round = 0
         self._rounds: dict[int, RoundState] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -255,6 +273,7 @@ class DiceGridHuntPlugin(Plugin):
         self._template_target_line = str(cfg.get("template_target_line", self._template_target_line))
         self._template_guide_line = str(cfg.get("template_guide_line", self._template_guide_line))
         self._template_reward_line = str(cfg.get("template_reward_line", self._template_reward_line))
+        self._delete_after_round = max(0, int(cfg.get("delete_after_round", 0)))
 
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
@@ -440,6 +459,7 @@ class DiceGridHuntPlugin(Plugin):
             f"\n\n🏆 {rd.winner_name} 答对！答案是 <b>{rd.answer_index}</b>，点数和 <b>{rd.target_sum}</b>\n"
             f"⏱️ {elapsed:.1f} 秒 · 奖励 <b>+{rd.prize}</b>",
         )
+        self._track_task(asyncio.create_task(self._delete_round_message_later(ctx, chat_id, rd.message_id)))
 
         if not self._auto_next:
             return
@@ -492,6 +512,16 @@ class DiceGridHuntPlugin(Plugin):
                 "info",
                 f"[dice_grid_hunt] chat {chat_id} 超时，答案格：{rd.answer_index}，骰子：{_fmt_roll(answer_roll)}，点数和：{rd.target_sum}",
             )
+        self._track_task(asyncio.create_task(self._delete_round_message_later(ctx, chat_id, rd.message_id)))
+
+    async def _delete_round_message_later(self, ctx: PluginContext, chat_id: int, message_id: int | None) -> None:
+        if not ctx.client or not message_id or self._delete_after_round <= 0:
+            return
+        await asyncio.sleep(self._delete_after_round)
+        try:
+            await ctx.client.delete_messages(chat_id, message_id)
+        except Exception:
+            pass
 
 
 PLUGIN_CLASS = DiceGridHuntPlugin

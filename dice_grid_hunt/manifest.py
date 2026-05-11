@@ -72,6 +72,13 @@ CONFIG_SCHEMA = {
             "minLength": 1,
             "maxLength": 200,
         },
+        "delete_after_round": {
+            "type": "integer",
+            "title": "回合结束后删除消息延迟（秒，0为不删）",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 3600,
+        },
         "template_preview": {
             "type": "string",
             "title": "模板变量预览",
@@ -89,6 +96,7 @@ CONFIG_SCHEMA = {
         "template_target_line",
         "template_guide_line",
         "template_reward_line",
+        "delete_after_round",
     ],
 }
 
@@ -96,7 +104,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.0.9",
+    version="1.0.10",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",

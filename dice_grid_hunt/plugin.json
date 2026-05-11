@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "entry": "plugin.py",
   "permissions": ["send_message", "edit_message", "read_chat", "send_file"],
   "min_telebot_version": "0.10.0",
@@ -77,6 +77,13 @@
         "minLength": 1,
         "maxLength": 200
       },
+      "delete_after_round": {
+        "type": "integer",
+        "title": "回合结束后删除消息延迟（秒，0为不删）",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 3600
+      },
       "template_preview": {
         "type": "string",
         "title": "模板变量预览",
@@ -84,7 +91,7 @@
         "readOnly": true
       }
     },
-    "required": ["command", "timeout", "auto_next", "next_delay", "guess_cooldown", "template_title", "template_target_line", "template_guide_line", "template_reward_line"]
+    "required": ["command", "timeout", "auto_next", "next_delay", "guess_cooldown", "template_title", "template_target_line", "template_guide_line", "template_reward_line", "delete_after_round"]
   },
   "license": "MIT"
 }
