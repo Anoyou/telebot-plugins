@@ -1,9 +1,9 @@
 {
   "name": "cai-byRBQ",
   "display_name": "cai-byRBQ",
-  "description": "迁移自 pagermaid_plugins/cai，已适配 Telebot 远程插件标准结构。",
+  "description": "# CAI - 自动点踩插件 自动点踩插件，支持多目标配置、冷却时间限制、标准表情和自定义表情。支...",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [

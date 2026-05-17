@@ -1,9 +1,9 @@
 {
   "name": "get_reactions-byRBQ",
   "display_name": "get_reactions-byRBQ",
-  "description": "迁移自 pagermaid_plugins/get_reactions，已适配 Telebot 远程插件标准结构。",
+  "description": "表情获取辅助命令，用于测试环境是否支持自定义表情反应",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [

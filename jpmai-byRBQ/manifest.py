@@ -25,10 +25,10 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="jpmai-byRBQ",
     display_name="jpmai-byRBQ",
-    version="1.0.0",
+    version="1.0.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="迁移自 pagermaid_plugins/jpmai，已适配 Telebot 远程插件标准结构。",
+    description="AI 生成艳情文案插件，支持完整 chat/completions URL 兼容、非标准响应文本提取和连通性测试",
     permissions=["send_message", "edit_message", "read_chat"],
     config_schema=CONFIG_SCHEMA,
 )

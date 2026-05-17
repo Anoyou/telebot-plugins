@@ -25,10 +25,10 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sfl-byRBQ",
     display_name="sfl-byRBQ",
-    version="1.0.0",
+    version="1.0.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="迁移自 pagermaid_plugins/sfl，已适配 Telebot 远程插件标准结构。",
+    description="贴纸跟随插件，在特定群组中自动跟随发送特定贴纸",
     permissions=["send_message", "edit_message", "read_chat"],
     config_schema=CONFIG_SCHEMA,
 )
