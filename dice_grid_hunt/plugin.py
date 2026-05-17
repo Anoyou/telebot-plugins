@@ -302,25 +302,26 @@ class DiceGridHuntPlugin(Plugin):
         self._auto_next = False
         self._next_delay = 3
         self._guess_cooldown = 2.0
-        self._template_title = "🎯 九宫格骰子竞猜（v{version}）"
+        self._template_title = "九宫格竞猜"
         self._template_target_line = "目标点数：<b>{target_sum}</b>（9 格里唯一）"
         self._template_guide_line = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
         self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
         self._round_message_template = (
-            "<b>{title}</b>\n\n{target_line}\n\n{guide_line}\n{reward_line}"
+            "<b>九宫格竞猜</b>\n"
+            "目标：<b>{target_sum}</b>，回 <code>1-9</code>\n"
+            "奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s"
         )
         self._in_progress_message_template = (
-            "上一轮进行中，请先完成上一轮游戏。\n\n"
-            "如需强制结束，请输入 <code>,{command} {force_stop_command}</code>。"
+            "上一局还没结束。继续猜，或发 <code>,{command} {force_stop_command}</code> 结束。"
         )
         self._success_message_template = (
-            "🏆 {winner} 答对！答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>\n"
-            "⏱️ {elapsed} 秒 · 奖励 <b>+{prize}</b>"
+            "{winner} 答对：<b>{answer_index}</b>\n"
+            "用时 {elapsed}s · 奖励 <b>+{prize}</b>"
         )
         self._timeout_message_template = (
-            "⏰ 本轮超时，答案是第 <b>{answer_index}</b> 格（点数和 <b>{target_sum}</b>）。"
+            "超时，答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>。"
         )
-        self._cancel_message_template = "✅ 已强制结束当前九宫格骰子竞猜。"
+        self._cancel_message_template = "已结束当前九宫格竞猜。"
         self._invalid_prize_message_template = "请指定奖励金额，例如：,{command} {example}"
         self._prize_message_template = "+{prize}"
         self._delete_after_round = 0
@@ -365,7 +366,7 @@ class DiceGridHuntPlugin(Plugin):
         if ctx.log:
             await ctx.log(
                 "info",
-                f"[dice_grid_hunt] 已启动，指令：{self._command}，超时：{self._timeout}s",
+                f"[dice_grid_hunt] 已启动 v{MANIFEST.version}，指令：{self._command}，超时：{self._timeout}s",
             )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
@@ -493,23 +494,24 @@ class DiceGridHuntPlugin(Plugin):
             "elapsed": "0.0",
             "example": "100",
         }
-        title = self._render_text(self._template_title, vars_map)
-        target_line = self._render_text(self._template_target_line, vars_map)
-        guide_line = self._render_text(self._template_guide_line, vars_map)
-        reward_line = self._render_text(self._template_reward_line, vars_map)
+        template = self._round_message_template
+        template_vars = vars_map
+        if any(placeholder in template for placeholder in ("{title}", "{target_line}", "{guide_line}", "{reward_line}")):
+            title = self._render_text(self._template_title, vars_map)
+            target_line = self._render_text(self._template_target_line, vars_map)
+            guide_line = self._render_text(self._template_guide_line, vars_map)
+            reward_line = self._render_text(self._template_reward_line, vars_map)
+            template_vars = {
+                **vars_map,
+                "title": title,
+                "target_line": target_line,
+                "guide_line": guide_line if include_guide else "",
+                "reward_line": reward_line,
+            }
+            if not include_guide:
+                return f"<b>{title}</b>\n\n{target_line}"
 
-        if include_guide:
-            return self._render_text(
-                self._round_message_template,
-                {
-                    **vars_map,
-                    "title": title,
-                    "target_line": target_line,
-                    "guide_line": guide_line,
-                    "reward_line": reward_line,
-                },
-            )
-        return f"<b>{title}</b>\n\n{target_line}"
+        return self._render_text(template, template_vars)
 
     def _render_text(self, template: str, vars_map: dict[str, Any]) -> str:
         try:

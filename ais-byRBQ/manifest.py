@@ -25,10 +25,10 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="ais-byRBQ",
     display_name="ais-byRBQ",
-    version="1.0.0",
+    version="1.0.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="迁移自 pagermaid_plugins/ais，已适配 Telebot 远程插件标准结构。",
+    description="AI 查询插件，支持联网搜索增强、参考网址追加、实体查询图片预览、API URL/base url 快速切换与备用模型重试",
     permissions=["send_message", "edit_message", "read_chat"],
     config_schema=CONFIG_SCHEMA,
 )

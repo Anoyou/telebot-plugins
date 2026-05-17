@@ -25,10 +25,10 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="pixivshow-byRBQ",
     display_name="pixivshow-byRBQ",
-    version="1.0.0",
+    version="1.0.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="迁移自 pagermaid_plugins/pixivshow，已适配 Telebot 远程插件标准结构。",
+    description="Pixiv 美少女推图插件，支持普通图与 R18 图推送，R18 自动添加 Telegram 遮罩，可指定单次推送数量",
     permissions=["send_message", "edit_message", "read_chat"],
     config_schema=CONFIG_SCHEMA,
 )

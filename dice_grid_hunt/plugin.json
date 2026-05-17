@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -65,40 +65,8 @@
       "template_placeholders": {
         "type": "string",
         "title": "可用占位符说明",
-        "default": "{version}：插件版本号（示例 1.1.3）\n{command}：插件指令名（示例 dicegrid）\n{force_stop_command}：强制结束参数（示例 stop）\n{target_sum}：本回合目标点数（示例 17）\n{answer_index}：正确格子序号（示例 6）\n{prize}：本回合奖励金额（示例 100）\n{timeout}：本回合超时秒数（示例 90）\n{guess_cooldown}：答题冷却秒数（示例 2.0）\n{winner}：答对用户昵称（示例 小明）\n{elapsed}：答题用时秒（示例 8.2）\n{example}：示例奖励参数（示例 100）\n\n预览仅使用固定示例值，不读取真实群消息，也不会触发发送。",
+        "default": "开局：{target_sum} 目标点数，{prize} 奖励，{timeout} 限时秒数，{guess_cooldown} 答题冷却。\n结果：{winner} 答对者，{answer_index} 正确格子，{elapsed} 用时秒数。\n指令：{command} 触发指令，{force_stop_command} 结束参数，{example} 示例奖励。\n\n预览只使用固定示例值，不读取真实群消息，也不会触发发送。",
         "readOnly": true
-      },
-      "template_title": {
-        "type": "string",
-        "title": "消息模板：标题",
-        "default": "🎯 九宫格骰子竞猜（v{version}）",
-        "minLength": 1,
-        "maxLength": 120,
-        "description": "用于题目消息首行。支持占位符：{version}"
-      },
-      "template_target_line": {
-        "type": "string",
-        "title": "消息模板：目标点数行",
-        "default": "目标点数：<b>{target_sum}</b>（9 格里唯一）",
-        "minLength": 1,
-        "maxLength": 200,
-        "description": "用于展示目标点数。支持占位符：{target_sum}"
-      },
-      "template_guide_line": {
-        "type": "string",
-        "title": "消息模板：引导行",
-        "default": "回复 <code>1-9</code> 选择你认为答案所在的格子。",
-        "minLength": 1,
-        "maxLength": 200,
-        "description": "用于引导用户参与。通常不需要占位符。"
-      },
-      "template_reward_line": {
-        "type": "string",
-        "title": "消息模板：奖励行",
-        "default": "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒",
-        "minLength": 1,
-        "maxLength": 200,
-        "description": "用于展示奖励和超时。支持占位符：{prize}、{timeout}"
       },
       "delete_after_round": {
         "type": "integer",
@@ -118,53 +86,53 @@
       "template_preview": {
         "type": "string",
         "title": "模板渲染预览（只读，开局消息）",
-        "default": "<b>🎯 九宫格骰子竞猜（v1.1.3）</b>\n\n目标点数：<b>17</b>（9 格里唯一）\n\n回复 <code>1-9</code> 选择你认为答案所在的格子。\n首个答对者奖励：<b>+100</b> · 超时 90 秒",
+        "default": "<b>九宫格竞猜</b>\n目标：<b>17</b>，回 <code>1-9</code>\n奖 <b>+100</b> · 90s · 冷却 2.0s",
         "readOnly": true,
         "description": "使用固定示例数据渲染最终消息，仅用于配置预览。"
       },
       "round_message_template": {
         "type": "string",
-        "title": "消息模板：开局完整消息",
-        "description": "支持占位符：{title}、{target_line}、{guide_line}、{reward_line}",
-        "default": "<b>{title}</b>\n\n{target_line}\n\n{guide_line}\n{reward_line}",
+        "title": "开局消息模板",
+        "description": "支持占位符：{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}。示例见下方预览。",
+        "default": "<b>九宫格竞猜</b>\n目标：<b>{target_sum}</b>，回 <code>1-9</code>\n奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s",
         "minLength": 1,
         "maxLength": 1200
       },
       "in_progress_message_template": {
         "type": "string",
-        "title": "消息模板：进行中提示",
+        "title": "进行中提示模板",
         "description": "支持占位符：{command}、{force_stop_command}",
-        "default": "上一轮进行中，请先完成上一轮游戏。\n\n如需强制结束，请输入 <code>,{command} {force_stop_command}</code>。",
+        "default": "上一局还没结束。继续猜，或发 <code>,{command} {force_stop_command}</code> 结束。",
         "minLength": 1,
         "maxLength": 800
       },
       "success_message_template": {
         "type": "string",
-        "title": "消息模板：答对结果",
+        "title": "答对结果模板",
         "description": "支持占位符：{winner}、{answer_index}、{target_sum}、{elapsed}、{prize}",
-        "default": "🏆 {winner} 答对！答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>\n⏱️ {elapsed} 秒 · 奖励 <b>+{prize}</b>",
+        "default": "{winner} 答对：<b>{answer_index}</b>\n用时 {elapsed}s · 奖励 <b>+{prize}</b>",
         "minLength": 1,
         "maxLength": 1200
       },
       "timeout_message_template": {
         "type": "string",
-        "title": "消息模板：超时结果",
+        "title": "超时结果模板",
         "description": "支持占位符：{answer_index}、{target_sum}",
-        "default": "⏰ 本轮超时，答案是第 <b>{answer_index}</b> 格（点数和 <b>{target_sum}</b>）。",
+        "default": "超时，答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>。",
         "minLength": 1,
         "maxLength": 800
       },
       "cancel_message_template": {
         "type": "string",
-        "title": "消息模板：强制结束结果",
+        "title": "强制结束结果模板",
         "description": "强制结束当前回合时的提示文案。",
-        "default": "✅ 已强制结束当前九宫格骰子竞猜。",
+        "default": "已结束当前九宫格竞猜。",
         "minLength": 1,
         "maxLength": 400
       },
       "invalid_prize_message_template": {
         "type": "string",
-        "title": "消息模板：奖励参数错误",
+        "title": "奖励参数错误模板",
         "description": "支持占位符：{command}、{example}",
         "default": "请指定奖励金额，例如：,{command} {example}",
         "minLength": 1,
@@ -172,25 +140,11 @@
       },
       "prize_message_template": {
         "type": "string",
-        "title": "消息模板：奖励入账消息",
+        "title": "奖励入账消息模板",
         "description": "支持占位符：{prize}",
         "default": "+{prize}",
         "minLength": 1,
         "maxLength": 120
-      },
-      "success_preview": {
-        "type": "string",
-        "title": "模板渲染预览（只读，答对结果）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
-        "default": "🏆 小明 答对！答案是 <b>6</b>，点数和 <b>17</b>\n⏱️ 8.2 秒 · 奖励 <b>+100</b>",
-        "readOnly": true
-      },
-      "timeout_preview": {
-        "type": "string",
-        "title": "模板渲染预览（只读，超时结果）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
-        "default": "⏰ 本轮超时，答案是第 <b>6</b> 格（点数和 <b>17</b>）。",
-        "readOnly": true
       }
     },
     "required": [
@@ -199,10 +153,6 @@
       "auto_next",
       "next_delay",
       "guess_cooldown",
-      "template_title",
-      "template_target_line",
-      "template_guide_line",
-      "template_reward_line",
       "delete_after_round",
       "force_stop_command",
       "round_message_template",
