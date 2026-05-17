@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 TEMPLATE_SAMPLE_VARS = {
-    "version": "1.1.5",
+    "version": "1.1.6",
     "command": "dicegrid",
     "force_stop_command": "stop",
     "target_sum": "17",
@@ -32,6 +32,10 @@ ROUND_MESSAGE_TEMPLATE_DEFAULT = (
     "目标：<b>{target_sum}</b>，回 <code>1-9</code>\n"
     "奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s"
 )
+LEGACY_TEMPLATE_TITLE_DEFAULT = "九宫格竞猜"
+LEGACY_TEMPLATE_TARGET_LINE_DEFAULT = "目标点数：<b>{target_sum}</b>（9 格里唯一）"
+LEGACY_TEMPLATE_GUIDE_LINE_DEFAULT = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
+LEGACY_TEMPLATE_REWARD_LINE_DEFAULT = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
 IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT = (
     "上一局还没结束。继续猜，或发 <code>,{command} {force_stop_command}</code> 结束。"
 )
@@ -90,13 +94,13 @@ CONFIG_SCHEMA = {
         "template_placeholders": {
             "type": "string",
             "title": "可用占位符说明",
-            "default": "开局：{target_sum} 目标点数，{prize} 奖励，{timeout} 限时秒数，{guess_cooldown} 答题冷却。\n结果：{winner} 答对者，{answer_index} 正确格子，{elapsed} 用时秒数。\n指令：{command} 触发指令，{force_stop_command} 结束参数，{example} 示例奖励。\n\n预览只使用固定示例值，不读取真实群消息，也不会触发发送。",
+            "default": "开局：{target_sum} 目标点数，{prize} 奖励，{timeout} 限时秒数，{guess_cooldown} 答题冷却。\n结果：{winner} 答对者，{answer_index} 正确格子，{elapsed} 用时秒数。\n指令：{command} 触发指令，{force_stop_command} 结束参数，{example} 示例奖励。\n\n旧版兼容：如果旧配置里仍有 {title}、{target_line}、{guide_line}、{reward_line}，它们会按内置旧模板展开：标题=九宫格竞猜；目标行=目标点数；引导行=回复 1-9；奖励行=奖励与超时。\n\n预览只使用固定示例值，不读取真实群消息，也不会触发发送。",
             "readOnly": True,
         },
         "round_message_template": {
             "type": "string",
             "title": "开局消息模板",
-            "description": "支持占位符：{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}。示例见下方预览。",
+            "description": "支持占位符：{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}。旧配置中的 {title}、{target_line}、{guide_line}、{reward_line} 仍会兼容展开，但新模板建议直接写完整文案。",
             "default": ROUND_MESSAGE_TEMPLATE_DEFAULT,
             "minLength": 1,
             "maxLength": 1200,
@@ -171,6 +175,48 @@ CONFIG_SCHEMA = {
             "default": TEMPLATE_PREVIEW_RENDERED,
             "readOnly": True,
         },
+        "in_progress_preview": {
+            "type": "string",
+            "title": "模板渲染预览（只读，进行中提示）",
+            "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+            "default": _safe_render(IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT),
+            "readOnly": True,
+        },
+        "success_preview": {
+            "type": "string",
+            "title": "模板渲染预览（只读，答对结果）",
+            "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+            "default": _safe_render(SUCCESS_MESSAGE_TEMPLATE_DEFAULT),
+            "readOnly": True,
+        },
+        "timeout_preview": {
+            "type": "string",
+            "title": "模板渲染预览（只读，超时结果）",
+            "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+            "default": _safe_render(TIMEOUT_MESSAGE_TEMPLATE_DEFAULT),
+            "readOnly": True,
+        },
+        "cancel_preview": {
+            "type": "string",
+            "title": "模板渲染预览（只读，强制结束）",
+            "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+            "default": _safe_render(CANCEL_MESSAGE_TEMPLATE_DEFAULT),
+            "readOnly": True,
+        },
+        "invalid_prize_preview": {
+            "type": "string",
+            "title": "模板渲染预览（只读，奖励参数错误）",
+            "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+            "default": _safe_render(INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT),
+            "readOnly": True,
+        },
+        "prize_preview": {
+            "type": "string",
+            "title": "模板渲染预览（只读，奖励入账消息）",
+            "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+            "default": _safe_render(PRIZE_MESSAGE_TEMPLATE_DEFAULT),
+            "readOnly": True,
+        },
     },
     "required": [
         "command",
@@ -194,7 +240,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.5",
+    version="1.1.6",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
