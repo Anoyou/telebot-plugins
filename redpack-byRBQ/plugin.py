@@ -312,6 +312,15 @@ class RedpackByRBQPlugin(Plugin):
         account_id: int,
         ctx: PluginContext,
     ) -> None:
+        if getattr(event, "outgoing", True) is False:
+            if ctx.log:
+                await ctx.log(
+                    "info",
+                    "[redpack-byRBQ] 已忽略非账号本人发出的红包命令",
+                    chat_id=getattr(event, "chat_id", None),
+                    sender_id=getattr(event, "sender_id", None),
+                )
+            return
         self._bind_core_config(account_id)
         message = _NativeMessageAdapter(event, args)
         bot = _NativeClientAdapter(client or ctx.client)
