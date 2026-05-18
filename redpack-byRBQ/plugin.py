@@ -168,6 +168,18 @@ class _NativeMessageAdapter:
         self._sender = sender
         self.arguments = " ".join(args or []).strip()
 
+    def _remember_result_message(self, result: Any) -> Any:
+        if result is not None and getattr(result, "id", None) is not None:
+            self._message = result
+        return result
+
+    async def _respond(self, text: str, **kwargs: Any) -> Any:
+        for method_name in ("respond", "reply"):
+            method = getattr(self._event, method_name, None)
+            if callable(method):
+                return self._remember_result_message(await method(text, **kwargs))
+        return None
+
     @property
     def id(self) -> Any:
         return getattr(self._message, "id", getattr(self._event, "id", None))
@@ -223,13 +235,12 @@ class _NativeMessageAdapter:
         return getattr(self._message, "reply_markup", getattr(self._event, "reply_markup", None))
 
     async def edit(self, text: str, **kwargs: Any) -> Any:
+        if not getattr(self._event, "outgoing", False):
+            return await self._respond(text, **kwargs)
         edit = getattr(self._event, "edit", None)
         if callable(edit):
-            return await edit(text, **kwargs)
-        reply = getattr(self._event, "reply", None)
-        if callable(reply):
-            return await reply(text, **kwargs)
-        return None
+            return self._remember_result_message(await edit(text, **kwargs))
+        return await self._respond(text, **kwargs)
 
     async def delete(self) -> Any:
         delete = getattr(self._event, "delete", None) or getattr(self._message, "delete", None)
@@ -240,7 +251,7 @@ class _NativeMessageAdapter:
     async def reply(self, text: str, **kwargs: Any) -> Any:
         reply = getattr(self._event, "reply", None)
         if callable(reply):
-            return await reply(text, **kwargs)
+            return self._remember_result_message(await reply(text, **kwargs))
         return await self.edit(text, **kwargs)
 
     async def click(self, row: int, col: int) -> Any:
