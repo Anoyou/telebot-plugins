@@ -7,6 +7,7 @@ Plugin API 的事件、客户端和配置适配到业务层。
 from __future__ import annotations
 
 import logging
+import io
 import sys
 import types
 from pathlib import Path
@@ -98,6 +99,24 @@ def _current_command_prefix() -> str:
         return str(current_command_prefix(fallback=",") or ",")
     except Exception:
         return ","
+
+
+def _get_client_method(client: Any, name: str) -> Any:
+    try:
+        method = getattr(client, name)
+    except (AttributeError, PermissionError):
+        return None
+    return method if callable(method) else None
+
+
+def _telegram_file(photo: Any) -> Any:
+    if isinstance(photo, (str, Path)):
+        path = Path(photo)
+        if path.exists() and path.is_file():
+            file_obj = io.BytesIO(path.read_bytes())
+            file_obj.name = path.name or "redpack.png"
+            return file_obj
+    return photo
 
 
 def _chat_id(event: Any) -> int:
@@ -203,18 +222,25 @@ class _NativeClientAdapter:
 
     async def send_photo(self, chat_id: int, photo: Any, **kwargs: Any) -> Any:
         kwargs = self._normalize_send_kwargs(kwargs)
-        if hasattr(self._client, "send_photo"):
-            return await self._client.send_photo(chat_id, photo, **kwargs)
-        return await self._client.send_file(chat_id, photo, **kwargs)
+        send_file = _get_client_method(self._client, "send_file")
+        if send_file is not None:
+            kwargs.setdefault("force_document", False)
+            return await send_file(chat_id, _telegram_file(photo), **kwargs)
+        send_photo = _get_client_method(self._client, "send_photo")
+        if send_photo is not None:
+            return await send_photo(chat_id, photo, **kwargs)
+        raise PermissionError("当前客户端没有可用的 send_file/send_photo 能力")
 
     async def edit_message_caption(self, chat_id: int, message_id: int, caption: str, **kwargs: Any) -> Any:
-        if hasattr(self._client, "edit_message_caption"):
-            return await self._client.edit_message_caption(chat_id, message_id, caption, **kwargs)
+        edit_caption = _get_client_method(self._client, "edit_message_caption")
+        if edit_caption is not None:
+            return await edit_caption(chat_id, message_id, caption, **kwargs)
         return await self._client.edit_message(chat_id, message_id, caption, **kwargs)
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, **kwargs: Any) -> Any:
-        if hasattr(self._client, "edit_message_text"):
-            return await self._client.edit_message_text(chat_id, message_id, text, **kwargs)
+        edit_text = _get_client_method(self._client, "edit_message_text")
+        if edit_text is not None:
+            return await edit_text(chat_id, message_id, text, **kwargs)
         return await self._client.edit_message(chat_id, message_id, text, **kwargs)
 
     def __getattr__(self, name: str) -> Any:
