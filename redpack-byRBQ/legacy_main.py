@@ -1820,10 +1820,10 @@ async def send_settlement_output(
 
     try:
         if hasattr(placeholder, "edit"):
-            await placeholder.edit(settlement_rich)
+            await placeholder.edit(settlement_rich, parse_mode="html")
             return
         if hasattr(placeholder, "edit_text"):
-            await placeholder.edit_text(settlement_rich)
+            await placeholder.edit_text(settlement_rich, parse_mode="html")
             return
     except Exception as error:
         logs.warning(f"[REDPACK] 结算富文本发送失败，改用纯文本: {error}")
@@ -2050,7 +2050,8 @@ async def redpack_command(message: Message, bot: Client) -> None:
                 keyword=keyword or "",
                 amount=amount,
                 count=count,
-            )
+            ),
+            parse_mode="html",
         )
         pack["message_id"] = getattr(message, "id", None)
         config.save()
