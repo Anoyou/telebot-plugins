@@ -43,10 +43,31 @@ DEFAULT_AMOUNT = 88888
 DEFAULT_COUNT = 10
 DEFAULT_SUFFIX = "发了一个拼手气红包"
 REDPACK_ID_LENGTH = 6
-MIN_SHARE_AMOUNT = 100
-CLAIM_REPLY_DELETE_DELAY = 8
-AUTO_CONFIRM_TTL = 180
-AUTO_CONFIRM_CLICK_DELAY = 0.8
+DEFAULT_MIN_SHARE_AMOUNT = 100
+MIN_SHARE_AMOUNT = DEFAULT_MIN_SHARE_AMOUNT
+DEFAULT_CLAIM_REPLY_DELETE_DELAY = 8
+CLAIM_REPLY_DELETE_DELAY = DEFAULT_CLAIM_REPLY_DELETE_DELAY
+DEFAULT_AUTO_CONFIRM_TTL = 180
+AUTO_CONFIRM_TTL = DEFAULT_AUTO_CONFIRM_TTL
+DEFAULT_AUTO_CONFIRM_CLICK_DELAY = 0.8
+AUTO_CONFIRM_CLICK_DELAY = DEFAULT_AUTO_CONFIRM_CLICK_DELAY
+AUTO_CONFIRM_ENABLED = True
+DELETE_COMMAND_MESSAGE = True
+COMMAND_PREFIX = ","
+COMMAND_NAME = "redpack"
+DEFAULT_SUBCOMMAND_ALIASES = {
+    "help": {"help", "帮助"},
+    "send": {"send"},
+    "img": {"img", "image", "图片"},
+    "status": {"status", "状态"},
+    "active": {"active", "list", "列表"},
+    "clear": {"clear", "清空"},
+    "amount": {"amount", "金额"},
+    "count": {"count", "个数", "数量"},
+    "name": {"name", "昵称", "名称"},
+    "reset": {"reset", "重置"},
+}
+SUBCOMMAND_ALIASES = {key: set(value) for key, value in DEFAULT_SUBCOMMAND_ALIASES.items()}
 CAPTCHA_WIDTH = 1280
 CAPTCHA_HEIGHT = 420
 CAPTCHA_DOT_COUNT = 1400
@@ -92,6 +113,86 @@ FONT_EXTENSIONS = {".ttf", ".ttc", ".otf"}
 _font_path_cache: Optional[str] = None
 _font_search_done = False
 _pending_transfer_confirms: dict[str, dict[int, float]] = {}
+
+
+def parse_aliases(value: Any, defaults: set[str]) -> set[str]:
+    """解析配置页里的别名列表，兼容逗号、空白和 JSON 数组。"""
+    items: list[Any]
+    if isinstance(value, list):
+        items = value
+    else:
+        text = str(value or "").strip()
+        items = re.split(r"[\s,，]+", text) if text else []
+    aliases = {str(item).strip().lower() for item in items if str(item).strip()}
+    return aliases or set(defaults)
+
+
+def apply_runtime_settings(settings: dict[str, Any]) -> None:
+    """应用 TelePilot 配置页参数到历史业务层。"""
+    global MIN_SHARE_AMOUNT
+    global CLAIM_REPLY_DELETE_DELAY
+    global AUTO_CONFIRM_TTL
+    global AUTO_CONFIRM_CLICK_DELAY
+    global AUTO_CONFIRM_ENABLED
+    global DELETE_COMMAND_MESSAGE
+    global COMMAND_PREFIX
+    global COMMAND_NAME
+    global SUBCOMMAND_ALIASES
+
+    cfg = settings or {}
+    MIN_SHARE_AMOUNT = clamp_int(
+        cfg.get("min_share_amount", DEFAULT_MIN_SHARE_AMOUNT),
+        DEFAULT_MIN_SHARE_AMOUNT,
+        1,
+        999999999,
+    )
+    CLAIM_REPLY_DELETE_DELAY = clamp_int(
+        cfg.get("claim_reply_delete_delay", DEFAULT_CLAIM_REPLY_DELETE_DELAY),
+        DEFAULT_CLAIM_REPLY_DELETE_DELAY,
+        0,
+        86400,
+    )
+    AUTO_CONFIRM_TTL = clamp_int(cfg.get("auto_confirm_ttl", DEFAULT_AUTO_CONFIRM_TTL), DEFAULT_AUTO_CONFIRM_TTL, 1, 86400)
+    AUTO_CONFIRM_CLICK_DELAY = max(
+        0,
+        min(float(cfg.get("auto_confirm_click_delay", DEFAULT_AUTO_CONFIRM_CLICK_DELAY)), 60),
+    )
+    AUTO_CONFIRM_ENABLED = bool(cfg.get("auto_confirm_enabled", AUTO_CONFIRM_ENABLED))
+    DELETE_COMMAND_MESSAGE = bool(
+        cfg.get("delete_command_message", cfg.get("delete_image_command_message", DELETE_COMMAND_MESSAGE))
+    )
+    COMMAND_PREFIX = str(cfg.get("command_prefix") or COMMAND_PREFIX or ",")
+    COMMAND_NAME = str(cfg.get("command") or COMMAND_NAME or "redpack").strip() or "redpack"
+
+    SUBCOMMAND_ALIASES = {
+        key: parse_aliases(cfg.get(f"{key}_aliases"), defaults)
+        for key, defaults in DEFAULT_SUBCOMMAND_ALIASES.items()
+    }
+
+    if "default_amount" in cfg:
+        config.default_amount = clamp_int(cfg.get("default_amount"), DEFAULT_AMOUNT, MIN_SHARE_AMOUNT, 999999999)
+    if "default_count" in cfg:
+        config.default_count = clamp_int(cfg.get("default_count"), DEFAULT_COUNT, 1, 500)
+    if "custom_name" in cfg:
+        config.custom_name = str(cfg.get("custom_name") or "").strip()
+
+
+def command_example(suffix: str = "") -> str:
+    """生成运行时帮助里的命令示例。"""
+    tail = str(suffix or "").strip()
+    body = f"{COMMAND_PREFIX}{COMMAND_NAME}"
+    if tail:
+        body = f"{body} {tail}"
+    return f"`{body}`"
+
+
+def resolve_subcommand(action: str) -> str | None:
+    """把用户输入的子命令映射到内部动作名。"""
+    token = str(action or "").strip().lower()
+    for name, aliases in SUBCOMMAND_ALIASES.items():
+        if token in aliases:
+            return name
+    return None
 
 
 def clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -1547,13 +1648,13 @@ class RedPackConfig:
             [
                 "",
                 "直接发送示例：",
-                "`,redpack 我超有挂 88888 10`",
-                "`,redpack send 我超有挂`",
-                "`,redpack send \"我 超 有 挂\" 52000 5`",
+                command_example("我超有挂 88888 10"),
+                command_example("send 我超有挂"),
+                command_example('send "我 超 有 挂" 52000 5'),
                 "",
                 "管理命令：",
-                "`,redpack active` 查看当前聊天红包",
-                "`,redpack clear` 清空当前聊天红包",
+                f"{command_example('active')} 查看当前聊天红包",
+                f"{command_example('clear')} 清空当前聊天红包",
             ]
         )
         return "\n".join(lines)
@@ -1694,28 +1795,29 @@ def build_settlement_rich_text(pack: dict[str, Any]) -> str:
 
 async def show_help(message: Message) -> None:
     """显示帮助信息"""
+    quoted_img_example = command_example('img "图 片 口 令" 52000 5')
     help_text = (
         "**🧧 发红包插件说明**\n\n"
         "文字红包：\n"
-        "`,redpack 我超有挂 88888 10`\n"
-        "`,redpack send 我超有挂`\n\n"
+        f"{command_example('我超有挂 88888 10')}\n"
+        f"{command_example('send 我超有挂')}\n\n"
         "图片红包：\n"
-        "`,redpack img 8888 10`\n"
-        "`,redpack img 图片口令 8888 10`\n"
-        "`,redpack img \"图 片 口 令\" 52000 5`\n\n"
+        f"{command_example('img 8888 10')}\n"
+        f"{command_example('img 图片口令 8888 10')}\n"
+        f"{quoted_img_example}\n\n"
         "发出效果：\n"
         "1. 默认命令发送纯文字红包\n"
         "2. `img` 子命令发送数学题 + 图片口令红包\n"
         "3. 图片红包会一次性给出全部数学题，每道题对应一份红包\n\n"
         "管理命令：\n"
-        "`,redpack status` 查看插件状态\n"
-        "`,redpack active` 查看当前聊天红包\n"
-        "`,redpack clear` 清空当前聊天红包\n"
-        "`,redpack amount <金额>` 设置默认金额\n"
-        "`,redpack count <个数>` 设置默认个数\n"
-        "`,redpack name <展示名>` 设置红包展示名称\n"
-        "`,redpack name auto` 切回自动展示名称\n"
-        "`,redpack reset` 恢复默认配置\n\n"
+        f"{command_example('status')} 查看插件状态\n"
+        f"{command_example('active')} 查看当前聊天红包\n"
+        f"{command_example('clear')} 清空当前聊天红包\n"
+        f"{command_example('amount <金额>')} 设置默认金额\n"
+        f"{command_example('count <个数>')} 设置默认个数\n"
+        f"{command_example('name <展示名>')} 设置红包展示名称\n"
+        f"{command_example('name auto')} 切回自动展示名称\n"
+        f"{command_example('reset')} 恢复默认配置\n\n"
         "玩法说明：\n"
         f"1. 发红包后，插件会记住当前聊天的口令、总额和个数。\n"
         "2. 默认红包是纯文字模式，口令会用 `<code>` 样式包起来方便复制。\n"
@@ -2024,28 +2126,29 @@ async def redpack_command(message: Message, bot: Client) -> None:
 
     parts = raw_args.split(maxsplit=1)
     action = parts[0].lower()
+    resolved_action = resolve_subcommand(action)
     rest = parts[1].strip() if len(parts) > 1 else ""
     image_mode = False
 
-    if action == "help":
+    if resolved_action == "help":
         await show_help(message)
         return
 
-    if action == "status":
+    if resolved_action == "status":
         await message.edit(config.build_status_text(auto_name, getattr(message.chat, "id", None)))
         return
 
-    if action == "active":
+    if resolved_action == "active":
         await message.edit(build_active_text(getattr(message.chat, "id", 0)))
         return
 
-    if action == "clear":
+    if resolved_action == "clear":
         await message.edit(config.clear_chat_packs(getattr(message.chat, "id", 0)))
         return
 
-    if action == "amount":
+    if resolved_action == "amount":
         if not rest or not is_int_token(rest):
-            await message.edit("❌ 用法：`,redpack amount <金额>`")
+            await message.edit(f"❌ 用法：{command_example('amount <金额>')}")
             return
         amount = int(rest)
         if amount < MIN_SHARE_AMOUNT:
@@ -2054,9 +2157,9 @@ async def redpack_command(message: Message, bot: Client) -> None:
         await message.edit(config.set_default_amount(amount))
         return
 
-    if action == "count":
+    if resolved_action == "count":
         if not rest or not is_int_token(rest):
-            await message.edit("❌ 用法：`,redpack count <个数>`")
+            await message.edit(f"❌ 用法：{command_example('count <个数>')}")
             return
         count = int(rest)
         validation_error = config.validate_amount_count(config.default_amount, count)
@@ -2068,10 +2171,10 @@ async def redpack_command(message: Message, bot: Client) -> None:
         await message.edit(config.set_default_count(count))
         return
 
-    if action == "name":
+    if resolved_action == "name":
         lowered = rest.lower()
         if not rest:
-            await message.edit("❌ 用法：`,redpack name <展示名>` 或 `,redpack name auto`")
+            await message.edit(f"❌ 用法：{command_example('name <展示名>')} 或 {command_example('name auto')}")
             return
         if lowered in {"auto", "reset", "default"}:
             await message.edit(config.set_custom_name(""))
@@ -2079,16 +2182,16 @@ async def redpack_command(message: Message, bot: Client) -> None:
         await message.edit(config.set_custom_name(rest))
         return
 
-    if action == "reset":
+    if resolved_action == "reset":
         await message.edit(config.reset())
         return
 
-    if action == "img":
+    if resolved_action == "img":
         image_mode = True
         payload = rest
         keyword, amount, count, error = parse_image_payload(payload)
     else:
-        payload = rest if action == "send" else raw_args
+        payload = rest if resolved_action == "send" else raw_args
         keyword, amount, count, error = parse_send_payload(payload)
     if error:
         await message.edit(error)
@@ -2142,10 +2245,11 @@ async def redpack_command(message: Message, bot: Client) -> None:
     if sent_message:
         pack["message_id"] = getattr(sent_message, "id", None)
         config.save()
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    if DELETE_COMMAND_MESSAGE:
+        try:
+            await message.delete()
+        except Exception:
+            pass
 
 
 @listener(is_plugin=True, incoming=True, outgoing=True, ignore_edited=True)
@@ -2164,7 +2268,7 @@ async def redpack_claim_listener(message: Message, bot: Client) -> None:
         return
 
     text = extract_message_text(message)
-    if not text or text.startswith(",") or text.startswith("/"):
+    if not text or text.startswith(COMMAND_PREFIX) or text.startswith("/") or text.startswith(","):
         return
 
     chat_id = message.chat.id
@@ -2215,7 +2319,8 @@ async def redpack_claim_listener(message: Message, bot: Client) -> None:
 
     if claim_reply_message is not None:
         register_pending_transfer_confirm(chat_id, getattr(claim_reply_message, "id", None))
-        asyncio.create_task(delete_message_later(claim_reply_message))
+        if CLAIM_REPLY_DELETE_DELAY > 0:
+            asyncio.create_task(delete_message_later(claim_reply_message))
 
     if should_update_math_status:
         await update_image_math_status(bot, chat_id, pack)
@@ -2233,6 +2338,8 @@ async def redpack_claim_listener(message: Message, bot: Client) -> None:
 @listener(is_plugin=True, incoming=True, outgoing=False, ignore_edited=False, priority=20)
 async def redpack_transfer_confirm_listener(message: Message, bot: Client) -> None:
     """监听高额转账确认消息并自动点击确认按钮"""
+    if not AUTO_CONFIRM_ENABLED:
+        return
     if not getattr(message, "chat", None) or not getattr(message.chat, "id", None):
         return
     if not should_auto_confirm_transfer(message):

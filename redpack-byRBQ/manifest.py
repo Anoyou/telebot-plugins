@@ -29,7 +29,8 @@ CONFIG_SCHEMA = {
                 "{prefix}{command} name auto                     切回自动展示名称\n"
                 "{prefix}{command} reset                         恢复默认金额、个数和展示名称\n\n"
                 "安全规则：只有当前账号本人发出的指令会创建红包；群成员只能发送口令领取。\n"
-                "领取方式：别人直接发送正确口令即可领取；模块会回复 +金额，领完后自动发送结算榜单。"
+                "领取方式：别人直接发送正确口令即可领取；模块会回复 +金额，领完后自动发送结算榜单。\n"
+                "配置页可调整默认金额、默认个数、最低单包、展示名、发出后删原指令、领取提示删除、高额确认和子命令别名。"
             ),
             "description": "只读预览，会按当前系统前缀和触发指令名实时渲染。",
         },
@@ -41,7 +42,84 @@ CONFIG_SCHEMA = {
             "maxLength": 32,
             "pattern": "^\\S+$",
             "description": "例如填 rp 后，实际命令为“系统前缀 + rp”；不要在这里填写逗号或斜杠。"
-        }
+        },
+        "default_amount": {
+            "type": "integer",
+            "title": "默认总额",
+            "default": 88888,
+            "minimum": 100,
+            "maximum": 999999999,
+            "description": "发红包指令未填写金额时使用。"
+        },
+        "default_count": {
+            "type": "integer",
+            "title": "默认个数",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 500,
+            "description": "发红包指令未填写个数时使用。"
+        },
+        "min_share_amount": {
+            "type": "integer",
+            "title": "最低单包金额",
+            "default": 100,
+            "minimum": 1,
+            "maximum": 999999999,
+            "description": "每个红包至少保留的金额，用于校验总额和拼手气拆分。"
+        },
+        "custom_name": {
+            "type": "string",
+            "title": "红包展示名",
+            "default": "",
+            "maxLength": 64,
+            "description": "留空时自动使用当前账号名称。"
+        },
+        "claim_reply_delete_delay": {
+            "type": "integer",
+            "title": "领取提示删除秒数",
+            "default": 8,
+            "minimum": 0,
+            "maximum": 86400,
+            "description": "领取后回复 +金额 的保留时长；填 0 表示不自动删除。"
+        },
+        "delete_command_message": {
+            "type": "boolean",
+            "title": "发出后删除原指令",
+            "default": True,
+            "description": "文字红包和图片红包发送成功后，是否删除原始触发指令。"
+        },
+        "auto_confirm_enabled": {
+            "type": "boolean",
+            "title": "自动确认高额转账",
+            "default": True,
+            "description": "检测到高额转账确认按钮时自动点击确认。"
+        },
+        "auto_confirm_ttl": {
+            "type": "integer",
+            "title": "确认消息有效秒数",
+            "default": 180,
+            "minimum": 1,
+            "maximum": 86400,
+            "description": "只在领取提示发出后的这段时间内尝试自动确认。"
+        },
+        "auto_confirm_click_delay": {
+            "type": "number",
+            "title": "确认点击延迟秒数",
+            "default": 0.8,
+            "minimum": 0,
+            "maximum": 60,
+            "description": "点击确认按钮前等待的秒数。"
+        },
+        "help_aliases": {"type": "string", "title": "help 别名", "default": "help 帮助"},
+        "send_aliases": {"type": "string", "title": "send 别名", "default": "send"},
+        "img_aliases": {"type": "string", "title": "img 别名", "default": "img image 图片"},
+        "status_aliases": {"type": "string", "title": "status 别名", "default": "status 状态"},
+        "active_aliases": {"type": "string", "title": "active 别名", "default": "active list 列表"},
+        "clear_aliases": {"type": "string", "title": "clear 别名", "default": "clear 清空"},
+        "amount_aliases": {"type": "string", "title": "amount 别名", "default": "amount 金额"},
+        "count_aliases": {"type": "string", "title": "count 别名", "default": "count 个数 数量"},
+        "name_aliases": {"type": "string", "title": "name 别名", "default": "name 昵称 名称"},
+        "reset_aliases": {"type": "string", "title": "reset 别名", "default": "reset 重置"}
     },
     "required": ["command"]
 }
@@ -49,7 +127,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.10",
+    version="1.1.11",
     min_telepilot_version="0.15.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包模块，支持文字红包、img 数学题图片红包、自动领取结算和高额转账确认",

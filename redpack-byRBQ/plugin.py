@@ -91,6 +91,15 @@ def _event_message(event: Any) -> Any:
     return getattr(event, "message", event)
 
 
+def _current_command_prefix() -> str:
+    try:
+        from app.worker.command import current_command_prefix  # type: ignore
+
+        return str(current_command_prefix(fallback=",") or ",")
+    except Exception:
+        return ","
+
+
 def _chat_id(event: Any) -> int:
     value = getattr(event, "chat_id", None)
     if value is None:
@@ -339,6 +348,7 @@ class RedpackByRBQPlugin(Plugin):
         cfg = ctx.config or {}
         self._command = str(cfg.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
         self._bind_core_config(ctx.account_id)
+        self._apply_core_settings(ctx)
         self.commands = {self._command: self._cmd_redpack}
         if ctx.log:
             await ctx.log("info", f"[redpack-byRBQ] 已启动，指令：{self._command}")
@@ -354,6 +364,12 @@ class RedpackByRBQPlugin(Plugin):
         self._config_path = config_path
         redpack_core.config_file = config_path
         redpack_core.config = redpack_core.RedPackConfig()
+
+    def _apply_core_settings(self, ctx: PluginContext) -> None:
+        cfg = dict(ctx.config or {})
+        cfg["command"] = self._command
+        cfg["command_prefix"] = _current_command_prefix()
+        redpack_core.apply_runtime_settings(cfg)
 
     async def _cmd_redpack(
         self,
@@ -376,6 +392,7 @@ class RedpackByRBQPlugin(Plugin):
                 )
             return
         self._bind_core_config(account_id)
+        self._apply_core_settings(ctx)
         message = _NativeMessageAdapter(event, args)
         bot = _NativeClientAdapter(command_client)
         await redpack_core.redpack_command(message, bot)
@@ -384,6 +401,7 @@ class RedpackByRBQPlugin(Plugin):
         if ctx.client is None:
             return
         self._bind_core_config(ctx.account_id)
+        self._apply_core_settings(ctx)
         message = _NativeMessageAdapter(event, sender=await _resolve_sender(event))
         bot = _NativeClientAdapter(ctx.client)
         await redpack_core.redpack_claim_listener(message, bot)
