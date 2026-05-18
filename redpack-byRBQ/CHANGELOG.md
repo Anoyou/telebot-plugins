@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.10 - 2026-05-18
+
+- 修复部分群组入站消息只有 `from_id`、没有标准 `sender_id/from_user` 时，红包领取监听静默跳过的问题。
+- 发送者识别现在兼容 `from_id.user_id`、`from_id.channel_id`、`from_id.chat_id` 和裸 Message 场景，避免同群口令已收到但不发放。
+
 ## 1.1.9 - 2026-05-18
 
 - 加固发红包命令门禁：兼容 `event.outgoing`、`event.out`、`event.message.out` 和发送者 ID 兜底，只有当前账号本人发出的指令才能创建红包。

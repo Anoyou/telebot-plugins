@@ -171,6 +171,8 @@ def validate_plugin(plugin_dir: Path) -> PluginReport:
             report.fail("redpack command guard must not default missing outgoing to True")
         if "event.message.out" not in plugin_py_text and "_event_message(event)" not in plugin_py_text:
             report.fail("redpack command guard should be compatible with bare Message.out")
+        if "from_id" not in plugin_py_text or "user_id" not in plugin_py_text:
+            report.fail("redpack sender fallback should support Telethon Message.from_id")
 
     high_risk_markers = {
         "network": ["httpx", "aiohttp", "requests"],

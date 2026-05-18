@@ -109,6 +109,14 @@ def _event_sender_id(event: Any) -> int | None:
             sender = getattr(target, "sender", None) or getattr(target, "from_user", None)
             sender_id = getattr(sender, "id", None) if sender is not None else None
         if sender_id is None:
+            from_id = getattr(target, "from_id", None)
+            sender_id = (
+                getattr(from_id, "user_id", None)
+                or getattr(from_id, "channel_id", None)
+                or getattr(from_id, "chat_id", None)
+                or getattr(from_id, "id", None)
+            )
+        if sender_id is None:
             continue
         try:
             return int(sender_id)
