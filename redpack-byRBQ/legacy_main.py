@@ -1845,6 +1845,60 @@ async def send_settlement_output(
     )
 
 
+async def edit_text_redpack_message(
+    message: Message,
+    *,
+    sender_name: str,
+    redpack_id: str,
+    keyword: str,
+    amount: int,
+    count: int,
+) -> bool:
+    """编辑文字红包消息，HTML 失败时确保有可读兜底输出。"""
+    rich_text = render_redpack_text_rich(
+        sender_name=sender_name,
+        redpack_id=redpack_id,
+        keyword=keyword,
+        amount=amount,
+        count=count,
+    )
+    try:
+        await message.edit(rich_text, parse_mode="html")
+        return True
+    except Exception as error:
+        logs.warning(f"[REDPACK] 文字红包 HTML 渲染失败，尝试 Markdown 兜底: {error}")
+
+    try:
+        await message.edit(
+            render_redpack_text_copyable(
+                sender_name=sender_name,
+                redpack_id=redpack_id,
+                keyword=keyword,
+                amount=amount,
+                count=count,
+            ),
+            parse_mode="md",
+        )
+        return True
+    except Exception as error:
+        logs.warning(f"[REDPACK] 文字红包 Markdown 渲染失败，尝试纯文本兜底: {error}")
+
+    try:
+        await message.edit(
+            render_redpack_text(
+                sender_name=sender_name,
+                redpack_id=redpack_id,
+                keyword=keyword,
+                amount=amount,
+                count=count,
+            )
+        )
+        return True
+    except Exception as error:
+        logs.error(f"[REDPACK] 文字红包消息发送失败: {error}")
+        return False
+
+
 async def update_image_math_status(bot: Client, chat_id: int, pack: dict[str, Any]) -> None:
     """刷新图片红包题目领取状态标识"""
     if not pack.get("dynamic_image"):
@@ -2043,16 +2097,18 @@ async def redpack_command(message: Message, bot: Client) -> None:
     )
 
     if not image_mode:
-        await message.edit(
-            render_redpack_text_rich(
-                sender_name=sender_name,
-                redpack_id=pack["redpack_id"],
-                keyword=keyword or "",
-                amount=amount,
-                count=count,
-            ),
-            parse_mode="html",
+        edited = await edit_text_redpack_message(
+            message,
+            sender_name=sender_name,
+            redpack_id=pack["redpack_id"],
+            keyword=keyword or "",
+            amount=amount,
+            count=count,
         )
+        if not edited:
+            config.remove_pack(message.chat.id, pack["redpack_id"])
+            await message.edit("❌ 红包发送失败，请稍后重试")
+            return
         pack["message_id"] = getattr(message, "id", None)
         config.save()
         return
