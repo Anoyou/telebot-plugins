@@ -224,20 +224,18 @@ class RedpackByRBQPlugin(Plugin):
     display_name = "红包"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command", "enabled"}
+    command_config_keys = {"command"}
 
     def __init__(self) -> None:
         super().__init__()
         self._command = DEFAULT_COMMAND
-        self._enabled = True
         self._config_path = Path(__file__).with_name("redpack_config.json")
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
         self._command = str(cfg.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
-        self._enabled = bool(cfg.get("enabled", True))
         self._bind_core_config(ctx.account_id)
-        self.commands = {self._command: self._cmd_redpack} if self._enabled else {}
+        self.commands = {self._command: self._cmd_redpack}
         if ctx.log:
             await ctx.log("info", f"[redpack-byRBQ] 已启动，指令：{self._command}")
 
@@ -261,15 +259,13 @@ class RedpackByRBQPlugin(Plugin):
         account_id: int,
         ctx: PluginContext,
     ) -> None:
-        if not self._enabled:
-            return
         self._bind_core_config(account_id)
         message = _NativeMessageAdapter(event, args)
         bot = _NativeClientAdapter(client or ctx.client)
         await redpack_core.redpack_command(message, bot)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
-        if not self._enabled or ctx.client is None:
+        if ctx.client is None:
             return
         self._bind_core_config(ctx.account_id)
         message = _NativeMessageAdapter(event)
