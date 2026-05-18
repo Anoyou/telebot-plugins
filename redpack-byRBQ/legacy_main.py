@@ -16,11 +16,9 @@ import random
 import re
 import shlex
 import string
-import struct
 import tempfile
 import time
 import unicodedata
-import zlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -852,47 +850,6 @@ def get_resampling_attr() -> Any:
     return Image
 
 
-PIXEL_FONT_5X7 = {
-    "0": ("11111", "10001", "10011", "10101", "11001", "10001", "11111"),
-    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
-    "2": ("11110", "00001", "00001", "11110", "10000", "10000", "11111"),
-    "3": ("11110", "00001", "00001", "01110", "00001", "00001", "11110"),
-    "4": ("10010", "10010", "10010", "11111", "00010", "00010", "00010"),
-    "5": ("11111", "10000", "10000", "11110", "00001", "00001", "11110"),
-    "6": ("01111", "10000", "10000", "11110", "10001", "10001", "01110"),
-    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
-    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
-    "9": ("01110", "10001", "10001", "01111", "00001", "00001", "11110"),
-    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
-    "C": ("01111", "10000", "10000", "10000", "10000", "10000", "01111"),
-    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
-    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
-    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
-    "G": ("01111", "10000", "10000", "10011", "10001", "10001", "01111"),
-    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "I": ("11111", "00100", "00100", "00100", "00100", "00100", "11111"),
-    "J": ("00111", "00010", "00010", "00010", "10010", "10010", "01100"),
-    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
-    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
-    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
-    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
-    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
-    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
-    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
-    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
-    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
-    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
-    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
-    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
-    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
-    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
-    "?": ("11110", "00001", "00010", "00100", "00100", "00000", "00100"),
-}
-
-
 def set_captcha_error(reason: str) -> None:
     global _captcha_last_error
     _captcha_last_error = str(reason or "").strip()
@@ -902,150 +859,17 @@ def get_captcha_error() -> str:
     return _captcha_last_error or "未知原因"
 
 
-def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
-    checksum = zlib.crc32(chunk_type + data) & 0xFFFFFFFF
-    return struct.pack(">I", len(data)) + chunk_type + data + struct.pack(">I", checksum)
-
-
-def write_rgb_png(path: Path, width: int, height: int, pixels: bytearray) -> None:
-    raw = bytearray()
-    row_size = width * 3
-    for y in range(height):
-        raw.append(0)
-        start = y * row_size
-        raw.extend(pixels[start:start + row_size])
-    payload = (
-        b"\x89PNG\r\n\x1a\n"
-        + png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-        + png_chunk(b"IDAT", zlib.compress(bytes(raw), level=6))
-        + png_chunk(b"IEND", b"")
-    )
-    path.write_bytes(payload)
-
-
-def draw_pixel_rect(
-    pixels: bytearray,
-    width: int,
-    height: int,
-    x: int,
-    y: int,
-    rect_w: int,
-    rect_h: int,
-    color: tuple[int, int, int],
-) -> None:
-    left = max(0, x)
-    top = max(0, y)
-    right = min(width, x + rect_w)
-    bottom = min(height, y + rect_h)
-    for py in range(top, bottom):
-        row = py * width * 3
-        for px in range(left, right):
-            index = row + px * 3
-            pixels[index:index + 3] = bytes(color)
-
-
-def build_basic_captcha_image(keyword: str, redpack_id: str, reason: str) -> Optional[Path]:
-    """Pillow 不可用时，用标准库生成英数口令备用 PNG。"""
-    text = str(keyword or "").strip().upper()
-    if not text:
-        set_captcha_error(f"{reason}；口令为空，无法生成备用 PNG")
-        return None
-    unsupported = sorted({char for char in text if char != " " and char not in PIXEL_FONT_5X7})
-    if unsupported:
-        set_captcha_error(
-            f"{reason}；备用 PNG 仅支持英文字母和数字，当前口令包含不支持字符: {''.join(unsupported)}"
-        )
-        return None
-
-    width, height = CAPTCHA_WIDTH, CAPTCHA_HEIGHT
-    pixels = bytearray([248, 249, 251] * width * height)
-
-    for _ in range(900):
-        color = (
-            random.randint(150, 235),
-            random.randint(150, 235),
-            random.randint(150, 235),
-        )
-        draw_pixel_rect(
-            pixels,
-            width,
-            height,
-            random.randint(0, width - 1),
-            random.randint(0, height - 1),
-            random.randint(2, 5),
-            random.randint(2, 5),
-            color,
-        )
-
-    scale = max(12, min(30, (width - 160) // max(1, len(text) * 6)))
-    char_w = 5 * scale
-    char_h = 7 * scale
-    spacing = max(12, scale)
-    total_w = sum((char_w if char != " " else char_w // 2) for char in text) + spacing * max(0, len(text) - 1)
-    start_x = max(40, (width - total_w) // 2)
-    start_y = max(40, (height - char_h) // 2)
-    palette = [(36, 52, 112), (140, 48, 48), (35, 112, 82), (120, 78, 28)]
-
-    cursor_x = start_x
-    for index, char in enumerate(text):
-        if char == " ":
-            cursor_x += char_w // 2 + spacing
-            continue
-        pattern = PIXEL_FONT_5X7.get(char, PIXEL_FONT_5X7["?"])
-        color = palette[index % len(palette)]
-        jitter_y = random.randint(-10, 10)
-        for row_index, row in enumerate(pattern):
-            for col_index, bit in enumerate(row):
-                if bit != "1":
-                    continue
-                draw_pixel_rect(
-                    pixels,
-                    width,
-                    height,
-                    cursor_x + col_index * scale + random.randint(-2, 2),
-                    start_y + row_index * scale + jitter_y + random.randint(-2, 2),
-                    scale - 2,
-                    scale - 2,
-                    color,
-                )
-        cursor_x += char_w + spacing
-
-    for _ in range(26):
-        y = random.randint(40, height - 40)
-        color = (
-            random.randint(120, 210),
-            random.randint(120, 210),
-            random.randint(120, 210),
-        )
-        for x in range(random.randint(0, 80), width - random.randint(0, 80), 12):
-            yy = y + int(math.sin(x / random.randint(38, 80)) * random.randint(4, 12))
-            draw_pixel_rect(pixels, width, height, x, yy, random.randint(8, 18), random.randint(2, 4), color)
-
-    temp_dir = Path(tempfile.mkdtemp(prefix="redpack_"))
-    target_path = temp_dir / f"redpack_{redpack_id}.png"
-    try:
-        write_rgb_png(target_path, width, height, pixels)
-        set_captcha_error("")
-        logs.warning(f"[REDPACK] Pillow 不可用，已使用标准库备用 PNG 生成图片口令 | reason={reason}")
-        return target_path
-    except Exception as error:
-        set_captcha_error(f"{reason}；备用 PNG 写入失败: {type(error).__name__}: {error}")
-        return None
-
-
 def build_captcha_image(keyword: str, redpack_id: str) -> Optional[Path]:
     """生成带干扰彩点的图片口令"""
     if not HAS_PIL:
-        return build_basic_captcha_image(keyword, redpack_id, "未安装 Pillow/PIL")
+        set_captcha_error("未安装 Pillow/PIL，请在 TelePilot worker 环境安装 Pillow 后重启")
+        return None
 
     try:
         resampling = get_resampling_attr()
     except Exception as error:
-        return build_basic_captcha_image(
-            keyword,
-            redpack_id,
-            f"Pillow 初始化失败: {type(error).__name__}: {error}",
-        )
+        set_captcha_error(f"Pillow 初始化失败: {type(error).__name__}: {error}")
+        return None
     scale = 2
     work_width = CAPTCHA_WIDTH * scale
     work_height = CAPTCHA_HEIGHT * scale
