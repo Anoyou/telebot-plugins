@@ -102,6 +102,49 @@ def _chat_id(event: Any) -> int:
         return 0
 
 
+def _event_sender_id(event: Any) -> int | None:
+    for target in (event, _event_message(event)):
+        sender_id = getattr(target, "sender_id", None)
+        if sender_id is None:
+            sender = getattr(target, "sender", None) or getattr(target, "from_user", None)
+            sender_id = getattr(sender, "id", None) if sender is not None else None
+        if sender_id is None:
+            continue
+        try:
+            return int(sender_id)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _is_outgoing_event(event: Any) -> bool:
+    for target in (event, _event_message(event)):
+        for attr in ("outgoing", "out", "is_outgoing"):
+            value = getattr(target, attr, None)
+            if callable(value):
+                value = value()
+            if value is not None and bool(value):
+                return True
+    return False
+
+
+async def _is_account_command_event(client: Any, event: Any) -> bool:
+    if _is_outgoing_event(event):
+        return True
+
+    sender_id = _event_sender_id(event)
+    get_me = getattr(client, "get_me", None) if client is not None else None
+    if sender_id is None or not callable(get_me):
+        return False
+
+    try:
+        me = await get_me()
+        me_id = int(getattr(me, "id", 0) or 0)
+    except Exception:
+        return False
+    return sender_id == me_id
+
+
 async def _resolve_sender(event: Any) -> Any:
     for target in (event, _event_message(event)):
         sender = getattr(target, "sender", None) or getattr(target, "from_user", None)
@@ -117,7 +160,7 @@ async def _resolve_sender(event: Any) -> Any:
         except Exception:
             pass
 
-    sender_id = getattr(event, "sender_id", None) or getattr(_event_message(event), "sender_id", None)
+    sender_id = _event_sender_id(event)
     if sender_id is not None:
         return types.SimpleNamespace(id=sender_id, first_name="", last_name="", username="", is_bot=False)
     return None
@@ -213,7 +256,7 @@ class _NativeMessageAdapter:
 
     @property
     def from_user(self) -> Any:
-        sender_id = getattr(self._event, "sender_id", None) or getattr(self._message, "sender_id", None)
+        sender_id = _event_sender_id(self._event)
         return (
             self._sender
             or getattr(self._event, "from_user", None)
@@ -242,7 +285,7 @@ class _NativeMessageAdapter:
         return getattr(self._message, "reply_markup", getattr(self._event, "reply_markup", None))
 
     async def edit(self, text: str, **kwargs: Any) -> Any:
-        if not getattr(self._event, "outgoing", False):
+        if not _is_outgoing_event(self._event):
             return await self._respond(text, **kwargs)
         edit = getattr(self._event, "edit", None)
         if callable(edit):
@@ -312,18 +355,21 @@ class RedpackByRBQPlugin(Plugin):
         account_id: int,
         ctx: PluginContext,
     ) -> None:
-        if getattr(event, "outgoing", True) is False:
+        command_client = client or ctx.client
+        if not await _is_account_command_event(command_client, event):
             if ctx.log:
                 await ctx.log(
                     "info",
                     "[redpack-byRBQ] 已忽略非账号本人发出的红包命令",
                     chat_id=getattr(event, "chat_id", None),
-                    sender_id=getattr(event, "sender_id", None),
+                    sender_id=_event_sender_id(event),
+                    event_outgoing=getattr(event, "outgoing", None),
+                    message_out=getattr(_event_message(event), "out", None),
                 )
             return
         self._bind_core_config(account_id)
         message = _NativeMessageAdapter(event, args)
-        bot = _NativeClientAdapter(client or ctx.client)
+        bot = _NativeClientAdapter(command_client)
         await redpack_core.redpack_command(message, bot)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
@@ -333,4 +379,5 @@ class RedpackByRBQPlugin(Plugin):
         message = _NativeMessageAdapter(event, sender=await _resolve_sender(event))
         bot = _NativeClientAdapter(ctx.client)
         await redpack_core.redpack_claim_listener(message, bot)
-        await redpack_core.redpack_transfer_confirm_listener(message, bot)
+        if not _is_outgoing_event(event):
+            await redpack_core.redpack_transfer_confirm_listener(message, bot)

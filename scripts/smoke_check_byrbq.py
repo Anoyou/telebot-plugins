@@ -164,6 +164,14 @@ def validate_plugin(plugin_dir: Path) -> PluginReport:
             if marker not in plugin_py_text:
                 report.fail(f"native plugin marker missing: {marker}")
 
+    if plugin_dir.name == "redpack-byRBQ":
+        if "async def _is_account_command_event" not in plugin_py_text:
+            report.fail("redpack command ownership guard missing")
+        if 'getattr(event, "outgoing", True)' in plugin_py_text:
+            report.fail("redpack command guard must not default missing outgoing to True")
+        if "event.message.out" not in plugin_py_text and "_event_message(event)" not in plugin_py_text:
+            report.fail("redpack command guard should be compatible with bare Message.out")
+
     high_risk_markers = {
         "network": ["httpx", "aiohttp", "requests"],
         "media": ["send_photo", "send_document", "send_media_group", "reply_sticker"],

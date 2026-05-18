@@ -28,6 +28,7 @@ CONFIG_SCHEMA = {
                 "{prefix}{command} name 红包昵称                  设置展示名称\n"
                 "{prefix}{command} name auto                     切回自动展示名称\n"
                 "{prefix}{command} reset                         恢复默认金额、个数和展示名称\n\n"
+                "安全规则：只有当前账号本人发出的指令会创建红包；群成员只能发送口令领取。\n"
                 "领取方式：别人直接发送正确口令即可领取；模块会回复 +金额，领完后自动发送结算榜单。"
             ),
             "description": "只读预览，会按当前系统前缀和触发指令名实时渲染。",
@@ -48,7 +49,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.8",
+    version="1.1.9",
     min_telepilot_version="0.15.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包模块，支持文字红包、img 数学题图片红包、自动领取结算和高额转账确认",
