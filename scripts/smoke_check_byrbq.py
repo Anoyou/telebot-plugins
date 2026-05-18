@@ -19,7 +19,6 @@ REQUIRED_PLUGIN_JSON_FIELDS = [
     "author",
     "version",
     "entry",
-    "min_telebot_version",
     "commands",
     "cleanup_mode",
     "permissions",
@@ -94,6 +93,8 @@ def validate_plugin(plugin_dir: Path) -> PluginReport:
     for field in REQUIRED_PLUGIN_JSON_FIELDS:
         if field not in plugin_json:
             report.fail(f"plugin.json missing field: {field}")
+    if "min_telepilot_version" not in plugin_json and "min_telebot_version" not in plugin_json:
+        report.fail("plugin.json missing field: min_telepilot_version")
 
     if plugin_json.get("name") != plugin_dir.name:
         report.fail(f"plugin.json.name mismatch: {plugin_json.get('name')} != {plugin_dir.name}")
@@ -136,20 +137,32 @@ def validate_plugin(plugin_dir: Path) -> PluginReport:
         )
 
     plugin_py_text = plugin_py_path.read_text(encoding="utf-8")
-    required_bridge_markers = [
-        "class _CompatRuntime",
-        "class _CompatMessage",
-        "class _CompatClient",
-        "from . import legacy_main",
-        "dispatch_command",
-        "dispatch_message",
-    ]
-    for marker in required_bridge_markers:
-        if marker not in plugin_py_text:
-            report.fail(f"plugin bridge marker missing: {marker}")
+    if "class _CompatRuntime" in plugin_py_text:
+        required_bridge_markers = [
+            "class _CompatRuntime",
+            "class _CompatMessage",
+            "class _CompatClient",
+            "from . import legacy_main",
+            "dispatch_command",
+            "dispatch_message",
+        ]
+        for marker in required_bridge_markers:
+            if marker not in plugin_py_text:
+                report.fail(f"plugin bridge marker missing: {marker}")
 
-    if "command listeners are dispatched via on_command path" not in plugin_py_text:
-        report.warn("on_message command skip guard marker not found")
+        if "command listeners are dispatched via on_command path" not in plugin_py_text:
+            report.warn("on_message command skip guard marker not found")
+    else:
+        required_native_markers = [
+            "@register",
+            "PluginContext",
+            "command_config_keys",
+            "async def on_startup",
+            "async def on_message",
+        ]
+        for marker in required_native_markers:
+            if marker not in plugin_py_text:
+                report.fail(f"native plugin marker missing: {marker}")
 
     high_risk_markers = {
         "network": ["httpx", "aiohttp", "requests"],

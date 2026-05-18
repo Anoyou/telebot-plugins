@@ -1,11 +1,11 @@
 {
   "name": "redpack-byRBQ",
-  "display_name": "redpack-byRBQ",
-  "description": "口令红包插件，默认文字红包，支持 img 数学题图片口令、内置字体资源和自动结算榜单",
+  "display_name": "红包",
+  "description": "口令红包模块，支持文字红包、img 数学题图片红包、自动领取结算和高额转账确认",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "entry": "plugin.py",
-  "min_telebot_version": "0.10.2",
+  "min_telepilot_version": "0.15.0",
   "commands": [
     "redpack"
   ],
@@ -18,11 +18,13 @@
   "permissions": [
     "send_message",
     "edit_message",
-    "read_chat"
+    "read_chat",
+    "send_file",
+    "delete_message"
   ],
   "config_schema": {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": false,
     "properties": {
       "command": {

@@ -1021,7 +1021,6 @@ class RedPackConfig:
     def load(self) -> None:
         """加载配置"""
         if not config_file.exists():
-            self.save()
             return
 
         try:

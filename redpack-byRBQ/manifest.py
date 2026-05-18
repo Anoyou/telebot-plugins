@@ -2,7 +2,7 @@ from app.worker.plugins.manifest import Manifest
 
 CONFIG_SCHEMA = {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -24,12 +24,12 @@ CONFIG_SCHEMA = {
 
 MANIFEST = Manifest(
     key="redpack-byRBQ",
-    display_name="redpack-byRBQ",
-    version="1.0.1",
-    min_telebot_version="0.10.2",
+    display_name="红包",
+    version="1.1.0",
+    min_telepilot_version="0.15.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="口令红包插件，默认文字红包，支持 img 数学题图片口令、内置字体资源和自动结算榜单",
-    permissions=["send_message", "edit_message", "read_chat"],
+    description="口令红包模块，支持文字红包、img 数学题图片红包、自动领取结算和高额转账确认",
+    permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message"],
     config_schema=CONFIG_SCHEMA,
 )
 
