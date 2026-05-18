@@ -200,9 +200,16 @@ class _NativeMessageAdapter:
     @property
     def chat(self) -> Any:
         chat = getattr(self._event, "chat", None) or getattr(self._message, "chat", None)
+        chat_id = _chat_id(self._event)
+        if chat_id:
+            return types.SimpleNamespace(
+                id=chat_id,
+                title=getattr(chat, "title", "") if chat is not None else "",
+                first_name=getattr(chat, "first_name", "") if chat is not None else "",
+            )
         if chat is not None:
             return chat
-        return types.SimpleNamespace(id=_chat_id(self._event), title="", first_name="")
+        return types.SimpleNamespace(id=0, title="", first_name="")
 
     @property
     def from_user(self) -> Any:

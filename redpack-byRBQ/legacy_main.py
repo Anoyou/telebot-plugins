@@ -406,8 +406,18 @@ def render_redpack_caption_text(
 
 
 def build_chat_key(chat_id: Any) -> str:
-    """统一聊天 ID 键"""
-    return str(chat_id)
+    """统一聊天 ID 键，兼容 Telethon entity id 与 marked peer id。"""
+    value = getattr(chat_id, "channel_id", chat_id)
+    try:
+        value_int = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if value_int < 0:
+        raw = str(value_int)
+        if raw.startswith("-100") and len(raw) > 4:
+            return raw[4:]
+        return str(abs(value_int))
+    return str(value_int)
 
 
 def build_user_key(user_id: Any) -> str:
