@@ -34,7 +34,7 @@ try:
 except ImportError:
     HAS_PIL = False
 
-__version__ = "1.5.4"
+__version__ = "1.5.5"
 
 plugin_dir = Path(__file__).parent
 config_file = plugin_dir / "redpack_config.json"
@@ -231,6 +231,12 @@ def normalize_keyword(value: str) -> str:
     return " ".join(str(value or "").strip().split()).casefold()
 
 
+def normalize_image_claim_keyword(value: str) -> str:
+    """标准化图片红包口令，兼容答案和图片口令之间的空格或加号。"""
+    text = normalize_keyword(value)
+    return re.sub(r"[\s+＋]+", "", text)
+
+
 def build_auto_sender_name(user: Any) -> str:
     """根据当前账号信息构建展示名称"""
     first_name = str(getattr(user, "first_name", "") or "").strip()
@@ -327,7 +333,7 @@ def normalize_math_challenge(challenge: Any, index: int, image_code: str) -> Opt
         "math_question": math_question,
         "math_answer": math_answer,
         "claim_keyword": claim_keyword,
-        "keyword_norm": normalize_keyword(claim_keyword),
+        "keyword_norm": normalize_image_claim_keyword(claim_keyword),
         "claimed": bool(challenge.get("claimed", False)),
     }
 
@@ -342,7 +348,7 @@ def generate_image_math_challenges(image_code: str, count: int) -> list[dict[str
     while len(challenges) < target_count and attempts < target_count * 80:
         attempts += 1
         challenge = generate_image_math_challenge(image_code)
-        keyword_norm = normalize_keyword(challenge["claim_keyword"])
+        keyword_norm = normalize_image_claim_keyword(challenge["claim_keyword"])
         if keyword_norm in used_norms:
             continue
         used_norms.add(keyword_norm)
@@ -360,7 +366,7 @@ def generate_image_math_challenges(image_code: str, count: int) -> list[dict[str
     while len(challenges) < target_count:
         answer = random.randint(10000, 99999)
         claim_keyword = build_math_claim_keyword(answer, image_code)
-        keyword_norm = normalize_keyword(claim_keyword)
+        keyword_norm = normalize_image_claim_keyword(claim_keyword)
         if keyword_norm in used_norms:
             continue
         used_norms.add(keyword_norm)
@@ -1317,7 +1323,7 @@ class RedPackConfig:
                         "math_question": old_question,
                         "math_answer": old_answer_int,
                         "claim_keyword": old_keyword,
-                        "keyword_norm": normalize_keyword(old_keyword),
+                        "keyword_norm": normalize_image_claim_keyword(old_keyword),
                         "claimed": False,
                     }
                 )
@@ -1337,7 +1343,7 @@ class RedPackConfig:
         normalized_pack = {
             "redpack_id": redpack_id,
             "keyword": keyword,
-            "keyword_norm": normalize_keyword(keyword),
+            "keyword_norm": normalize_image_claim_keyword(keyword) if dynamic_image else normalize_keyword(keyword),
             "base_keyword": base_keyword,
             "dynamic_image": dynamic_image,
             "image_code": image_code,
@@ -1447,7 +1453,7 @@ class RedPackConfig:
         pack = {
             "redpack_id": redpack_id,
             "keyword": claim_keyword,
-            "keyword_norm": normalize_keyword(claim_keyword),
+            "keyword_norm": normalize_image_claim_keyword(claim_keyword) if dynamic_image else normalize_keyword(claim_keyword),
             "base_keyword": base_keyword,
             "dynamic_image": dynamic_image,
             "image_code": image_code if dynamic_image else "",
@@ -1501,11 +1507,11 @@ class RedPackConfig:
         """按口令获取当前聊天中最新的可领取红包"""
         chat_key = build_chat_key(chat_id)
         packs = self.active_packs.get(chat_key, [])
-        normalized_keyword = normalize_keyword(keyword)
         for pack in reversed(packs):
             if pack.get("remaining_count", 0) <= 0 or pack.get("remaining_amount", 0) <= 0:
                 continue
             if pack.get("dynamic_image"):
+                normalized_keyword = normalize_image_claim_keyword(keyword)
                 for challenge in pack.get("math_challenges", []):
                     if challenge.get("claimed"):
                         continue
@@ -1514,6 +1520,7 @@ class RedPackConfig:
                     pack["_matched_challenge_norm"] = normalized_keyword
                     return pack
                 continue
+            normalized_keyword = normalize_keyword(keyword)
             if pack.get("keyword_norm") != normalized_keyword:
                 continue
             return pack
@@ -2299,12 +2306,29 @@ async def redpack_claim_listener(message: Message, bot: Client) -> None:
     async with lock:
         pack = config.get_active_pack_by_candidates(chat_id, claim_candidates)
         if not pack:
+            chat_key = build_chat_key(chat_id)
+            active_count = len(config.active_packs.get(chat_key, []))
+            if active_count:
+                logs.info(
+                    "[REDPACK] 领取口令未匹配 | "
+                    f"chat_id={chat_id} chat_key={chat_key} "
+                    f"sender_id={getattr(sender, 'id', None)} "
+                    f"candidates={claim_candidates[:3]} active_count={active_count}"
+                )
             return
 
         if config.has_message_claimed(pack, claim_message_id):
+            logs.info(
+                "[REDPACK] 跳过重复消息领取 | "
+                f"chat_id={chat_id} message_id={claim_message_id} redpack_id={pack.get('redpack_id')}"
+            )
             return
 
         if config.has_user_claimed(pack, sender.id):
+            logs.info(
+                "[REDPACK] 跳过重复用户领取 | "
+                f"chat_id={chat_id} sender_id={sender.id} redpack_id={pack.get('redpack_id')}"
+            )
             return
 
         claim_amount = calculate_random_claim_amount(pack)
