@@ -1854,7 +1854,20 @@ async def edit_text_redpack_message(
     amount: int,
     count: int,
 ) -> bool:
-    """编辑文字红包消息，HTML 失败时确保有可读兜底输出。"""
+    """编辑文字红包消息，富文本失败时确保有可读兜底输出。"""
+    markdown_text = render_redpack_text_copyable(
+        sender_name=sender_name,
+        redpack_id=redpack_id,
+        keyword=keyword,
+        amount=amount,
+        count=count,
+    )
+    try:
+        await message.edit(markdown_text, parse_mode="md")
+        return True
+    except Exception as error:
+        logs.warning(f"[REDPACK] 文字红包 Markdown 渲染失败，尝试 HTML 兜底: {error}")
+
     rich_text = render_redpack_text_rich(
         sender_name=sender_name,
         redpack_id=redpack_id,
@@ -1866,22 +1879,7 @@ async def edit_text_redpack_message(
         await message.edit(rich_text, parse_mode="html")
         return True
     except Exception as error:
-        logs.warning(f"[REDPACK] 文字红包 HTML 渲染失败，尝试 Markdown 兜底: {error}")
-
-    try:
-        await message.edit(
-            render_redpack_text_copyable(
-                sender_name=sender_name,
-                redpack_id=redpack_id,
-                keyword=keyword,
-                amount=amount,
-                count=count,
-            ),
-            parse_mode="md",
-        )
-        return True
-    except Exception as error:
-        logs.warning(f"[REDPACK] 文字红包 Markdown 渲染失败，尝试纯文本兜底: {error}")
+        logs.warning(f"[REDPACK] 文字红包 HTML 渲染失败，尝试纯文本兜底: {error}")
 
     try:
         await message.edit(

@@ -102,6 +102,27 @@ def _chat_id(event: Any) -> int:
         return 0
 
 
+async def _resolve_sender(event: Any) -> Any:
+    for target in (event, _event_message(event)):
+        sender = getattr(target, "sender", None) or getattr(target, "from_user", None)
+        if sender is not None:
+            return sender
+
+    getter = getattr(event, "get_sender", None)
+    if callable(getter):
+        try:
+            sender = await getter()
+            if sender is not None:
+                return sender
+        except Exception:
+            pass
+
+    sender_id = getattr(event, "sender_id", None) or getattr(_event_message(event), "sender_id", None)
+    if sender_id is not None:
+        return types.SimpleNamespace(id=sender_id, first_name="", last_name="", username="", is_bot=False)
+    return None
+
+
 class _NativeClientAdapter:
     def __init__(self, raw_client: Any) -> None:
         self._client = raw_client
@@ -141,9 +162,10 @@ class _NativeClientAdapter:
 
 
 class _NativeMessageAdapter:
-    def __init__(self, event: Any, args: list[str] | None = None) -> None:
+    def __init__(self, event: Any, args: list[str] | None = None, sender: Any = None) -> None:
         self._event = event
         self._message = _event_message(event)
+        self._sender = sender
         self.arguments = " ".join(args or []).strip()
 
     @property
@@ -172,11 +194,24 @@ class _NativeMessageAdapter:
 
     @property
     def from_user(self) -> Any:
+        sender_id = getattr(self._event, "sender_id", None) or getattr(self._message, "sender_id", None)
         return (
-            getattr(self._event, "from_user", None)
+            self._sender
+            or getattr(self._event, "from_user", None)
             or getattr(self._message, "from_user", None)
             or getattr(self._event, "sender", None)
             or getattr(self._message, "sender", None)
+            or (
+                types.SimpleNamespace(
+                    id=sender_id,
+                    first_name="",
+                    last_name="",
+                    username="",
+                    is_bot=False,
+                )
+                if sender_id is not None
+                else None
+            )
         )
 
     @property
@@ -268,7 +303,7 @@ class RedpackByRBQPlugin(Plugin):
         if ctx.client is None:
             return
         self._bind_core_config(ctx.account_id)
-        message = _NativeMessageAdapter(event)
+        message = _NativeMessageAdapter(event, sender=await _resolve_sender(event))
         bot = _NativeClientAdapter(ctx.client)
         await redpack_core.redpack_claim_listener(message, bot)
         await redpack_core.redpack_transfer_confirm_listener(message, bot)
