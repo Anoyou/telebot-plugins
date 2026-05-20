@@ -380,6 +380,18 @@ class DiceGridHuntPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[dice_grid_hunt] 已停止")
 
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "start_dice_grid_hunt":
+            return None
+        prize = int(payload.get("prize") or 100)
+        timeout = int(payload.get("timeout") or self._timeout or 90)
+        return [{"type": "send_message", "text": f"🎯 九宫格竞猜入口已触发，奖励 +{prize}，限时 {timeout} 秒。发送 ,{self._command} {prize} 开始本轮。"}]
+
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
     ) -> None:

@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "entry": "plugin.py",
   "permissions": [
     "send_message",

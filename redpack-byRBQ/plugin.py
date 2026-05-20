@@ -383,6 +383,18 @@ class RedpackByRBQPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[redpack-byRBQ] 已停止")
 
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "start_redpack":
+            return None
+        total_amount = int(payload.get("total_amount") or 88888)
+        count = int(payload.get("count") or 10)
+        return [{"type": "send_message", "text": f"🧧 口令红包入口已触发，总额 {total_amount}，个数 {count}。发送 ,{self._command} 口令 {total_amount} {count} 开始。"}]
+
     def _bind_core_config(self, account_id: int) -> None:
         config_path = Path(__file__).with_name(f"redpack_config_{account_id}.json")
         if self._config_path == config_path:

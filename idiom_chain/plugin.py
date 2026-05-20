@@ -918,6 +918,17 @@ class IdiomChainPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[idiom_chain] 已停止")
 
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "start_idiom_chain":
+            return None
+        timeout = int(payload.get("timeout") or self._timeout or 120)
+        return [{"type": "send_message", "text": f"📚 成语接龙入口已触发，限时 {timeout} 秒。发送 ,{self._command} 100 开局。"}]
+
     def _format_game_prompt(self, game: ChainGame) -> str:
         lines = [
             f"<b>📜 成语接龙</b> 第 {game.round_num} 轮",

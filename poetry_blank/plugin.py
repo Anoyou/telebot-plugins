@@ -304,6 +304,17 @@ class PoetryBlankPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[poetry_blank] 已停止")
 
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "start_poetry_blank":
+            return None
+        timeout = int(payload.get("timeout") or self._timeout or 120)
+        return [{"type": "send_message", "text": f"📖 诗词填空入口已触发，限时 {timeout} 秒。发送 ,{self._command} 100 开局。"}]
+
     def _pick_poem(self, chat_id: int) -> tuple[str, str, str, str, list[str]]:
         """随机选一首诗，挖空，返回 (原句, 作者, 题目, 带空题目, 答案)。"""
         used = self._used_indices.get(chat_id, set())

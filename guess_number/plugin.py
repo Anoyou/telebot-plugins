@@ -80,6 +80,17 @@ class GuessNumberPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[guess_number] 已停止")
 
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "start_guess_number":
+            return None
+        timeout = int(payload.get("timeout") or self._timeout or 300)
+        return [{"type": "send_message", "text": f"🎯 猜数字入口已触发，限时 {timeout} 秒。发送 ,{self._command} 开始游戏。"}]
+
     # ── 命令入口 ─────────────────────────────────────
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,

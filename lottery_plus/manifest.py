@@ -1,0 +1,224 @@
+"""彩票系统 Plus 远程插件 Manifest。"""
+
+from __future__ import annotations
+
+from app.worker.plugins.manifest import Manifest
+
+
+SAMPLE = {
+    "command": "lotto",
+    "round": "12",
+    "number": "3",
+    "count": "5",
+    "cost": "50003",
+    "pool": "188888",
+    "winners": "2",
+    "payout": "53888",
+    "history_limit": "5",
+    "draw_numbers": "1-6",
+    "interval": "300",
+}
+
+
+def _render(template: str) -> str:
+    try:
+        return template.format_map(SAMPLE)
+    except Exception:
+        return template
+
+
+HELP_TEMPLATE_DEFAULT = (
+    "<b>🎰 彩票系统</b>\n"
+    "指令：,{command} 买 号码 注数｜,{command} 我的｜,{command} 盘口｜,{command} 历史\n"
+    "示例：,{command} 买 {number} {count}（本例成本 {cost}）\n"
+    "每 {interval} 秒自动开奖，号码范围：{draw_numbers}"
+)
+BET_OK_TEMPLATE_DEFAULT = (
+    "✅ 第 {round} 期下注成功\n"
+    "号码：<b>{number}</b> · 注数：<b>{count}</b>\n"
+    "扣款：<b>{cost}</b> · 当前奖池：<b>{pool}</b>"
+)
+DRAW_TEMPLATE_DEFAULT = (
+    "🎲 第 {round} 期开奖结果：<b>{number}</b>\n"
+    "奖池：<b>{pool}</b> · 中奖人数：<b>{winners}</b>\n"
+    "总派发：<b>{payout}</b>"
+)
+
+CONFIG_SCHEMA = {
+    "type": "object",
+    "x-ui-mode": "schema",
+    "additionalProperties": False,
+    "properties": {
+        "usage_preview": {
+            "type": "string",
+            "title": "玩法预览（只读）",
+            "readOnly": True,
+            "default": "使用命令触发。支持下注、开奖、奖池查询、历史、热度、我的注单与管理员风控操作。",
+        },
+        "command": {
+            "type": "string",
+            "title": "触发指令名",
+            "default": "lotto",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^\\S+$",
+        },
+        "buy_aliases": {"type": "string", "title": "下注别名", "default": "买 buy bet"},
+        "my_aliases": {"type": "string", "title": "我的注单别名", "default": "我的 my"},
+        "pool_aliases": {"type": "string", "title": "盘口别名", "default": "盘口 pool"},
+        "history_aliases": {"type": "string", "title": "历史别名", "default": "历史 history"},
+        "stats_aliases": {"type": "string", "title": "统计别名", "default": "统计 stats"},
+        "hot_aliases": {"type": "string", "title": "热度别名", "default": "热度 hot trend"},
+        "help_aliases": {"type": "string", "title": "帮助别名", "default": "帮助 help"},
+        "draw_aliases": {"type": "string", "title": "开奖别名（管理员）", "default": "开奖 draw"},
+        "reset_aliases": {"type": "string", "title": "清盘别名（管理员）", "default": "清盘 reset"},
+        "sponsor_aliases": {"type": "string", "title": "赞助别名（管理员）", "default": "赞助 sponsor"},
+        "unsponsor_aliases": {"type": "string", "title": "取消赞助别名（管理员）", "default": "取消赞助 unsponsor"},
+        "refund_aliases": {"type": "string", "title": "退款别名（管理员）", "default": "退款 refund"},
+        "price_base": {
+            "type": "integer",
+            "title": "基础下注金额",
+            "default": 10000,
+            "minimum": 1,
+            "maximum": 100000000,
+        },
+        "service_fee_rate": {
+            "type": "number",
+            "title": "中奖服务费比例",
+            "default": 0.05,
+            "minimum": 0,
+            "maximum": 0.9,
+        },
+        "refund_per_action": {
+            "type": "integer",
+            "title": "中奖额外返还（每注）",
+            "default": 66,
+            "minimum": 0,
+            "maximum": 100000,
+        },
+        "max_numbers_per_user": {
+            "type": "integer",
+            "title": "每人每期可买号码数",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 20,
+        },
+        "max_bets_per_num": {
+            "type": "integer",
+            "title": "单号码最大注数",
+            "default": 1000,
+            "minimum": 1,
+            "maximum": 1000000,
+        },
+        "max_payout_per_user": {
+            "type": "integer",
+            "title": "单人单期最大派发上限",
+            "default": 5000000,
+            "minimum": 1,
+            "maximum": 1000000000,
+        },
+        "draw_numbers": {
+            "type": "string",
+            "title": "可开奖号码（逗号分隔）",
+            "default": "1,2,3,4,5,6",
+            "minLength": 1,
+            "maxLength": 120,
+        },
+        "auto_draw_interval_sec": {
+            "type": "integer",
+            "title": "自动开奖间隔（秒）",
+            "default": 300,
+            "minimum": 30,
+            "maximum": 86400,
+        },
+        "history_show_limit": {
+            "type": "integer",
+            "title": "历史默认展示期数",
+            "default": 5,
+            "minimum": 1,
+            "maximum": 50,
+        },
+        "admin_ids": {
+            "type": "string",
+            "title": "管理员用户ID列表",
+            "default": "",
+            "description": "逗号分隔；为空时仅允许当前账号触发管理动作。",
+        },
+        "help_template": {
+            "type": "string",
+            "title": "帮助消息模板",
+            "default": HELP_TEMPLATE_DEFAULT,
+            "minLength": 1,
+            "maxLength": 1500,
+        },
+        "bet_ok_template": {
+            "type": "string",
+            "title": "下注成功模板",
+            "default": BET_OK_TEMPLATE_DEFAULT,
+            "minLength": 1,
+            "maxLength": 1000,
+        },
+        "draw_template": {
+            "type": "string",
+            "title": "开奖消息模板",
+            "default": DRAW_TEMPLATE_DEFAULT,
+            "minLength": 1,
+            "maxLength": 1200,
+        },
+        "template_placeholders": {
+            "type": "string",
+            "title": "模板占位符说明（只读）",
+            "readOnly": True,
+            "default": "{command} 指令名，{round} 期号，{number} 号码，{count} 注数，{cost} 金额，{pool} 奖池，{winners} 中奖人数，{payout} 派发金额，{draw_numbers} 开奖号码范围，{interval} 自动开奖秒数。",
+        },
+        "help_preview": {
+            "type": "string",
+            "title": "帮助模板预览（只读）",
+            "readOnly": True,
+            "default": _render(HELP_TEMPLATE_DEFAULT),
+        },
+        "bet_ok_preview": {
+            "type": "string",
+            "title": "下注模板预览（只读）",
+            "readOnly": True,
+            "default": _render(BET_OK_TEMPLATE_DEFAULT),
+        },
+        "draw_preview": {
+            "type": "string",
+            "title": "开奖模板预览（只读）",
+            "readOnly": True,
+            "default": _render(DRAW_TEMPLATE_DEFAULT),
+        },
+    },
+    "required": ["command", "price_base", "service_fee_rate", "draw_numbers", "auto_draw_interval_sec"],
+}
+
+
+MANIFEST = Manifest(
+    key="lottery_plus",
+    display_name="彩票系统 Plus",
+    version="1.0.1",
+    min_telebot_version="0.10.0",
+    author="Anoyou",
+    description="群内彩票玩法，支持下注、奖池滚存、自动开奖、历史和消息模板预览",
+    permissions=["send_message", "edit_message", "read_chat", "delete_message"],
+    category="interactive",
+    interaction_entries=[
+        {
+            "key": "start_lottery_plus",
+            "title": "发起彩票下注",
+            "description": "由交互 Bot 在群内发布一条玩法提示，供用户按规则下注。",
+            "session_scope": "chat",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "message": {"type": "string", "title": "自定义提示", "default": "开始下注，祝你好运。"}
+                },
+            },
+        }
+    ],
+    config_schema=CONFIG_SCHEMA,
+)
+
+__all__ = ["MANIFEST"]

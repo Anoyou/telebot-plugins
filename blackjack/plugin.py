@@ -142,6 +142,17 @@ class BlackjackPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[blackjack] 已停止")
 
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "start_blackjack":
+            return None
+        timeout = int(payload.get("timeout") or self._timeout or 120)
+        return [{"type": "send_message", "text": f"🃏 21点已开启，限时 {timeout} 秒。发送 ,{self._command} 开始游戏。"}]
+
     # ── 命令入口 ─────────────────────────────────────
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,

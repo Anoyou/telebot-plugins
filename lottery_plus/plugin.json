@@ -1,0 +1,45 @@
+{
+  "name": "lottery_plus",
+  "display_name": "彩票系统 Plus",
+  "description": "群内彩票玩法：下注、开奖、奖池滚存、历史与统计，支持高可配置模板与预览",
+  "author": "Anoyou",
+  "version": "1.0.1",
+  "entry": "plugin.py",
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat",
+    "delete_message"
+  ],
+  "min_telebot_version": "0.10.0",
+  "cleanup_mode": "resource",
+  "commands": [
+    "lotto",
+    "彩票"
+  ],
+  "tags": [
+    "game",
+    "lottery",
+    "interactive"
+  ],
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "start_lottery_plus",
+      "title": "发起彩票下注",
+      "description": "由交互 Bot 在群内发布一条玩法提示，供用户按规则下注。",
+      "session_scope": "chat",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "自定义提示",
+            "default": "开始下注，祝你好运。"
+          }
+        }
+      }
+    }
+  ]
+}

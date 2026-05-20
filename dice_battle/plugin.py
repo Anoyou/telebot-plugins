@@ -100,6 +100,17 @@ class DiceBattlePlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[dice_battle] 已停止")
 
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "start_dice_battle":
+            return None
+        timeout = int(payload.get("timeout") or self._timeout or 60)
+        return [{"type": "send_message", "text": f"🎲 骰子对战已开启，邀请有效期 {timeout} 秒。回复目标消息后发送 ,{self._command} 发起挑战。"}]
+
     # ── 命令入口 ─────────────────────────────────────
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
