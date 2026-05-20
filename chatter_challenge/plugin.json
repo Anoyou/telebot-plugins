@@ -3,13 +3,25 @@
   "display_name": "话痨挑战",
   "description": "设定聊天规则，违反者自动扣分，全程被动监听",
   "author": "Anoyou",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
-  "permissions": ["send_message", "edit_message", "read_chat"],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat"
+  ],
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
-  "commands": ["chat", "话痨", "挑战"],
-  "tags": ["game", "social", "monitor"],
+  "commands": [
+    "chat",
+    "话痨",
+    "挑战"
+  ],
+  "tags": [
+    "game",
+    "social",
+    "monitor"
+  ],
   "config_schema": {
     "type": "object",
     "x-ui-mode": "schema",
@@ -24,7 +36,11 @@
         "pattern": "^\\S+$"
       }
     },
-    "required": ["command"]
+    "required": [
+      "command"
+    ]
   },
-  "license": "MIT"
+  "license": "MIT",
+  "category": "automation",
+  "interaction_entries": []
 }

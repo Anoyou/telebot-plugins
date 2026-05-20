@@ -3,7 +3,7 @@
   "display_name": "gi2-byRBQ",
   "description": "图片生成与改图插件，支持直接生图、回复图片改图、GI2 结果图原地继续编辑，并对高风险原图断流做诊断提示",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -43,5 +43,7 @@
       "command",
       "enabled"
     ]
-  }
+  },
+  "category": "utility",
+  "interaction_entries": []
 }

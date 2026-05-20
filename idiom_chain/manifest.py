@@ -43,11 +43,34 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.2",
+    version="1.0.3",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内成语接龙，第一个答对的获奖，支持禁词规则",
     permissions=["send_message", "edit_message", "read_chat"],
+
+    category="interactive",
+    interaction_entries=[
+        {
+            "key": "start_idiom_chain",
+            "title": "开始成语接龙",
+            "description": "由交互 Bot 在群内开启一局成语接龙。",
+            "session_scope": "chat",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "timeout": {
+                        "type": "integer",
+                        "title": "接龙限时（秒）",
+                        "default": 120,
+                        "minimum": 10,
+                        "maximum": 86400
+                    }
+                },
+            },
+        }
+    ],
     config_schema=CONFIG_SCHEMA,
 )
 

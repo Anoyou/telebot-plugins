@@ -3,13 +3,26 @@
   "display_name": "21点",
   "description": "经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
   "author": "Anoyou",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
-  "permissions": ["send_message", "edit_message", "read_chat", "delete_message"],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat",
+    "delete_message"
+  ],
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
-  "commands": ["bj", "21点", "blackjack"],
-  "tags": ["game", "card", "casino"],
+  "commands": [
+    "bj",
+    "21点",
+    "blackjack"
+  ],
+  "tags": [
+    "game",
+    "card",
+    "casino"
+  ],
   "config_schema": {
     "type": "object",
     "x-ui-mode": "schema",
@@ -31,7 +44,32 @@
         "maximum": 86400
       }
     },
-    "required": ["command", "timeout"]
+    "required": [
+      "command",
+      "timeout"
+    ]
   },
-  "license": "MIT"
+  "license": "MIT",
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "start_blackjack",
+      "title": "开始21点",
+      "description": "由交互 Bot 在群内发起一局 21 点对战。",
+      "session_scope": "chat",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeout": {
+            "type": "integer",
+            "title": "牌局限时（秒）",
+            "default": 120,
+            "minimum": 10,
+            "maximum": 86400
+          }
+        }
+      }
+    }
+  ]
 }

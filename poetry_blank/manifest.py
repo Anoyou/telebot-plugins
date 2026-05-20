@@ -33,11 +33,34 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="poetry_blank",
     display_name="诗词填空",
-    version="1.0.2",
+    version="1.0.3",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="古诗词填空抢答，答对获奖",
     permissions=["send_message", "edit_message", "read_chat"],
+
+    category="interactive",
+    interaction_entries=[
+        {
+            "key": "start_poetry_blank",
+            "title": "开始诗词填空",
+            "description": "由交互 Bot 在群内开启一局诗词填空。",
+            "session_scope": "chat",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "timeout": {
+                        "type": "integer",
+                        "title": "答题限时（秒）",
+                        "default": 120,
+                        "minimum": 10,
+                        "maximum": 86400
+                    }
+                },
+            },
+        }
+    ],
     config_schema=CONFIG_SCHEMA,
 )
 

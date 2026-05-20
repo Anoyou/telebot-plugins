@@ -127,11 +127,40 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.15",
+    version="1.1.16",
     min_telepilot_version="0.15.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包模块，支持文字红包、img 数学题图片红包、自动领取结算和高额转账确认",
     permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message"],
+
+    category="interactive",
+    interaction_entries=[
+        {
+            "key": "start_redpack",
+            "title": "发起口令红包",
+            "description": "由交互 Bot 在群内发起一轮口令红包。",
+            "session_scope": "chat",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "total_amount": {
+                        "type": "integer",
+                        "title": "总额",
+                        "default": 88888,
+                        "minimum": 100
+                    },
+                    "count": {
+                        "type": "integer",
+                        "title": "个数",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 500
+                    }
+                },
+            },
+        }
+    ],
     config_schema=CONFIG_SCHEMA,
 )
 

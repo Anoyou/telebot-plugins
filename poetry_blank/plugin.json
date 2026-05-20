@@ -3,13 +3,25 @@
   "display_name": "诗词填空",
   "description": "古诗词填空抢答，答对获奖",
   "author": "Anoyou",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "entry": "plugin.py",
-  "permissions": ["send_message", "edit_message", "read_chat"],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat"
+  ],
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
-  "commands": ["poetry", "诗词", "填空"],
-  "tags": ["game", "culture", "poetry"],
+  "commands": [
+    "poetry",
+    "诗词",
+    "填空"
+  ],
+  "tags": [
+    "game",
+    "culture",
+    "poetry"
+  ],
   "config_schema": {
     "type": "object",
     "x-ui-mode": "schema",
@@ -31,7 +43,32 @@
         "maximum": 86400
       }
     },
-    "required": ["command", "timeout"]
+    "required": [
+      "command",
+      "timeout"
+    ]
   },
-  "license": "MIT"
+  "license": "MIT",
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "start_poetry_blank",
+      "title": "开始诗词填空",
+      "description": "由交互 Bot 在群内开启一局诗词填空。",
+      "session_scope": "chat",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeout": {
+            "type": "integer",
+            "title": "答题限时（秒）",
+            "default": 120,
+            "minimum": 10,
+            "maximum": 86400
+          }
+        }
+      }
+    }
+  ]
 }

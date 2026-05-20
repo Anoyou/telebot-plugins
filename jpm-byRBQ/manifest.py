@@ -25,11 +25,14 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="jpm-byRBQ",
     display_name="jpm-byRBQ",
-    version="1.0.1",
+    version="1.0.2",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="关键词触发回复插件，支持多关键词、频率限制、锚点消息系统",
     permissions=["send_message", "edit_message", "read_chat"],
+
+    category="automation",
+    interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
 )
 

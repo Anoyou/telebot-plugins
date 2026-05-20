@@ -3,7 +3,7 @@
   "display_name": "jpm-byRBQ",
   "description": "关键词触发回复插件，支持多关键词、频率限制、锚点消息系统",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -43,5 +43,7 @@
       "command",
       "enabled"
     ]
-  }
+  },
+  "category": "automation",
+  "interaction_entries": []
 }

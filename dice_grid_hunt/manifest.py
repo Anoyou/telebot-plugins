@@ -240,11 +240,40 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.6",
+    version="1.1.7",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
     permissions=["send_message", "edit_message", "read_chat", "send_file"],
+
+    category="interactive",
+    interaction_entries=[
+        {
+            "key": "start_dice_grid_hunt",
+            "title": "开始九宫格竞猜",
+            "description": "由交互 Bot 在群内开启一局九宫格骰子竞猜。",
+            "session_scope": "chat",
+            "input_schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "prize": {
+                        "type": "integer",
+                        "title": "奖励",
+                        "default": 100,
+                        "minimum": 1
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "title": "答题限时（秒）",
+                        "default": 90,
+                        "minimum": 10,
+                        "maximum": 86400
+                    }
+                },
+            },
+        }
+    ],
     config_schema=CONFIG_SCHEMA,
 )
 

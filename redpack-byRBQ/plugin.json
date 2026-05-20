@@ -3,7 +3,7 @@
   "display_name": "红包",
   "description": "口令红包模块，支持文字红包、img 数学题图片红包、自动领取结算和高额转账确认",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.1.15",
+  "version": "1.1.16",
   "entry": "plugin.py",
   "min_telepilot_version": "0.15.0",
   "commands": [
@@ -110,19 +110,87 @@
         "maximum": 60,
         "description": "点击确认按钮前等待的秒数。"
       },
-      "help_aliases": {"type": "string", "title": "help 别名", "default": "help 帮助"},
-      "send_aliases": {"type": "string", "title": "send 别名", "default": "send"},
-      "img_aliases": {"type": "string", "title": "img 别名", "default": "img image 图片"},
-      "status_aliases": {"type": "string", "title": "status 别名", "default": "status 状态"},
-      "active_aliases": {"type": "string", "title": "active 别名", "default": "active list 列表"},
-      "clear_aliases": {"type": "string", "title": "clear 别名", "default": "clear 清空"},
-      "amount_aliases": {"type": "string", "title": "amount 别名", "default": "amount 金额"},
-      "count_aliases": {"type": "string", "title": "count 别名", "default": "count 个数 数量"},
-      "name_aliases": {"type": "string", "title": "name 别名", "default": "name 昵称 名称"},
-      "reset_aliases": {"type": "string", "title": "reset 别名", "default": "reset 重置"}
+      "help_aliases": {
+        "type": "string",
+        "title": "help 别名",
+        "default": "help 帮助"
+      },
+      "send_aliases": {
+        "type": "string",
+        "title": "send 别名",
+        "default": "send"
+      },
+      "img_aliases": {
+        "type": "string",
+        "title": "img 别名",
+        "default": "img image 图片"
+      },
+      "status_aliases": {
+        "type": "string",
+        "title": "status 别名",
+        "default": "status 状态"
+      },
+      "active_aliases": {
+        "type": "string",
+        "title": "active 别名",
+        "default": "active list 列表"
+      },
+      "clear_aliases": {
+        "type": "string",
+        "title": "clear 别名",
+        "default": "clear 清空"
+      },
+      "amount_aliases": {
+        "type": "string",
+        "title": "amount 别名",
+        "default": "amount 金额"
+      },
+      "count_aliases": {
+        "type": "string",
+        "title": "count 别名",
+        "default": "count 个数 数量"
+      },
+      "name_aliases": {
+        "type": "string",
+        "title": "name 别名",
+        "default": "name 昵称 名称"
+      },
+      "reset_aliases": {
+        "type": "string",
+        "title": "reset 别名",
+        "default": "reset 重置"
+      }
     },
     "required": [
       "command"
     ]
-  }
+  },
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "start_redpack",
+      "title": "发起口令红包",
+      "description": "由交互 Bot 在群内发起一轮口令红包。",
+      "session_scope": "chat",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "total_amount": {
+            "type": "integer",
+            "title": "总额",
+            "default": 88888,
+            "minimum": 100
+          },
+          "count": {
+            "type": "integer",
+            "title": "个数",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 500
+          }
+        }
+      }
+    }
+  ]
 }

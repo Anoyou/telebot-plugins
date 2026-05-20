@@ -3,7 +3,7 @@
   "display_name": "ais-byRBQ",
   "description": "AI 查询插件，支持联网搜索增强、参考网址追加、实体查询图片预览、API URL/base url 快速切换与备用模型重试",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -43,5 +43,7 @@
       "command",
       "enabled"
     ]
-  }
+  },
+  "category": "utility",
+  "interaction_entries": []
 }

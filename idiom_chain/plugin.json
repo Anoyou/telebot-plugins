@@ -3,13 +3,25 @@
   "display_name": "成语接龙",
   "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
   "author": "Anoyou",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "entry": "plugin.py",
-  "permissions": ["send_message", "edit_message", "read_chat"],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat"
+  ],
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
-  "commands": ["cy", "成语", "成语接龙"],
-  "tags": ["game", "culture", "word"],
+  "commands": [
+    "cy",
+    "成语",
+    "成语接龙"
+  ],
+  "tags": [
+    "game",
+    "culture",
+    "word"
+  ],
   "config_schema": {
     "type": "object",
     "x-ui-mode": "schema",
@@ -41,7 +53,33 @@
         }
       }
     },
-    "required": ["command", "timeout", "forbidden_words"]
+    "required": [
+      "command",
+      "timeout",
+      "forbidden_words"
+    ]
   },
-  "license": "MIT"
+  "license": "MIT",
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "start_idiom_chain",
+      "title": "开始成语接龙",
+      "description": "由交互 Bot 在群内开启一局成语接龙。",
+      "session_scope": "chat",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeout": {
+            "type": "integer",
+            "title": "接龙限时（秒）",
+            "default": 120,
+            "minimum": 10,
+            "maximum": 86400
+          }
+        }
+      }
+    }
+  ]
 }

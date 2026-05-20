@@ -1,4 +1,8 @@
 # 更新日志
+## 1.0.2 (2026-05-20)
+- 新增模块分类声明：`category = "automation"`（自动化）。
+- 未声明交互 Bot 启动入口（interaction_entries 为空）。
+- 同步更新远程元数据 `plugin.json`，保证 manifest 与 metadata 一致。
 
 ## 1.0.1 - 2026-05-17
 

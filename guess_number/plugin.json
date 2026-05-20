@@ -3,13 +3,24 @@
   "display_name": "猜数字",
   "description": "群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
   "author": "Anoyou",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "entry": "plugin.py",
-  "permissions": ["send_message", "edit_message", "read_chat"],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat"
+  ],
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
-  "commands": ["guess", "猜数字"],
-  "tags": ["game", "number", "casual"],
+  "commands": [
+    "guess",
+    "猜数字"
+  ],
+  "tags": [
+    "game",
+    "number",
+    "casual"
+  ],
   "config_schema": {
     "type": "object",
     "x-ui-mode": "schema",
@@ -31,7 +42,32 @@
         "maximum": 86400
       }
     },
-    "required": ["command", "timeout"]
+    "required": [
+      "command",
+      "timeout"
+    ]
   },
-  "license": "MIT"
+  "license": "MIT",
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "start_guess_number",
+      "title": "开始猜数字",
+      "description": "由交互 Bot 在群内开启一局猜数字游戏。",
+      "session_scope": "chat",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeout": {
+            "type": "integer",
+            "title": "答题限时（秒）",
+            "default": 300,
+            "minimum": 10,
+            "maximum": 86400
+          }
+        }
+      }
+    }
+  ]
 }

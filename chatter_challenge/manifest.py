@@ -26,11 +26,14 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="chatter_challenge",
     display_name="话痨挑战",
-    version="1.0.1",
+    version="1.0.2",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="设定聊天规则，违反者自动扣分，全程被动监听",
     permissions=["send_message", "edit_message", "read_chat"],
+
+    category="automation",
+    interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
 )
 

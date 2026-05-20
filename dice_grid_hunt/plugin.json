@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -206,5 +206,33 @@
       "prize_message_template"
     ]
   },
-  "license": "MIT"
+  "license": "MIT",
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "start_dice_grid_hunt",
+      "title": "开始九宫格竞猜",
+      "description": "由交互 Bot 在群内开启一局九宫格骰子竞猜。",
+      "session_scope": "chat",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "prize": {
+            "type": "integer",
+            "title": "奖励",
+            "default": 100,
+            "minimum": 1
+          },
+          "timeout": {
+            "type": "integer",
+            "title": "答题限时（秒）",
+            "default": 90,
+            "minimum": 10,
+            "maximum": 86400
+          }
+        }
+      }
+    }
+  ]
 }
