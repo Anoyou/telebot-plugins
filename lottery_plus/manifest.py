@@ -6,6 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 SAMPLE = {
+    "prefix": ",",
     "command": "lotto",
     "round": "12",
     "number": "3",
@@ -16,7 +17,8 @@ SAMPLE = {
     "payout": "53888",
     "history_limit": "5",
     "draw_numbers": "1-6",
-    "interval": "300",
+    "draw_time": "21:00",
+    "close_minutes": "1",
 }
 
 
@@ -29,9 +31,9 @@ def _render(template: str) -> str:
 
 HELP_TEMPLATE_DEFAULT = (
     "<b>🎰 彩票系统</b>\n"
-    "指令：,{command} 买 号码 注数｜,{command} 我的｜,{command} 盘口｜,{command} 历史\n"
-    "示例：,{command} 买 {number} {count}（本例成本 {cost}）\n"
-    "每 {interval} 秒自动开奖，号码范围：{draw_numbers}"
+    "指令：{prefix}{command} 买 号码 注数｜{prefix}{command} 我的｜{prefix}{command} 盘口｜{prefix}{command} 历史\n"
+    "示例：{prefix}{command} 买 {number} {count}（本例成本 {cost}）\n"
+    "每日 {draw_time} 开奖，封盘提前 {close_minutes} 分钟，号码范围：{draw_numbers}"
 )
 BET_OK_TEMPLATE_DEFAULT = (
     "✅ 第 {round} 期下注成功\n"
@@ -53,7 +55,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "玩法预览（只读）",
             "readOnly": True,
-            "default": "使用命令触发。支持下注、开奖、奖池查询、历史、热度、我的注单与管理员风控操作。",
+            "default": "支持命令与交互 Bot 两种入口。交互 Bot 只把正常用户转账判定为下注；奖池、历史、热度、我的注单仍走独立查询命令。",
         },
         "command": {
             "type": "string",
@@ -124,10 +126,31 @@ CONFIG_SCHEMA = {
             "minLength": 1,
             "maxLength": 120,
         },
+        "draw_hour": {
+            "type": "integer",
+            "title": "每日开奖小时",
+            "default": 21,
+            "minimum": 0,
+            "maximum": 23,
+        },
+        "draw_minute": {
+            "type": "integer",
+            "title": "每日开奖分钟",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 59,
+        },
+        "close_minutes_before_draw": {
+            "type": "integer",
+            "title": "开奖前封盘分钟数",
+            "default": 1,
+            "minimum": 0,
+            "maximum": 1440,
+        },
         "auto_draw_interval_sec": {
             "type": "integer",
-            "title": "自动开奖间隔（秒）",
-            "default": 300,
+            "title": "旧版开奖间隔（兼容保留，当前使用每日开奖时间）",
+            "default": 86400,
             "minimum": 30,
             "maximum": 86400,
         },
@@ -169,7 +192,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "模板占位符说明（只读）",
             "readOnly": True,
-            "default": "{command} 指令名，{round} 期号，{number} 号码，{count} 注数，{cost} 金额，{pool} 奖池，{winners} 中奖人数，{payout} 派发金额，{draw_numbers} 开奖号码范围，{interval} 自动开奖秒数。",
+            "default": "{prefix} 当前 userbot 全局指令前缀，{command} 指令名，{round} 期号，{number} 号码，{count} 注数，{cost} 金额，{pool} 奖池，{winners} 中奖人数，{payout} 派发金额，{draw_numbers} 开奖号码范围，{draw_time} 每日开奖时间，{close_minutes} 封盘提前分钟数。",
         },
         "help_preview": {
             "type": "string",
@@ -190,14 +213,14 @@ CONFIG_SCHEMA = {
             "default": _render(DRAW_TEMPLATE_DEFAULT),
         },
     },
-    "required": ["command", "price_base", "service_fee_rate", "draw_numbers", "auto_draw_interval_sec"],
+    "required": ["command", "price_base", "service_fee_rate", "draw_numbers", "draw_hour", "draw_minute"],
 }
 
 
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.2",
+    version="1.0.3",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内彩票玩法，支持下注、奖池滚存、自动开奖、历史和消息模板预览",
@@ -207,7 +230,7 @@ MANIFEST = Manifest(
         {
             "key": "start_lottery_plus",
             "title": "发起彩票下注",
-            "description": "由交互 Bot 在群内发布一条玩法提示，供用户按规则下注。",
+            "description": "由交互 Bot 接收转账通知后按金额自动下注；查询仍使用彩票模块自己的命令入口。",
             "session_scope": "chat",
             "input_schema": {
                 "type": "object",

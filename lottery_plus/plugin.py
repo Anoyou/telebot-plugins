@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import random
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
@@ -77,8 +80,123 @@ class LotteryPlusPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_lottery_plus":
             return None
-        message = str(payload.get("message") or "开始下注，祝你好运。")
-        return [{"type": "send_message", "text": f"🎟️ {message}\n发送 ,{self._command} 买 3 1 参与本期。"}]
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        event_type = str(event.get("type") or payload.get("event_type") or "").strip()
+        chat_id = self._payload_chat_id(payload, event)
+        reply_to = self._payload_message_id(payload, event)
+        if not chat_id:
+            return [{"type": "send_message", "text": "❌ 彩票模块需要在群聊里使用。", "reply_to_message_id": reply_to}]
+
+        lock = self._get_lock(chat_id)
+        async with lock:
+            st = self._get_state(chat_id)
+            self._ensure_auto_draw(chat_id, ctx)
+
+            if event_type == "payment_confirmed":
+                amount = self._int_value(payload.get("amount") or event.get("data", {}).get("amount"))
+                parsed = self._parse_bet_from_amount(amount)
+                if parsed is None:
+                    return [
+                        {"type": "send_message", "text": self._render_amount_help(amount), "reply_to_message_id": reply_to},
+                        {"type": "end_session"},
+                    ]
+                user_id, user_name = self._interaction_user(payload, event, prefer_payer=True)
+                text = self._place_bet(st, user_id, user_name, parsed[0], str(parsed[1]))
+                return [{"type": "send_message", "text": text, "reply_to_message_id": reply_to}, {"type": "end_session"}]
+
+            if event_type == "message":
+                return [{"type": "end_session"}]
+
+            message = str(payload.get("message") or "开始下注，祝你好运。")
+            return [
+                {
+                    "type": "send_message",
+                    "text": self._render_interaction_prompt(message),
+                    "reply_to_message_id": reply_to,
+                },
+                {"type": "end_session"},
+            ]
+
+    @staticmethod
+    def _int_value(value: Any) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _payload_chat_id(payload: dict[str, Any], event: dict[str, Any]) -> int:
+        return LotteryPlusPlugin._int_value(payload.get("chat_id") or event.get("chat_id"))
+
+    @staticmethod
+    def _payload_message_id(payload: dict[str, Any], event: dict[str, Any]) -> int | None:
+        value = LotteryPlusPlugin._int_value(payload.get("message_id") or event.get("message_id") or payload.get("source_message_id"))
+        return value or None
+
+    @staticmethod
+    def _synthetic_user_id(name: str) -> int:
+        raw = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+        return -int(raw, 16)
+
+    def _interaction_user(self, payload: dict[str, Any], event: dict[str, Any], *, prefer_payer: bool) -> tuple[int, str]:
+        event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if prefer_payer:
+            raw_user_id = payload.get("payer_user_id") or event_data.get("payer_user_id")
+            raw_name = payload.get("payer_name") or event_data.get("payer_name")
+        else:
+            raw_user_id = payload.get("sender_user_id") or event.get("user_id")
+            raw_name = payload.get("sender_name") or event.get("display_name")
+        name = str(raw_name or "玩家").strip() or "玩家"
+        user_id = self._int_value(raw_user_id)
+        return (user_id or self._synthetic_user_id(name), name)
+
+    def _parse_bet_from_amount(self, amount: int) -> tuple[str, int] | None:
+        if amount <= 0:
+            return None
+        price_base = int(self._cfg.get("price_base", 10000))
+        if price_base <= 0:
+            return None
+        for number in self._draw_numbers():
+            try:
+                num_value = int(number)
+            except ValueError:
+                continue
+            if amount <= num_value:
+                continue
+            rest = amount - num_value
+            if rest % price_base:
+                continue
+            count = rest // price_base
+            if count > 0:
+                return number, count
+        return None
+
+    def _render_amount_help(self, amount: int = 0) -> str:
+        sample_number = "3" if "3" in self._draw_numbers() else self._draw_numbers()[0]
+        price_base = int(self._cfg.get("price_base", 10000))
+        draw_hour, draw_minute = self._draw_clock()
+        try:
+            sample_amount = price_base + int(sample_number)
+            sample_amount_more = price_base * 5 + int(sample_number)
+        except ValueError:
+            sample_amount = price_base
+            sample_amount_more = price_base * 5
+        prefix = f"❌ 转账金额 {amount} 无法识别为彩票下注。\n" if amount else ""
+        return (
+            prefix +
+            "参与方式：对收款人的任意消息回复转账金额，金额 = 基础下注金额 × 注数 + 号码。\n"
+            f"示例：+{sample_amount} 表示买 {sample_number} 号 1 注；+{sample_amount_more} 表示买 {sample_number} 号 5 注。\n"
+            f"可选号码：{', '.join(self._draw_numbers())}\n"
+            f"每日 {draw_hour:02d}:{draw_minute:02d} 开奖。"
+        )
+
+    def _render_interaction_prompt(self, message: str) -> str:
+        prefix = self._command_prefix()
+        return (
+            f"🎟️ {message}\n"
+            f"{self._render_amount_help()}\n"
+            f"查询请使用 {prefix}{self._command} 我的 / {prefix}{self._command} 盘口 / {prefix}{self._command} 历史。"
+        )
 
     def _init_aliases(self) -> None:
         def parse_alias(key: str, default: str) -> set[str]:
@@ -124,6 +242,48 @@ class LotteryPlusPlugin(Plugin):
 
     def _alias_hit(self, kind: str, token: str) -> bool:
         return token.lower() in self._aliases.get(kind, set())
+
+    @staticmethod
+    def _command_prefix() -> str:
+        return current_command_prefix(fallback=",")
+
+    @staticmethod
+    def _normalize_command_template(template: str) -> str:
+        return str(template).replace(",{command}", "{prefix}{command}")
+
+    def _render_template(self, template: str, payload: dict[str, Any]) -> str:
+        normalized = self._normalize_command_template(template)
+        try:
+            return normalized.format_map(payload)
+        except Exception:
+            return normalized
+
+    def _draw_clock(self) -> tuple[int, int]:
+        hour = max(0, min(23, self._int_value(self._cfg.get("draw_hour", 21))))
+        minute = max(0, min(59, self._int_value(self._cfg.get("draw_minute", 0))))
+        return hour, minute
+
+    def _close_minutes_before_draw(self) -> int:
+        raw = self._cfg.get("close_minutes_before_draw", 1)
+        try:
+            return max(0, min(1440, int(raw)))
+        except (TypeError, ValueError):
+            return 1
+
+    def _seconds_until_next_draw(self) -> float:
+        now = datetime.now()
+        hour, minute = self._draw_clock()
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return max(1.0, (target - now).total_seconds())
+
+    def _is_market_open(self) -> bool:
+        now = datetime.now()
+        hour, minute = self._draw_clock()
+        draw_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        close_at = draw_at - timedelta(minutes=self._close_minutes_before_draw())
+        return not (close_at <= now <= draw_at)
 
     async def _cmd_handler(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
         chat_id = int(getattr(event.chat_id, "channel_id", None) or event.chat_id or 0)
@@ -194,7 +354,9 @@ class LotteryPlusPlugin(Plugin):
     def _render_help(self) -> str:
         tmpl = str(self._cfg.get("help_template", "{command}"))
         price = int(self._cfg.get("price_base", 10000))
+        draw_hour, draw_minute = self._draw_clock()
         sample = {
+            "prefix": self._command_prefix(),
             "command": self._command,
             "round": "1",
             "number": "3",
@@ -205,42 +367,41 @@ class LotteryPlusPlugin(Plugin):
             "payout": "53888",
             "history_limit": str(int(self._cfg.get("history_show_limit", 5))),
             "draw_numbers": ",".join(self._draw_numbers()),
-            "interval": str(int(self._cfg.get("auto_draw_interval_sec", 300))),
+            "draw_time": f"{draw_hour:02d}:{draw_minute:02d}",
+            "close_minutes": str(self._close_minutes_before_draw()),
+            "interval": "每日",
         }
-        try:
-            return tmpl.format_map(sample)
-        except Exception:
-            return tmpl
+        return self._render_template(tmpl, sample)
 
     async def _act_buy(self, event: Any, st: RoundState, user_id: int, user_name: str, rest: list[str]) -> None:
         if len(rest) < 2:
-            await event.reply(f"❌ 用法：,{self._command} 买 号码 注数", parse_mode="html")
+            await event.reply(f"❌ 用法：{self._command_prefix()}{self._command} 买 号码 注数", parse_mode="html")
             return
+        await event.reply(self._place_bet(st, user_id, user_name, rest[0], rest[1]), parse_mode="html")
 
-        number = rest[0].strip()
+    def _place_bet(self, st: RoundState, user_id: int, user_name: str, number_raw: Any, count_raw: Any) -> str:
+        if not self._is_market_open():
+            hour, minute = self._draw_clock()
+            return f"⛔️ <b>当前已封盘</b>，请等待 {hour:02d}:{minute:02d} 开奖后下期再参与。"
+        number = str(number_raw).strip()
         if number not in self._draw_numbers():
-            await event.reply(f"❌ 号码无效，可选：{', '.join(self._draw_numbers())}", parse_mode="html")
-            return
-
+            return f"❌ 号码无效，可选：{', '.join(self._draw_numbers())}"
         try:
-            count = int(rest[1])
-        except ValueError:
+            count = int(count_raw)
+        except (TypeError, ValueError):
             count = 0
         if count <= 0:
-            await event.reply("❌ 注数必须大于 0", parse_mode="html")
-            return
+            return "❌ 注数必须大于 0"
 
         max_bets_per_num = int(self._cfg.get("max_bets_per_num", 1000))
         user_number_bets = sum(b.count for b in st.bets if b.user_id == user_id and b.number == number)
         if user_number_bets + count > max_bets_per_num:
-            await event.reply(f"❌ 超出单号码注数上限：{max_bets_per_num}", parse_mode="html")
-            return
+            return f"❌ 超出单号码注数上限：{max_bets_per_num}"
 
         max_numbers = int(self._cfg.get("max_numbers_per_user", 1))
         owned_numbers = {b.number for b in st.bets if b.user_id == user_id}
         if number not in owned_numbers and len(owned_numbers) >= max_numbers:
-            await event.reply(f"❌ 每期最多可买 {max_numbers} 个号码", parse_mode="html")
-            return
+            return f"❌ 每期最多可买 {max_numbers} 个号码"
 
         price_base = int(self._cfg.get("price_base", 10000))
         cost = price_base * count + int(number)
@@ -248,7 +409,9 @@ class LotteryPlusPlugin(Plugin):
         st.bets.append(Bet(user_id=user_id, user_name=user_name, number=number, count=count, cost=cost))
 
         tmpl = str(self._cfg.get("bet_ok_template", "下注成功"))
+        draw_hour, draw_minute = self._draw_clock()
         payload = {
+            "prefix": self._command_prefix(),
             "command": self._command,
             "round": str(st.round_id),
             "number": number,
@@ -259,28 +422,31 @@ class LotteryPlusPlugin(Plugin):
             "payout": "0",
             "history_limit": str(int(self._cfg.get("history_show_limit", 5))),
             "draw_numbers": ",".join(self._draw_numbers()),
-            "interval": str(int(self._cfg.get("auto_draw_interval_sec", 300))),
+            "draw_time": f"{draw_hour:02d}:{draw_minute:02d}",
+            "close_minutes": str(self._close_minutes_before_draw()),
+            "interval": "每日",
         }
-        try:
-            msg = tmpl.format_map(payload)
-        except Exception:
-            msg = tmpl
-        await event.reply(msg, parse_mode="html")
+        return self._render_template(tmpl, payload)
 
     async def _act_my(self, event: Any, st: RoundState, user_id: int) -> None:
+        await event.reply(self._render_my(st, user_id), parse_mode="html")
+
+    def _render_my(self, st: RoundState, user_id: int) -> str:
         mine = [b for b in st.bets if b.user_id == user_id]
         if not mine:
-            await event.reply(f"📭 第 {st.round_id} 期你还没有下注", parse_mode="html")
-            return
+            return f"📭 第 {st.round_id} 期你还没有下注"
         lines = [f"📒 第 {st.round_id} 期我的注单"]
         total = 0
         for idx, b in enumerate(mine, start=1):
             lines.append(f"{idx}. 号码 {b.number} · 注数 {b.count} · 扣款 {b.cost}")
             total += b.cost
         lines.append(f"\n合计扣款：<b>{total}</b>")
-        await event.reply("\n".join(lines), parse_mode="html")
+        return "\n".join(lines)
 
     async def _act_history(self, event: Any, st: RoundState, rest: list[str]) -> None:
+        await event.reply(self._render_history(st, rest), parse_mode="html")
+
+    def _render_history(self, st: RoundState, rest: list[str]) -> str:
         limit = int(self._cfg.get("history_show_limit", 5))
         if rest:
             try:
@@ -289,40 +455,43 @@ class LotteryPlusPlugin(Plugin):
                 pass
         rows = st.history[-limit:]
         if not rows:
-            await event.reply("📜 暂无开奖记录", parse_mode="html")
-            return
+            return "📜 暂无开奖记录"
         rows.reverse()
         lines = [f"📜 最近 {len(rows)} 期开奖记录"]
         for item in rows:
             lines.append(
                 f"第 {item['round']} 期：号 <b>{item['number']}</b> · 奖池 {item['pool']} · 中奖 {item['winners']} · 派发 {item['payout']}"
             )
-        await event.reply("\n".join(lines), parse_mode="html")
+        return "\n".join(lines)
 
     async def _act_stats(self, event: Any, st: RoundState) -> None:
+        await event.reply(self._render_stats(st), parse_mode="html")
+
+    def _render_stats(self, st: RoundState) -> str:
         users = len({b.user_id for b in st.bets})
         total_bets = sum(b.count for b in st.bets)
         total_amount = sum(b.cost for b in st.bets)
-        await event.reply(
+        return (
             f"📈 第 {st.round_id} 期统计\n"
             f"👥 参与人数：{users}\n"
             f"📦 总注数：{total_bets}\n"
             f"💰 总投入：{total_amount}\n"
-            f"🌊 当前奖池：{int(st.jackpot)}",
-            parse_mode="html",
+            f"🌊 当前奖池：{int(st.jackpot)}"
         )
 
     async def _act_hot(self, event: Any, st: RoundState) -> None:
+        await event.reply(self._render_hot(st), parse_mode="html")
+
+    def _render_hot(self, st: RoundState) -> str:
         if not st.bets:
-            await event.reply("📊 当前暂无热度数据", parse_mode="html")
-            return
+            return "📊 当前暂无热度数据"
         c = Counter()
         for b in st.bets:
             c[b.number] += b.count
         lines = [f"🔥 第 {st.round_id} 期热度"]
         for number, cnt in c.most_common(10):
             lines.append(f"号码 {number}: {cnt} 注")
-        await event.reply("\n".join(lines), parse_mode="html")
+        return "\n".join(lines)
 
     async def _act_sponsor(self, event: Any, st: RoundState, rest: list[str], positive: bool) -> None:
         if not rest:
@@ -370,13 +539,18 @@ class LotteryPlusPlugin(Plugin):
         task.add_done_callback(self._tasks.discard)
 
     async def _auto_draw_loop(self, chat_id: int, ctx: PluginContext) -> None:
-        interval = max(30, int(self._cfg.get("auto_draw_interval_sec", 300)))
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(self._seconds_until_next_draw())
             lock = self._get_lock(chat_id)
             async with lock:
                 st = self._get_state(chat_id)
                 if not st.bets:
+                    st.round_id += 1
+                    if ctx.client:
+                        try:
+                            await ctx.client.send_message(chat_id, f"📢 第 {st.round_id - 1} 期无投注，自动进入第 {st.round_id} 期。")
+                        except Exception:
+                            pass
                     continue
                 await self._draw_once(chat_id, None, st, ctx)
 
@@ -421,7 +595,9 @@ class LotteryPlusPlugin(Plugin):
         st.history.append(result)
 
         tmpl = str(self._cfg.get("draw_template", "开奖"))
+        draw_hour, draw_minute = self._draw_clock()
         payload = {
+            "prefix": self._command_prefix(),
             "command": self._command,
             "round": str(st.round_id),
             "number": str(lucky),
@@ -432,12 +608,11 @@ class LotteryPlusPlugin(Plugin):
             "payout": str(result["payout"]),
             "history_limit": str(int(self._cfg.get("history_show_limit", 5))),
             "draw_numbers": ",".join(self._draw_numbers()),
-            "interval": str(int(self._cfg.get("auto_draw_interval_sec", 300))),
+            "draw_time": f"{draw_hour:02d}:{draw_minute:02d}",
+            "close_minutes": str(self._close_minutes_before_draw()),
+            "interval": "每日",
         }
-        try:
-            msg = tmpl.format_map(payload)
-        except Exception:
-            msg = tmpl
+        msg = self._render_template(tmpl, payload)
 
         if event is not None:
             await event.reply(msg, parse_mode="html")
