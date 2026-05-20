@@ -1,4 +1,9 @@
 # 更新日志
+## 1.0.2 (2026-05-21)
+- 兼容最新开发文档：在 `plugin.json` 中补齐 `config_schema`，修复配置页不显示配置项的问题。
+- 增加 `min_telepilot_version` 字段，并保留 `min_telebot_version` 作为兼容别名。
+- 同步版本号到 `manifest.py` 与 `plugin.json`。
+
 ## 1.0.1 (2026-05-20)
 - 补充交互 Bot 运行入口：实现 `on_interaction(ctx, entry_key, payload)` 最小 hook。
 - 保持原有指令与消息监听主逻辑不变，仅新增交互入口声明对应的标准动作返回。
