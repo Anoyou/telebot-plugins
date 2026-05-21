@@ -64,6 +64,12 @@ CONFIG_SCHEMA = {
             "default": "delete_only",
             "enum": ["delete_only", "mute_sender", "kick_sender", "ban_sender"],
             "enumNames": ["仅删除消息", "禁言发送者", "踢出发送者", "封禁发送者"],
+            "enumDescriptions": [
+                "只删除触发广告 Bot 的消息，不处理群成员。",
+                "删除消息后禁言发送者，时长由“禁言时长（秒）”控制。",
+                "删除消息后把发送者踢出群；用户之后仍可被重新邀请进群。",
+                "删除消息后封禁发送者；通常用于确认恶意广告账号。",
+            ],
         },
         "mute_duration_seconds": {
             "type": "integer",
@@ -97,7 +103,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.0",
+    version="1.1.1",
     min_telepilot_version="0.21.0",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
