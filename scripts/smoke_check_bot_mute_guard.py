@@ -181,6 +181,68 @@ async def main() -> None:
     await dry_plugin.on_message(dry_ctx, Event(dry_client, Message(8, "@dryrunbot"), sender_f))
     assert dry_client.deleted == []
 
+    false_string_client = FakeClient()
+    false_string_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+        config={
+            "target_chats": "-1001234567890",
+            "allowed_bots": "",
+            "dry_run": "false",
+        },
+        client=false_string_client,
+        log=log,
+    )
+    false_string_plugin = plugin_mod.BotMuteGuardPlugin()
+    await false_string_plugin.on_startup(false_string_ctx)
+    await false_string_plugin.on_message(
+        false_string_ctx,
+        Event(false_string_client, Message(9, "@notdryrunbot"), sender_f),
+    )
+    assert false_string_client.deleted == [(-1001234567890, 9)]
+
+    hot_reload_client = FakeClient()
+    hot_reload_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+        config={
+            "target_chats": "-1001234567890",
+            "allowed_bots": "@hotbot",
+            "dry_run": True,
+        },
+        client=hot_reload_client,
+        log=log,
+    )
+    hot_reload_plugin = plugin_mod.BotMuteGuardPlugin()
+    await hot_reload_plugin.on_startup(hot_reload_ctx)
+    await hot_reload_plugin.on_message(
+        hot_reload_ctx,
+        Event(hot_reload_client, Message(10, "@hotbot"), sender_f),
+    )
+    assert hot_reload_client.deleted == []
+
+    hot_reload_ctx.config["allowed_bots"] = ""
+    hot_reload_ctx.config["dry_run"] = "false"
+    await hot_reload_plugin.on_message(
+        hot_reload_ctx,
+        Event(hot_reload_client, Message(11, "@hotbot"), sender_f),
+    )
+    assert hot_reload_client.deleted == [(-1001234567890, 11)]
+
+    disabled_rule_client = FakeClient()
+    disabled_rule_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+        config={
+            "target_chats": "-1001234567890",
+            "allowed_bots": "",
+            "delete_untrusted_bot_mentions": "false",
+        },
+        client=disabled_rule_client,
+        log=log,
+    )
+    disabled_rule_plugin = plugin_mod.BotMuteGuardPlugin()
+    await disabled_rule_plugin.on_startup(disabled_rule_ctx)
+    await disabled_rule_plugin.on_message(
+        disabled_rule_ctx,
+        Event(disabled_rule_client, Message(12, "@disabledbot"), sender_f),
+    )
+    assert disabled_rule_client.deleted == []
+
     name_target_client = FakeClient()
     name_target_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
         config={"target_chats": "@target_group", "allowed_bots": ""},
@@ -191,9 +253,9 @@ async def main() -> None:
     await name_target_plugin.on_startup(name_target_ctx)
     await name_target_plugin.on_message(
         name_target_ctx,
-        Event(name_target_client, Message(9, "@byusernamebot"), sender_f, expose_chat=False),
+        Event(name_target_client, Message(13, "@byusernamebot"), sender_f, expose_chat=False),
     )
-    assert name_target_client.deleted == [(-1001234567890, 9)]
+    assert name_target_client.deleted == [(-1001234567890, 13)]
 
     print("bot_mute_guard smoke ok")
 

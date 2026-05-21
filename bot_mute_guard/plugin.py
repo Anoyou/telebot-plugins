@@ -13,7 +13,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 TOKEN_SPLIT_RE = re.compile(r"[\s,，;；]+")
 BOT_MENTION_RE = re.compile(
     r"(?<![A-Za-z0-9_.])@([A-Za-z0-9_]{2,29}bot)"
@@ -53,6 +53,22 @@ def _parse_targets(value: Any) -> ParsedTargets:
         except ValueError:
             names.add(normalized.lower())
     return ParsedTargets(ids=ids, names=names)
+
+
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y", "on", "开启", "开", "是"}:
+            return True
+        if normalized in {"0", "false", "no", "n", "off", "关闭", "关", "否", ""}:
+            return False
+    return default
 
 
 def _chat_id(event: Any) -> int:
@@ -151,20 +167,27 @@ class BotMuteGuardPlugin(Plugin):
         self._announce = False
         self._dry_run = False
 
-    async def on_startup(self, ctx: PluginContext) -> None:
-        cfg = ctx.config or {}
+    def _apply_config(self, cfg: dict[str, Any]) -> None:
         self._targets = _parse_targets(cfg.get("target_chats", ""))
         self._allowed_bots = _parse_targets(cfg.get("allowed_bots", ""))
-        self._delete_untrusted_bot_mentions = bool(
-            cfg.get("delete_untrusted_bot_mentions", True)
+        self._delete_untrusted_bot_mentions = _parse_bool(
+            cfg.get("delete_untrusted_bot_mentions"), True
         )
-        self._delete_inline_bot_messages = bool(cfg.get("delete_inline_bot_messages", True))
-        self._delete_bot_sender_messages = bool(cfg.get("delete_bot_sender_messages", True))
-        self._delete_join_messages_for_known_bots = bool(
-            cfg.get("delete_join_messages_for_known_bots", True)
+        self._delete_inline_bot_messages = _parse_bool(
+            cfg.get("delete_inline_bot_messages"), True
         )
-        self._announce = bool(cfg.get("announce", False))
-        self._dry_run = bool(cfg.get("dry_run", False))
+        self._delete_bot_sender_messages = _parse_bool(
+            cfg.get("delete_bot_sender_messages"), True
+        )
+        self._delete_join_messages_for_known_bots = _parse_bool(
+            cfg.get("delete_join_messages_for_known_bots"), True
+        )
+        self._announce = _parse_bool(cfg.get("announce"), False)
+        self._dry_run = _parse_bool(cfg.get("dry_run"), False)
+
+    async def on_startup(self, ctx: PluginContext) -> None:
+        cfg = ctx.config or {}
+        self._apply_config(cfg)
 
         if ctx.log:
             if not self._targets.ids and not self._targets.names:
@@ -187,6 +210,8 @@ class BotMuteGuardPlugin(Plugin):
             await ctx.log("info", f"[bot_mute_guard] v{VERSION} 已停止")
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
+        self._apply_config(ctx.config or {})
+
         chat_id = _chat_id(event)
         if not chat_id or not await self._is_target_chat(event, chat_id):
             return
