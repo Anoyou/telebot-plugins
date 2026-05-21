@@ -55,7 +55,13 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "玩法预览（只读）",
             "readOnly": True,
-            "default": "支持命令与交互 Bot 两种入口。交互 Bot 只把正常用户转账判定为下注；奖池、历史、热度、我的注单仍走独立查询命令。",
+            "default": (
+                "彩票系统支持命令和交互 Bot 两种入口。\n"
+                "{prefix}{command} 帮助：查看玩法说明。\n"
+                "{prefix}{command} 买 3 5：买 3 号 5 注，扣款按“基础下注金额 × 注数 + 号码”计算。\n"
+                "{prefix}{command} 我的 / 盘口 / 热度 / 统计 / 历史：查询本期与往期信息。\n"
+                "交互 Bot 入口会把正常用户转账自动判定为下注；奖池、历史、热度、我的注单仍使用上面的查询命令。"
+            ),
         },
         "command": {
             "type": "string",
@@ -220,7 +226,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.4",
+    version="1.0.5",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内彩票玩法，支持下注、奖池滚存、自动开奖、历史和消息模板预览",
