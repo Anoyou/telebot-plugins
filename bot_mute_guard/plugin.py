@@ -13,7 +13,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 TOKEN_SPLIT_RE = re.compile(r"[\s,，;；]+")
 BOT_MENTION_RE = re.compile(
     r"(?<![A-Za-z0-9_.])@([A-Za-z0-9_]{2,29}bot)"
