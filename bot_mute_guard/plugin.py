@@ -1,7 +1,7 @@
 """Bot 防广告守卫远程模块。
 
 严格遵循 TelePilot 远程模块沙箱：只通过 ``ctx.client`` 调用已声明的
-``delete_message`` / ``send_message`` 能力，不访问 raw client、不做成员管理。
+``delete_message`` / ``send_message`` / ``moderate_chat`` 能力，不访问 raw client。
 """
 
 from __future__ import annotations
@@ -13,8 +13,18 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.0.4"
+VERSION = "1.1.0"
 TOKEN_SPLIT_RE = re.compile(r"[\s,，;；]+")
+ACTION_DELETE_ONLY = "delete_only"
+ACTION_MUTE_SENDER = "mute_sender"
+ACTION_KICK_SENDER = "kick_sender"
+ACTION_BAN_SENDER = "ban_sender"
+VALID_VIOLATION_ACTIONS = {
+    ACTION_DELETE_ONLY,
+    ACTION_MUTE_SENDER,
+    ACTION_KICK_SENDER,
+    ACTION_BAN_SENDER,
+}
 BOT_MENTION_RE = re.compile(
     r"(?<![A-Za-z0-9_.])@([A-Za-z0-9_]{2,29}bot)"
     r"(?=$|[\s,，;；:：!！?？、（()）\[\]【】<>《》\"'“”‘’]|\.(?:\s|$))",
@@ -69,6 +79,33 @@ def _parse_bool(value: Any, default: bool = False) -> bool:
         if normalized in {"0", "false", "no", "n", "off", "关闭", "关", "否", ""}:
             return False
     return default
+
+
+def _parse_action(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in VALID_VIOLATION_ACTIONS:
+        return normalized
+    aliases = {
+        "delete": ACTION_DELETE_ONLY,
+        "none": ACTION_DELETE_ONLY,
+        "mute": ACTION_MUTE_SENDER,
+        "kick": ACTION_KICK_SENDER,
+        "ban": ACTION_BAN_SENDER,
+        "仅删除": ACTION_DELETE_ONLY,
+        "删除": ACTION_DELETE_ONLY,
+        "禁言": ACTION_MUTE_SENDER,
+        "踢出": ACTION_KICK_SENDER,
+        "封禁": ACTION_BAN_SENDER,
+    }
+    return aliases.get(normalized, ACTION_DELETE_ONLY)
+
+
+def _parse_positive_int(value: Any, default: int = 3600) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, parsed)
 
 
 def _chat_id(event: Any) -> int:
@@ -166,6 +203,8 @@ class BotMuteGuardPlugin(Plugin):
         self._delete_join_messages_for_known_bots = True
         self._announce = False
         self._dry_run = False
+        self._violation_action = ACTION_DELETE_ONLY
+        self._mute_duration_seconds = 3600
 
     def _apply_config(self, cfg: dict[str, Any]) -> None:
         self._targets = _parse_targets(cfg.get("target_chats", ""))
@@ -184,6 +223,10 @@ class BotMuteGuardPlugin(Plugin):
         )
         self._announce = _parse_bool(cfg.get("announce"), False)
         self._dry_run = _parse_bool(cfg.get("dry_run"), False)
+        self._violation_action = _parse_action(cfg.get("violation_action"))
+        self._mute_duration_seconds = _parse_positive_int(
+            cfg.get("mute_duration_seconds"), 3600
+        )
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -277,19 +320,30 @@ class BotMuteGuardPlugin(Plugin):
             candidates.append(user)
 
         blocked: list[str] = []
+        target_user_ids: list[int] = []
         for candidate in candidates:
             if not bool(getattr(candidate, "bot", False)):
                 continue
             if self._is_allowed_bot_ref(candidate):
                 continue
+            candidate_id = _entity_id(candidate)
+            if candidate_id:
+                target_user_ids.append(candidate_id)
             username = _entity_username(candidate)
-            blocked.append(f"@{username}" if username else f"id:{_entity_id(candidate)}")
+            blocked.append(f"@{username}" if username else f"id:{candidate_id}")
 
         if not blocked:
             return False
 
         reason = "检测到非白名单 Bot 入群服务消息：" + "、".join(blocked)
-        await self._handle_violation(ctx, chat_id, _message_id(event), reason, event)
+        await self._handle_violation(
+            ctx,
+            chat_id,
+            _message_id(event),
+            reason,
+            event,
+            target_user_ids=target_user_ids,
+        )
         return True
 
     async def _handle_untrusted_bot_mentions(
@@ -339,7 +393,14 @@ class BotMuteGuardPlugin(Plugin):
             return False
 
         reason = f"非白名单 Bot 发言：{self._bot_label(sender)}"
-        await self._handle_violation(ctx, chat_id, _message_id(event), reason, event)
+        await self._handle_violation(
+            ctx,
+            chat_id,
+            _message_id(event),
+            reason,
+            event,
+            target_user_ids=[_entity_id(sender) or _sender_id(event)],
+        )
         return True
 
     async def _event_sender(self, event: Any) -> Any:
@@ -375,6 +436,8 @@ class BotMuteGuardPlugin(Plugin):
         message_id: int | None,
         reason: str,
         event: Any,
+        *,
+        target_user_ids: list[int] | None = None,
     ) -> None:
         sender_id = _sender_id(event)
         if self._dry_run:
@@ -389,6 +452,99 @@ class BotMuteGuardPlugin(Plugin):
 
         if deleted and self._announce:
             await self._send_notice(ctx, chat_id, reason)
+
+        targets = target_user_ids or ([sender_id] if sender_id else [])
+        await self._moderate_targets(ctx, chat_id, message_id, reason, sender_id, targets)
+
+    async def _moderate_targets(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        message_id: int | None,
+        reason: str,
+        sender_id: int,
+        target_user_ids: list[int],
+    ) -> None:
+        if self._violation_action == ACTION_DELETE_ONLY:
+            return
+        if ctx.client is None:
+            await self._log(
+                ctx,
+                "error",
+                "ctx.client 未初始化，无法处理违规成员",
+                chat_id,
+                message_id,
+                sender_id,
+            )
+            return
+
+        seen_targets: set[int] = set()
+        unique_targets: list[int] = []
+        for uid in target_user_ids:
+            if uid and uid not in seen_targets:
+                seen_targets.add(uid)
+                unique_targets.append(uid)
+        if not unique_targets:
+            await self._log(
+                ctx,
+                "warn",
+                f"命中规则但无法识别处理目标，原因：{reason}",
+                chat_id,
+                message_id,
+                sender_id,
+            )
+            return
+
+        for target_user_id in unique_targets:
+            try:
+                if self._violation_action == ACTION_MUTE_SENDER:
+                    await ctx.client.mute_user(
+                        chat_id,
+                        target_user_id,
+                        duration_seconds=self._mute_duration_seconds,
+                    )
+                    duration_label = (
+                        "永久" if self._mute_duration_seconds == 0
+                        else f"{self._mute_duration_seconds} 秒"
+                    )
+                    action_label = f"已禁言违规成员 {target_user_id}，时长：{duration_label}"
+                elif self._violation_action == ACTION_KICK_SENDER:
+                    await ctx.client.kick_user(chat_id, target_user_id)
+                    action_label = f"已踢出违规成员 {target_user_id}"
+                elif self._violation_action == ACTION_BAN_SENDER:
+                    await ctx.client.ban_user(chat_id, target_user_id)
+                    action_label = f"已封禁违规成员 {target_user_id}"
+                else:
+                    return
+            except PermissionError as exc:
+                await self._log(
+                    ctx,
+                    "error",
+                    f"缺少 moderate_chat 权限，无法处理违规成员 {target_user_id}：{exc}",
+                    chat_id,
+                    message_id,
+                    sender_id,
+                )
+                continue
+            except Exception as exc:  # noqa: BLE001
+                await self._log(
+                    ctx,
+                    "error",
+                    f"处理违规成员 {target_user_id} 失败：{type(exc).__name__}: {exc}",
+                    chat_id,
+                    message_id,
+                    sender_id,
+                )
+                continue
+
+            await self._log(
+                ctx,
+                "info",
+                f"{action_label}，原因：{reason}",
+                chat_id,
+                message_id,
+                sender_id,
+            )
 
     async def _delete_message(
         self,

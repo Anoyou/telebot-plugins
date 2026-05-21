@@ -81,12 +81,24 @@ class FakeClient:
     def __init__(self) -> None:
         self.deleted: list[tuple[int, int]] = []
         self.sent: list[tuple[int, str]] = []
+        self.muted: list[tuple[int, int, int]] = []
+        self.kicked: list[tuple[int, int]] = []
+        self.banned: list[tuple[int, int]] = []
 
     async def delete_messages(self, chat_id: int, message_id: int) -> None:
         self.deleted.append((chat_id, message_id))
 
     async def send_message(self, chat_id: int, text: str) -> None:
         self.sent.append((chat_id, text))
+
+    async def mute_user(self, chat_id: int, user_id: int, *, duration_seconds: int) -> None:
+        self.muted.append((chat_id, user_id, duration_seconds))
+
+    async def kick_user(self, chat_id: int, user_id: int) -> None:
+        self.kicked.append((chat_id, user_id))
+
+    async def ban_user(self, chat_id: int, user_id: int) -> None:
+        self.banned.append((chat_id, user_id))
 
 
 class Event:
@@ -225,6 +237,45 @@ async def main() -> None:
     )
     assert hot_reload_client.deleted == [(-1001234567890, 11)]
 
+    mute_client = FakeClient()
+    mute_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+        config={
+            "target_chats": "-1001234567890",
+            "allowed_bots": "",
+            "violation_action": "mute_sender",
+            "mute_duration_seconds": "120",
+        },
+        client=mute_client,
+        log=log,
+    )
+    mute_plugin = plugin_mod.BotMuteGuardPlugin()
+    await mute_plugin.on_startup(mute_ctx)
+    await mute_plugin.on_message(
+        mute_ctx,
+        Event(mute_client, Message(12, "@muteme_bot"), sender_f),
+    )
+    assert mute_client.deleted == [(-1001234567890, 12)]
+    assert mute_client.muted == [(-1001234567890, 782, 120)]
+
+    kick_client = FakeClient()
+    kick_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+        config={
+            "target_chats": "-1001234567890",
+            "allowed_bots": "",
+            "violation_action": "kick_sender",
+        },
+        client=kick_client,
+        log=log,
+    )
+    kick_plugin = plugin_mod.BotMuteGuardPlugin()
+    await kick_plugin.on_startup(kick_ctx)
+    await kick_plugin.on_message(
+        kick_ctx,
+        Event(kick_client, Message(13, "@kickmebot"), sender_f),
+    )
+    assert kick_client.deleted == [(-1001234567890, 13)]
+    assert kick_client.kicked == [(-1001234567890, 782)]
+
     disabled_rule_client = FakeClient()
     disabled_rule_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
         config={
@@ -239,7 +290,7 @@ async def main() -> None:
     await disabled_rule_plugin.on_startup(disabled_rule_ctx)
     await disabled_rule_plugin.on_message(
         disabled_rule_ctx,
-        Event(disabled_rule_client, Message(12, "@disabledbot"), sender_f),
+        Event(disabled_rule_client, Message(14, "@disabledbot"), sender_f),
     )
     assert disabled_rule_client.deleted == []
 
@@ -253,9 +304,9 @@ async def main() -> None:
     await name_target_plugin.on_startup(name_target_ctx)
     await name_target_plugin.on_message(
         name_target_ctx,
-        Event(name_target_client, Message(13, "@byusernamebot"), sender_f, expose_chat=False),
+        Event(name_target_client, Message(15, "@byusernamebot"), sender_f, expose_chat=False),
     )
-    assert name_target_client.deleted == [(-1001234567890, 13)]
+    assert name_target_client.deleted == [(-1001234567890, 15)]
 
     print("bot_mute_guard smoke ok")
 

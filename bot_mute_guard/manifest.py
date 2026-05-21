@@ -30,7 +30,7 @@ CONFIG_SCHEMA = {
         "delete_untrusted_bot_mentions": {
             "type": "boolean",
             "title": "删除非白名单 @bot 提及消息",
-            "description": "用户消息中出现 @xxxbot 且该 Bot 不在白名单内时，删除这条消息并写日志。远程模块沙箱不支持踢人/禁言。",
+            "description": "用户消息中出现 @xxxbot 且该 Bot 不在白名单内时，删除这条消息并写日志；如违规处理动作不是仅删除，会继续处理发送者。",
             "default": True,
         },
         "delete_inline_bot_messages": {
@@ -57,6 +57,21 @@ CONFIG_SCHEMA = {
             "description": "删除成功后是否在群内发送提示。广告群建议关闭，只看模块日志。",
             "default": False,
         },
+        "violation_action": {
+            "type": "string",
+            "title": "违规处理动作",
+            "description": "命中规则后的成员处理动作。默认仅删除消息；选择禁言、踢出或封禁时，需要 TelePilot 支持并授权 moderate_chat 权限。",
+            "default": "delete_only",
+            "enum": ["delete_only", "mute_sender", "kick_sender", "ban_sender"],
+            "enumNames": ["仅删除消息", "禁言发送者", "踢出发送者", "封禁发送者"],
+        },
+        "mute_duration_seconds": {
+            "type": "integer",
+            "title": "禁言时长（秒）",
+            "description": "违规处理动作为禁言时生效；0 表示永久禁言。",
+            "default": 3600,
+            "minimum": 0,
+        },
         "dry_run": {
             "type": "boolean",
             "title": "演练模式",
@@ -72,6 +87,8 @@ CONFIG_SCHEMA = {
         "delete_bot_sender_messages",
         "delete_join_messages_for_known_bots",
         "announce",
+        "violation_action",
+        "mute_duration_seconds",
         "dry_run",
     ],
 }
@@ -80,11 +97,11 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.0.4",
-    min_telepilot_version="0.19.2",
+    version="1.1.0",
+    min_telepilot_version="0.21.0",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
-    permissions=["send_message", "delete_message", "read_chat"],
+    permissions=["send_message", "delete_message", "read_chat", "moderate_chat"],
     category="automation",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
