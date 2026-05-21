@@ -17,8 +17,15 @@ import zlib
 from dataclasses import dataclass
 from typing import Any
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
-from .manifest import MANIFEST
+from .manifest import (
+    LEGACY_IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT,
+    LEGACY_INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT,
+    IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT,
+    INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT,
+    MANIFEST,
+)
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
 
@@ -311,9 +318,7 @@ class DiceGridHuntPlugin(Plugin):
             "目标：<b>{target_sum}</b>，回 <code>1-9</code>\n"
             "奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s"
         )
-        self._in_progress_message_template = (
-            "上一局还没结束。继续猜，或发 <code>,{command} {force_stop_command}</code> 结束。"
-        )
+        self._in_progress_message_template = IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT
         self._success_message_template = (
             "{winner} 答对：<b>{answer_index}</b>\n"
             "用时 {elapsed}s · 奖励 <b>+{prize}</b>"
@@ -322,7 +327,7 @@ class DiceGridHuntPlugin(Plugin):
             "超时，答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>。"
         )
         self._cancel_message_template = "已结束当前九宫格竞猜。"
-        self._invalid_prize_message_template = "请指定奖励金额，例如：,{command} {example}"
+        self._invalid_prize_message_template = INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT
         self._prize_message_template = "+{prize}"
         self._delete_after_round = 0
         self._force_stop_command = "stop"
@@ -352,12 +357,16 @@ class DiceGridHuntPlugin(Plugin):
         self._template_reward_line = str(cfg.get("template_reward_line", self._template_reward_line))
         self._round_message_template = str(cfg.get("round_message_template", self._round_message_template))
         self._in_progress_message_template = str(cfg.get("in_progress_message_template", self._in_progress_message_template))
+        if self._in_progress_message_template == LEGACY_IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT:
+            self._in_progress_message_template = IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT
         self._success_message_template = str(cfg.get("success_message_template", self._success_message_template))
         self._timeout_message_template = str(cfg.get("timeout_message_template", self._timeout_message_template))
         self._cancel_message_template = str(cfg.get("cancel_message_template", self._cancel_message_template))
         self._invalid_prize_message_template = str(
             cfg.get("invalid_prize_message_template", self._invalid_prize_message_template)
         )
+        if self._invalid_prize_message_template == LEGACY_INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT:
+            self._invalid_prize_message_template = INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT
         self._prize_message_template = str(cfg.get("prize_message_template", self._prize_message_template))
         self._delete_after_round = max(0, int(cfg.get("delete_after_round", 0)))
         self._force_stop_command = str(cfg.get("force_stop_command", "stop")).strip().lower() or "stop"
@@ -390,7 +399,8 @@ class DiceGridHuntPlugin(Plugin):
             return None
         prize = int(payload.get("prize") or 100)
         timeout = int(payload.get("timeout") or self._timeout or 90)
-        return [{"type": "send_message", "text": f"🎯 九宫格竞猜入口已触发，奖励 +{prize}，限时 {timeout} 秒。发送 ,{self._command} {prize} 开始本轮。"}]
+        prefix = current_command_prefix()
+        return [{"type": "send_message", "text": f"🎯 九宫格竞猜入口已触发，奖励 +{prize}，限时 {timeout} 秒。发送 {prefix}{self._command} {prize} 开始本轮。"}]
 
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
@@ -420,6 +430,7 @@ class DiceGridHuntPlugin(Plugin):
                     self._render_text(
                         self._in_progress_message_template,
                         {
+                            "prefix": current_command_prefix(),
                             "command": self._command,
                             "force_stop_command": self._force_stop_command,
                         },
@@ -434,7 +445,7 @@ class DiceGridHuntPlugin(Plugin):
                     event,
                     self._render_text(
                         self._invalid_prize_message_template,
-                        {"command": self._command, "example": "100"},
+                        {"prefix": current_command_prefix(), "command": self._command, "example": "100"},
                     ),
                 )
                 return
@@ -495,6 +506,7 @@ class DiceGridHuntPlugin(Plugin):
     def _render_round_text(self, rd: RoundState, include_guide: bool) -> str:
         vars_map = {
             "version": MANIFEST.version,
+            "prefix": current_command_prefix(),
             "command": self._command,
             "force_stop_command": self._force_stop_command,
             "target_sum": rd.target_sum,
@@ -533,7 +545,8 @@ class DiceGridHuntPlugin(Plugin):
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         text = (getattr(event, "raw_text", "") or "").strip()
-        if not text or text.startswith(",") or text.startswith("/"):
+        prefix = current_command_prefix()
+        if not text or text.startswith("/") or (prefix and text.startswith(prefix)):
             return
 
         chat_id = int(getattr(event.chat_id, "channel_id", None) or event.chat_id or 0)
