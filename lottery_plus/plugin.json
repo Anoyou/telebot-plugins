@@ -3,7 +3,7 @@
   "display_name": "彩票系统 Plus",
   "description": "群内彩票玩法：下注、开奖、奖池滚存、历史与统计，支持高可配置模板与预览",
   "author": "Anoyou",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -45,7 +45,7 @@
   ],
   "config_schema": {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": false,
     "properties": {
       "usage_preview": {
@@ -90,21 +90,21 @@
       "help_template": {
         "type": "string",
         "title": "帮助消息模板",
-        "default": "<b>🎰 彩票系统</b>\\n指令：{prefix}{command} 买 号码 注数｜{prefix}{command} 我的｜{prefix}{command} 盘口｜{prefix}{command} 历史\\n示例：{prefix}{command} 买 {number} {count}（本例成本 {cost}）\\n每日 {draw_time} 开奖，封盘提前 {close_minutes} 分钟，号码范围：{draw_numbers}",
+        "default": "<b>🎰 彩票系统</b>\n指令：{prefix}{command} 买 号码 注数｜{prefix}{command} 我的｜{prefix}{command} 盘口｜{prefix}{command} 历史\n示例：{prefix}{command} 买 {number} {count}（本例成本 {cost}）\n每日 {draw_time} 开奖，封盘提前 {close_minutes} 分钟，号码范围：{draw_numbers}",
         "minLength": 1,
         "maxLength": 1500
       },
       "bet_ok_template": {
         "type": "string",
         "title": "下注成功模板",
-        "default": "✅ 第 {round} 期下注成功\\n号码：<b>{number}</b> · 注数：<b>{count}</b>\\n扣款：<b>{cost}</b> · 当前奖池：<b>{pool}</b>",
+        "default": "✅ 第 {round} 期下注成功\n号码：<b>{number}</b> · 注数：<b>{count}</b>\n扣款：<b>{cost}</b> · 当前奖池：<b>{pool}</b>",
         "minLength": 1,
         "maxLength": 1000
       },
       "draw_template": {
         "type": "string",
         "title": "开奖消息模板",
-        "default": "🎲 第 {round} 期开奖结果：<b>{number}</b>\\n奖池：<b>{pool}</b> · 中奖人数：<b>{winners}</b>\\n总派发：<b>{payout}</b>",
+        "default": "🎲 第 {round} 期开奖结果：<b>{number}</b>\n奖池：<b>{pool}</b> · 中奖人数：<b>{winners}</b>\n总派发：<b>{payout}</b>",
         "minLength": 1,
         "maxLength": 1200
       },
@@ -118,19 +118,19 @@
         "type": "string",
         "title": "帮助模板预览（只读）",
         "readOnly": true,
-        "default": "<b>🎰 彩票系统</b>\\n指令：,lotto 买 号码 注数｜,lotto 我的｜,lotto 盘口｜,lotto 历史\\n示例：,lotto 买 3 5（本例成本 50003）\\n每日 21:00 开奖，封盘提前 1 分钟，号码范围：1-6"
+        "default": "<b>🎰 彩票系统</b>\n指令：{prefix}lotto 买 号码 注数｜{prefix}lotto 我的｜{prefix}lotto 盘口｜{prefix}lotto 历史\n示例：{prefix}lotto 买 3 5（本例成本 50003）\n每日 21:00 开奖，封盘提前 1 分钟，号码范围：1-6"
       },
       "bet_ok_preview": {
         "type": "string",
         "title": "下注模板预览（只读）",
         "readOnly": true,
-        "default": "✅ 第 12 期下注成功\\n号码：<b>3</b> · 注数：<b>5</b>\\n扣款：<b>50003</b> · 当前奖池：<b>188888</b>"
+        "default": "✅ 第 12 期下注成功\n号码：<b>3</b> · 注数：<b>5</b>\n扣款：<b>50003</b> · 当前奖池：<b>188888</b>"
       },
       "draw_preview": {
         "type": "string",
         "title": "开奖模板预览（只读）",
         "readOnly": true,
-        "default": "🎲 第 12 期开奖结果：<b>3</b>\\n奖池：<b>188888</b> · 中奖人数：<b>2</b>\\n总派发：<b>53888</b>"
+        "default": "🎲 第 12 期开奖结果：<b>3</b>\n奖池：<b>188888</b> · 中奖人数：<b>2</b>\n总派发：<b>53888</b>"
       }
     },
     "required": ["command", "price_base", "service_fee_rate", "draw_numbers", "draw_hour", "draw_minute"]

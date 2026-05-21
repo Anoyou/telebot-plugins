@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 SAMPLE = {
-    "prefix": ",",
+    "prefix": "{prefix}",
     "command": "lotto",
     "round": "12",
     "number": "3",
@@ -48,7 +48,7 @@ DRAW_TEMPLATE_DEFAULT = (
 
 CONFIG_SCHEMA = {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
@@ -220,7 +220,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.3",
+    version="1.0.4",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内彩票玩法，支持下注、奖池滚存、自动开奖、历史和消息模板预览",
