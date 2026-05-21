@@ -178,6 +178,13 @@ async def main() -> None:
     )
     assert client.deleted[-1] == (-1001234567890, 7)
 
+    username_bot_sender = User(784, "suffixbot", bot=False)
+    await plugin.on_message(
+        ctx,
+        Event(client, Message(8, "bot flag missing"), username_bot_sender, expose_sender=False),
+    )
+    assert client.deleted[-1] == (-1001234567890, 8)
+
     dry_client = FakeClient()
     dry_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
         config={
@@ -190,7 +197,7 @@ async def main() -> None:
     )
     dry_plugin = plugin_mod.BotMuteGuardPlugin()
     await dry_plugin.on_startup(dry_ctx)
-    await dry_plugin.on_message(dry_ctx, Event(dry_client, Message(8, "@dryrunbot"), sender_f))
+    await dry_plugin.on_message(dry_ctx, Event(dry_client, Message(9, "@dryrunbot"), sender_f))
     assert dry_client.deleted == []
 
     false_string_client = FakeClient()
@@ -207,9 +214,9 @@ async def main() -> None:
     await false_string_plugin.on_startup(false_string_ctx)
     await false_string_plugin.on_message(
         false_string_ctx,
-        Event(false_string_client, Message(9, "@notdryrunbot"), sender_f),
+        Event(false_string_client, Message(10, "@notdryrunbot"), sender_f),
     )
-    assert false_string_client.deleted == [(-1001234567890, 9)]
+    assert false_string_client.deleted == [(-1001234567890, 10)]
 
     hot_reload_client = FakeClient()
     hot_reload_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
@@ -225,7 +232,7 @@ async def main() -> None:
     await hot_reload_plugin.on_startup(hot_reload_ctx)
     await hot_reload_plugin.on_message(
         hot_reload_ctx,
-        Event(hot_reload_client, Message(10, "@hotbot"), sender_f),
+        Event(hot_reload_client, Message(11, "@hotbot"), sender_f),
     )
     assert hot_reload_client.deleted == []
 
@@ -233,9 +240,9 @@ async def main() -> None:
     hot_reload_ctx.config["dry_run"] = "false"
     await hot_reload_plugin.on_message(
         hot_reload_ctx,
-        Event(hot_reload_client, Message(11, "@hotbot"), sender_f),
+        Event(hot_reload_client, Message(12, "@hotbot"), sender_f),
     )
-    assert hot_reload_client.deleted == [(-1001234567890, 11)]
+    assert hot_reload_client.deleted == [(-1001234567890, 12)]
 
     mute_client = FakeClient()
     mute_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
@@ -252,9 +259,9 @@ async def main() -> None:
     await mute_plugin.on_startup(mute_ctx)
     await mute_plugin.on_message(
         mute_ctx,
-        Event(mute_client, Message(12, "@muteme_bot"), sender_f),
+        Event(mute_client, Message(13, "@muteme_bot"), sender_f),
     )
-    assert mute_client.deleted == [(-1001234567890, 12)]
+    assert mute_client.deleted == [(-1001234567890, 13)]
     assert mute_client.muted == [(-1001234567890, 782, 120)]
 
     kick_client = FakeClient()
@@ -271,9 +278,9 @@ async def main() -> None:
     await kick_plugin.on_startup(kick_ctx)
     await kick_plugin.on_message(
         kick_ctx,
-        Event(kick_client, Message(13, "@kickmebot"), sender_f),
+        Event(kick_client, Message(14, "@kickmebot"), sender_f),
     )
-    assert kick_client.deleted == [(-1001234567890, 13)]
+    assert kick_client.deleted == [(-1001234567890, 14)]
     assert kick_client.kicked == [(-1001234567890, 782)]
 
     disabled_rule_client = FakeClient()
@@ -290,7 +297,7 @@ async def main() -> None:
     await disabled_rule_plugin.on_startup(disabled_rule_ctx)
     await disabled_rule_plugin.on_message(
         disabled_rule_ctx,
-        Event(disabled_rule_client, Message(14, "@disabledbot"), sender_f),
+        Event(disabled_rule_client, Message(15, "@disabledbot"), sender_f),
     )
     assert disabled_rule_client.deleted == []
 
@@ -304,9 +311,9 @@ async def main() -> None:
     await name_target_plugin.on_startup(name_target_ctx)
     await name_target_plugin.on_message(
         name_target_ctx,
-        Event(name_target_client, Message(15, "@byusernamebot"), sender_f, expose_chat=False),
+        Event(name_target_client, Message(16, "@byusernamebot"), sender_f, expose_chat=False),
     )
-    assert name_target_client.deleted == [(-1001234567890, 15)]
+    assert name_target_client.deleted == [(-1001234567890, 16)]
 
     print("bot_mute_guard smoke ok")
 

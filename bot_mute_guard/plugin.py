@@ -13,7 +13,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 TOKEN_SPLIT_RE = re.compile(r"[\s,，;；]+")
 ACTION_DELETE_ONLY = "delete_only"
 ACTION_MUTE_SENDER = "mute_sender"
@@ -166,6 +166,13 @@ def _entity_id(entity: Any) -> int:
 
 def _entity_username(entity: Any) -> str:
     return str(getattr(entity, "username", "") or "").strip("@").lower()
+
+
+def _is_bot_ref(ref: Any) -> bool:
+    if bool(getattr(ref, "bot", False)):
+        return True
+    username = _entity_username(ref)
+    return bool(username and username.endswith("bot"))
 
 
 def _bot_mentions(text: str) -> list[str]:
@@ -322,7 +329,7 @@ class BotMuteGuardPlugin(Plugin):
         blocked: list[str] = []
         target_user_ids: list[int] = []
         for candidate in candidates:
-            if not bool(getattr(candidate, "bot", False)):
+            if not _is_bot_ref(candidate):
                 continue
             if self._is_allowed_bot_ref(candidate):
                 continue
@@ -387,7 +394,7 @@ class BotMuteGuardPlugin(Plugin):
         chat_id: int,
     ) -> bool:
         sender = await self._event_sender(event)
-        if not sender or not bool(getattr(sender, "bot", False)):
+        if not sender or not _is_bot_ref(sender):
             return False
         if self._is_allowed_bot_ref(sender):
             return False
