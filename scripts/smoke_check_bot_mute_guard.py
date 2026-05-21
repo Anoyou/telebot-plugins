@@ -90,13 +90,30 @@ class FakeClient:
 
 
 class Event:
-    def __init__(self, client: FakeClient, message: Message, sender: User) -> None:
+    def __init__(
+        self,
+        client: FakeClient,
+        message: Message,
+        sender: User,
+        *,
+        expose_chat: bool = True,
+        expose_sender: bool = True,
+    ) -> None:
         self.chat_id = -1001234567890
-        self.chat = Chat()
         self.message = message
         self.raw_text = message.raw_text
         self.sender_id = sender.id
-        self.sender = sender
+        self._sender = sender
+        if expose_chat:
+            self.chat = Chat()
+        if expose_sender:
+            self.sender = sender
+
+    async def get_chat(self) -> Chat:
+        return Chat()
+
+    async def get_sender(self) -> User:
+        return self._sender
 
 
 async def main() -> None:
@@ -142,6 +159,13 @@ async def main() -> None:
     await plugin.on_message(ctx, Event(client, Message(6, "", via_bot_id=100), sender_f))
     assert client.deleted[-1] == (-1001234567890, 6)
 
+    bot_sender = User(783, "not_allowed_bot", bot=True)
+    await plugin.on_message(
+        ctx,
+        Event(client, Message(7, "bot message"), bot_sender, expose_sender=False),
+    )
+    assert client.deleted[-1] == (-1001234567890, 7)
+
     dry_client = FakeClient()
     dry_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
         config={
@@ -154,8 +178,22 @@ async def main() -> None:
     )
     dry_plugin = plugin_mod.BotMuteGuardPlugin()
     await dry_plugin.on_startup(dry_ctx)
-    await dry_plugin.on_message(dry_ctx, Event(dry_client, Message(7, "@dryrunbot"), sender_f))
+    await dry_plugin.on_message(dry_ctx, Event(dry_client, Message(8, "@dryrunbot"), sender_f))
     assert dry_client.deleted == []
+
+    name_target_client = FakeClient()
+    name_target_ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+        config={"target_chats": "@target_group", "allowed_bots": ""},
+        client=name_target_client,
+        log=log,
+    )
+    name_target_plugin = plugin_mod.BotMuteGuardPlugin()
+    await name_target_plugin.on_startup(name_target_ctx)
+    await name_target_plugin.on_message(
+        name_target_ctx,
+        Event(name_target_client, Message(9, "@byusernamebot"), sender_f, expose_chat=False),
+    )
+    assert name_target_client.deleted == [(-1001234567890, 9)]
 
     print("bot_mute_guard smoke ok")
 

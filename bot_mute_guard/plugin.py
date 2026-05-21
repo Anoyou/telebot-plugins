@@ -13,7 +13,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 TOKEN_SPLIT_RE = re.compile(r"[\s,，;；]+")
 BOT_MENTION_RE = re.compile(
     r"(?<![A-Za-z0-9_.])@([A-Za-z0-9_]{2,29}bot)"
@@ -127,6 +127,12 @@ def _bot_mentions(text: str) -> list[str]:
     return out
 
 
+async def _maybe_await(value: Any) -> Any:
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
 @register
 class BotMuteGuardPlugin(Plugin):
     key = "bot_mute_guard"
@@ -182,7 +188,7 @@ class BotMuteGuardPlugin(Plugin):
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         chat_id = _chat_id(event)
-        if not chat_id or not self._is_target_chat(event, chat_id):
+        if not chat_id or not await self._is_target_chat(event, chat_id):
             return
 
         if self._delete_join_messages_for_known_bots:
@@ -203,14 +209,28 @@ class BotMuteGuardPlugin(Plugin):
         if self._delete_bot_sender_messages:
             await self._handle_bot_sender(ctx, event, chat_id)
 
-    def _is_target_chat(self, event: Any, chat_id: int) -> bool:
+    async def _is_target_chat(self, event: Any, chat_id: int) -> bool:
         if not self._targets.ids and not self._targets.names:
             return False
         if self._targets.ids.intersection(_id_variants(chat_id)):
             return True
-        chat = getattr(event, "chat", None) or getattr(getattr(event, "message", event), "chat", None)
+        if not self._targets.names:
+            return False
+        chat = await self._event_chat(event)
         chat_name = _entity_username(chat)
         return bool(chat_name and chat_name in self._targets.names)
+
+    async def _event_chat(self, event: Any) -> Any:
+        chat = getattr(event, "chat", None) or getattr(getattr(event, "message", event), "chat", None)
+        if chat is not None:
+            return chat
+        getter = getattr(event, "get_chat", None)
+        if callable(getter):
+            try:
+                return await _maybe_await(getter())
+            except Exception:  # noqa: BLE001
+                return None
+        return None
 
     async def _handle_join_action(
         self,
@@ -287,7 +307,7 @@ class BotMuteGuardPlugin(Plugin):
         event: Any,
         chat_id: int,
     ) -> bool:
-        sender = getattr(event, "sender", None) or getattr(getattr(event, "message", event), "sender", None)
+        sender = await self._event_sender(event)
         if not sender or not bool(getattr(sender, "bot", False)):
             return False
         if self._is_allowed_bot_ref(sender):
@@ -296,6 +316,18 @@ class BotMuteGuardPlugin(Plugin):
         reason = f"非白名单 Bot 发言：{self._bot_label(sender)}"
         await self._handle_violation(ctx, chat_id, _message_id(event), reason, event)
         return True
+
+    async def _event_sender(self, event: Any) -> Any:
+        sender = getattr(event, "sender", None) or getattr(getattr(event, "message", event), "sender", None)
+        if sender is not None:
+            return sender
+        getter = getattr(event, "get_sender", None)
+        if callable(getter):
+            try:
+                return await _maybe_await(getter())
+            except Exception:  # noqa: BLE001
+                return None
+        return None
 
     def _is_allowed_bot_ref(self, ref: Any) -> bool:
         bot_id = _entity_id(ref)

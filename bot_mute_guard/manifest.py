@@ -23,7 +23,7 @@ CONFIG_SCHEMA = {
         "allowed_bots": {
             "type": "string",
             "title": "Bot 白名单",
-            "description": "每行一个 Bot username，@ 可写可不写，大小写不敏感。也可混填 Bot ID；@bot 文本提及按 username 判断，inline/bot 发言可按 Bot ID 或 @username 判断。",
+            "description": "每行一个 Bot username，@ 可写可不写，大小写不敏感。也可混填 Bot ID；@bot 文本提及按 username 判断，inline via_bot_id 按 Bot ID 判断，直接 Bot 发言会读取发送者后按 ID 或 username 判断。",
             "default": "",
             "x-ui-widget": "textarea",
         },
@@ -80,11 +80,11 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.0.2",
+    version="1.0.3",
     min_telepilot_version="0.19.2",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
-    permissions=["send_message", "delete_message"],
+    permissions=["send_message", "delete_message", "read_chat"],
     category="automation",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
