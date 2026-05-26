@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.6 (2026-05-26)
+- 修复 installed 插件沙箱下调用 `client.get_entity` 被权限拦截的问题。
+- 移除定时任务兜底解析里的 `iter_dialogs/get_dialogs` 调用，严格只使用 Manifest 已声明的 `read_chat` 能力范围。
+- 群名称和公开用户名解析改为可选辅助信息，无法读取时直接回退显示群 ID，不影响总结流程。
+
 ## 1.1.5 (2026-05-26)
 - 移除模块内 OpenAI/Gemini API Key、Base URL、Model 和自定义 AI Provider 配置，只保留调用 TelePilot 已配置的 AI。
 - 新增配置页定时总结任务 `scheduled_tasks_json`，支持通过插件配置维护 `chatId`、`interval`、消息数、推送目标、提示词、折叠和禁用状态。

@@ -20,7 +20,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.5"
+VERSION = "1.1.6"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -617,57 +617,26 @@ class SummaryPlugin(Plugin):
         candidates.append(fallback)
         return _target_candidates(candidates)
 
-    async def _dialog_targets_for_chat(self, ctx: PluginContext, target: Any) -> list[Any]:
+    async def _client_chat_targets(self, ctx: PluginContext, target: Any) -> list[Any]:
         if not ctx.client:
             return []
-        wanted = _parse_chat_identifier(str(target or ""))
-        if not wanted or _is_placeholder_chat_identifier(wanted):
+        if _is_placeholder_chat_identifier(target):
             return []
-        wanted_lower = wanted.lstrip("@").lower()
-        matched: list[Any] = []
-
-        async def inspect_dialog(dialog: Any) -> None:
-            entity = getattr(dialog, "entity", None) or getattr(dialog, "input_entity", None) or dialog
-            username = str(getattr(entity, "username", "") or "").lower()
-            raw_entity_id = (
-                getattr(entity, "id", None)
-                or getattr(entity, "channel_id", None)
-                or getattr(entity, "chat_id", None)
-                or getattr(entity, "user_id", None)
-            )
-            candidates = {
-                str(getattr(dialog, "id", "") or ""),
-                str(raw_entity_id or ""),
-            }
-            if raw_entity_id is not None:
-                candidates.add(f"-100{raw_entity_id}")
-            if username:
-                candidates.add(username)
-                candidates.add(f"@{username}")
-            if wanted in candidates or wanted_lower in {item.lower() for item in candidates}:
-                matched.extend([getattr(dialog, "input_entity", None), entity, getattr(dialog, "id", None)])
-
-        iter_dialogs = getattr(ctx.client, "iter_dialogs", None)
-        if callable(iter_dialogs):
+        get_chat = getattr(ctx.client, "get_chat", None)
+        if not callable(get_chat):
+            return []
+        out: list[Any] = []
+        for candidate in _target_candidates(target):
             try:
-                async for dialog in iter_dialogs():
-                    await inspect_dialog(dialog)
-                    if matched:
-                        return _target_candidates(matched)
+                chat = await _maybe_await(get_chat(_telegram_target(candidate)))
             except Exception:
-                pass
-
-        get_dialogs = getattr(ctx.client, "get_dialogs", None)
-        if callable(get_dialogs):
-            try:
-                dialogs = await _maybe_await(get_dialogs())
-                for dialog in dialogs or []:
-                    await inspect_dialog(dialog)
-                    if matched:
-                        return _target_candidates(matched)
-            except Exception:
-                pass
-        return _target_candidates(matched)
+                continue
+            if chat is not None:
+                out.append(chat)
+                input_entity = getattr(chat, "input_entity", None)
+                if input_entity is not None:
+                    out.append(input_entity)
+        return _target_candidates(out)
 
     async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0, target: Any = None) -> list[MessageData]:
         if not ctx.client:
@@ -689,7 +658,7 @@ class SummaryPlugin(Plugin):
                     continue
                 raise
         if messages is None:
-            for candidate in await self._dialog_targets_for_chat(ctx, chat_id):
+            for candidate in await self._client_chat_targets(ctx, chat_id):
                 try:
                     messages = await _maybe_await(get_messages(_telegram_target(candidate), limit=count))
                     used_target = candidate
@@ -707,7 +676,7 @@ class SummaryPlugin(Plugin):
             messages = list(messages)
 
         username = ""
-        entity = await self._safe_get_entity(ctx, used_target if used_target is not None else chat_id)
+        entity = await self._safe_get_chat(ctx, used_target if used_target is not None else chat_id)
         if entity is not None:
             username = str(getattr(entity, "username", "") or "")
 
@@ -750,21 +719,21 @@ class SummaryPlugin(Plugin):
         rows.reverse()
         return rows
 
-    async def _safe_get_entity(self, ctx: PluginContext, target: Any) -> Any:
+    async def _safe_get_chat(self, ctx: PluginContext, target: Any) -> Any:
         if not ctx.client:
             return None
-        get_entity = getattr(ctx.client, "get_entity", None)
-        if not get_entity:
+        get_chat = getattr(ctx.client, "get_chat", None)
+        if not callable(get_chat):
             return None
-        for candidate in _target_candidates(target, await self._dialog_targets_for_chat(ctx, target)):
+        for candidate in _target_candidates(target):
             try:
-                return await _maybe_await(get_entity(_telegram_target(candidate)))
+                return await _maybe_await(get_chat(_telegram_target(candidate)))
             except Exception:
                 continue
         return None
 
     async def _chat_display(self, ctx: PluginContext, chat_id: str, *, target: Any = None) -> str:
-        entity = await self._safe_get_entity(ctx, target if target is not None else chat_id)
+        entity = await self._safe_get_chat(ctx, target if target is not None else chat_id)
         if not entity:
             return chat_id
         parts = []
@@ -921,7 +890,7 @@ class SummaryPlugin(Plugin):
                     last_lookup_error = exc
                     continue
                 raise
-        for target in await self._dialog_targets_for_chat(ctx, chat_id):
+        for target in await self._client_chat_targets(ctx, chat_id):
             try:
                 return await ctx.client.send_message(_telegram_target(target), text, **clean_kwargs)
             except Exception as exc:
