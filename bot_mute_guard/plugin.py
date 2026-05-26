@@ -13,7 +13,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 TOKEN_SPLIT_RE = re.compile(r"[\s,，;；]+")
 ACTION_DELETE_ONLY = "delete_only"
 ACTION_MUTE_SENDER = "mute_sender"

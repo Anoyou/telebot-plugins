@@ -23,14 +23,14 @@ CONFIG_SCHEMA = {
         "allowed_bots": {
             "type": "string",
             "title": "Bot 白名单",
-            "description": "每行一个 Bot username，@ 可写可不写，大小写不敏感。也可混填 Bot ID；@bot 文本提及按 username 判断，inline via_bot_id 按 Bot ID 判断，直接 Bot 发言会读取发送者后按 ID 或 username 判断。",
+            "description": "每行填写一个 Bot username。@ 可写可不写。大小写不敏感。也支持混填 Bot ID。@bot 文本提及按 username 判断。inline via_bot_id 按 Bot ID 判断。直接 Bot 发言会读取发送者再按 ID 或 username 判断。",
             "default": "",
             "x-ui-widget": "textarea",
         },
         "delete_untrusted_bot_mentions": {
             "type": "boolean",
             "title": "删除非白名单 @bot 提及消息",
-            "description": "用户消息中出现 @xxxbot 且该 Bot 不在白名单内时，删除这条消息并写日志；如违规处理动作不是仅删除，会继续处理发送者。",
+            "description": "用户消息出现 @xxxbot 且该 Bot 不在白名单内时会删除消息并写日志。若违规处理动作不是仅删除，还会继续处理发送者。",
             "default": True,
         },
         "delete_inline_bot_messages": {
@@ -42,7 +42,7 @@ CONFIG_SCHEMA = {
         "delete_bot_sender_messages": {
             "type": "boolean",
             "title": "删除非白名单 Bot 发言",
-            "description": "当事件对象可识别发送者是 Bot 且不在白名单内时，删除该消息。",
+            "description": "当事件对象可识别发送者是 Bot 且不在白名单内时会删除消息。",
             "default": True,
         },
         "delete_join_messages_for_known_bots": {
@@ -54,21 +54,21 @@ CONFIG_SCHEMA = {
         "announce": {
             "type": "boolean",
             "title": "群内提示",
-            "description": "删除成功后是否在群内发送提示。广告群建议关闭，只看模块日志。",
+            "description": "删除成功后是否在群内发送提示。广告群建议关闭。建议仅查看模块日志。",
             "default": False,
         },
         "violation_action": {
             "type": "string",
             "title": "违规处理动作",
-            "description": "命中规则后的成员处理动作。默认仅删除消息；选择禁言、踢出或封禁时，需要 TelePilot 支持并授权 moderate_chat 权限。",
+            "description": "命中规则后的成员处理动作。默认仅删除消息。若选择禁言、踢出或封禁，需要 TelePilot 支持并授权 moderate_chat 权限。",
             "default": "delete_only",
             "enum": ["delete_only", "mute_sender", "kick_sender", "ban_sender"],
             "enumNames": ["仅删除消息", "禁言发送者", "踢出发送者", "封禁发送者"],
             "enumDescriptions": [
-                "只删除触发广告 Bot 的消息，不处理群成员。",
-                "删除消息后禁言发送者，时长由“禁言时长（秒）”控制。",
-                "删除消息后把发送者踢出群；用户之后仍可被重新邀请进群。",
-                "删除消息后封禁发送者；通常用于确认恶意广告账号。",
+                "只删除触发广告 Bot 的消息。不会处理群成员。",
+                "删除消息后禁言发送者。时长由“禁言时长（秒）”控制。",
+                "删除消息后把发送者踢出群。用户后续仍可被重新邀请进群。",
+                "删除消息后封禁发送者。通常用于确认恶意广告账号。",
             ],
         },
         "mute_duration_seconds": {
@@ -81,7 +81,7 @@ CONFIG_SCHEMA = {
         "dry_run": {
             "type": "boolean",
             "title": "演练模式",
-            "description": "只写日志，不删除消息。建议首次配置目标群和白名单时先开启。",
+            "description": "只写日志。不会删除消息。建议首次配置目标群和白名单时先开启。",
             "default": False,
         },
     },
@@ -103,7 +103,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.2",
+    version="1.1.3",
     min_telepilot_version="0.21.0",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
