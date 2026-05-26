@@ -35,9 +35,16 @@ CONFIG_SCHEMA = {
         },
         "default_provider": {
             "type": "string",
-            "title": "默认 AI 配置名",
-            "description": "可填 telepilot 直接使用 TelePilot 内置 AI，也可填通过 sum config add 创建的外部配置名。",
+            "title": "默认 AI 来源",
+            "description": "普通使用建议选择 TelePilot 内置 AI。自定义外部配置仍可通过 sum config 命令维护。",
             "default": "telepilot",
+            "enum": ["telepilot", "openai", "gemini"],
+            "enumNames": ["TelePilot 内置 AI", "模块内 OpenAI 配置", "模块内 Gemini 配置"],
+            "enumDescriptions": [
+                "直接调用 TelePilot 已配置的 LLM Provider，无需在模块内重复填写 API Key。",
+                "使用本模块自己的 OpenAI 兼容配置，需要先设置 API Key。",
+                "使用本模块自己的 Gemini 配置，需要先设置 API Key。"
+            ],
         },
         "default_prompt": {
             "type": "string",
@@ -82,7 +89,7 @@ CONFIG_SCHEMA = {
         "providers_json": {
             "type": "string",
             "title": "AI 配置 JSON（可选）",
-            "description": "高级用法：用 JSON 预置 providers；也可通过 sum config 命令维护。",
+            "description": "高级用法：普通使用无需填写；仅在需要预置外部 OpenAI/Gemini 兼容配置时使用，也可通过 sum config 命令维护。",
             "default": "",
             "x-ui-widget": "textarea",
         },
@@ -106,7 +113,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.0",
+    version="1.1.1",
     min_telepilot_version="0.21.0",
     author="Anoyou",
     description="使用 TelePilot 内置 AI 或 OpenAI/Gemini 兼容接口总结群组消息，支持快捷总结与定时任务",

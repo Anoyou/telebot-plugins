@@ -22,7 +22,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -476,7 +476,7 @@ class SummaryPlugin(Plugin):
                 i += 1
             else:
                 i += 1
-        count = min(count, max_count)
+        count = min(max(1, count), max_count)
         chat_id = str(_event_chat_id(event))
         if not chat_id or chat_id == "0":
             await self._edit_or_reply(event, "❌ 无法识别当前聊天。")
@@ -1238,8 +1238,8 @@ class SummaryPlugin(Plugin):
 
 <b>快捷总结当前群：</b>
 {_code(f"{prefix}{cmd}")} - 总结最近默认数量消息
-{_code(f"{prefix}{cmd} 200")} - 总结最近200条消息
-{_code(f"{prefix}{cmd} --provider deepseek")} - 指定 AI 配置总结
+{_code(f"{prefix}{cmd} 100")} - 指定本次总结最近100条消息
+{_code(f"{prefix}{cmd} 100 --provider telepilot")} - 指定 AI 配置总结
 
 <b>定时总结：</b>
 {_code(f"{prefix}{cmd} add <群组标识> <间隔> [消息数] [选项]")}
