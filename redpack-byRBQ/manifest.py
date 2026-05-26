@@ -32,7 +32,7 @@ CONFIG_SCHEMA = {
                 "领取方式：别人直接发送正确口令即可领取；模块会回复 +金额，领完后自动发送结算榜单。\n"
                 "配置页可调整默认金额、默认个数、最低单包、展示名、发出后删原指令、领取提示删除、高额确认和子命令别名。"
             ),
-            "description": "只读预览，会按当前系统前缀和触发指令名实时渲染。",
+            "description": "只读预览；展示内容会跟随当前系统前缀与触发指令名实时渲染。",
         },
         "command": {
             "type": "string",
@@ -41,7 +41,7 @@ CONFIG_SCHEMA = {
             "minLength": 1,
             "maxLength": 32,
             "pattern": "^\\S+$",
-            "description": "例如填 rp 后，实际命令为“系统前缀 + rp”；不要在这里填写逗号或斜杠。"
+            "description": "例如填 rp 后，实际触发格式为“系统前缀 + rp”；此处只填写命令词本体，不要填写前缀符号。"
         },
         "default_amount": {
             "type": "integer",
@@ -65,7 +65,7 @@ CONFIG_SCHEMA = {
             "default": 100,
             "minimum": 1,
             "maximum": 999999999,
-            "description": "每个红包至少保留的金额，用于校验总额和拼手气拆分。"
+            "description": "每个红包至少保留的金额；用于校验总额与拼手气拆分。"
         },
         "custom_name": {
             "type": "string",
@@ -86,7 +86,7 @@ CONFIG_SCHEMA = {
             "type": "boolean",
             "title": "发出后删除原指令",
             "default": True,
-            "description": "文字红包和图片红包发送成功后，是否删除原始触发指令。"
+            "description": "文字红包与图片红包发送成功后，是否删除原始触发指令。"
         },
         "auto_confirm_enabled": {
             "type": "boolean",
@@ -127,10 +127,10 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.17",
+    version="1.1.18",
     min_telepilot_version="0.15.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="口令红包模块，支持文字红包、img 数学题图片红包、自动领取结算和高额转账确认",
+    description="口令红包模块，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
     permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message"],
 
     category="interactive",
