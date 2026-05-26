@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.1.8 (2026-05-26)
+- 声明 TelePilot 新增的 `resolve_entity` 能力，配合平台沙箱按需放行 `client.get_entity`，修复 `.sum 100` 在真实事件流程中仍被权限拦截的问题。
+- 配置页 Provider 和 Model 字段改为动态下拉选择，不再要求手动输入 Provider ID 或模型名。
+- 固定 TelePilot Provider 与模型覆盖改为真正可选配置，默认留空走 TelePilot 自动路由。
+- 最低 TelePilot 版本提升到 `0.24.1`，确保平台已支持 `resolve_entity` 和 AI 下拉控件。
+
 ## 1.1.7 (2026-05-26)
 - 修复 Telethon 事件懒加载聊天属性内部触发 `client.get_entity` 导致 installed 插件沙箱报错的问题。
 - 事件目标解析改为只读取已存在的原始属性，读取失败直接回退到当前 `chat_id`。
