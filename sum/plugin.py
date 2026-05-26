@@ -22,7 +22,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -40,7 +40,7 @@ class Provider:
 @dataclass
 class AIConfig:
     providers: dict[str, Provider] = field(default_factory=dict)
-    default_provider: str = "openai"
+    default_provider: str = "telepilot"
     default_prompt: str = "请总结以下群聊消息的主要内容，提取关键话题和重要信息："
     default_spoiler: bool = False
     default_timeout: int = 60000
@@ -100,6 +100,13 @@ DEFAULT_PROVIDER_PRESETS = {
         api_key="",
         model="gemini-2.5-flash",
         type="gemini",
+    ),
+    "telepilot": Provider(
+        name="TelePilot 内置 AI",
+        base_url="",
+        api_key="",
+        model="",
+        type="telepilot",
     ),
 }
 
@@ -366,6 +373,12 @@ class SummaryPlugin(Plugin):
         db.ai_config.max_output_length = _int(ai.get("max_output_length"), db.ai_config.max_output_length)
         db.tasks = [self._coerce_task(item) for item in data.get("tasks", []) if isinstance(item, dict)]
         self._merge_runtime_config(db)
+        if (
+            db.ai_config.default_provider == "openai"
+            and not db.ai_config.providers.get("openai", Provider("", "", "", "")).api_key
+            and "telepilot" in db.ai_config.providers
+        ):
+            db.ai_config.default_provider = "telepilot"
         return db
 
     async def _save_db(self, db: SummaryDB) -> None:
@@ -387,7 +400,7 @@ class SummaryPlugin(Plugin):
 
     def _merge_runtime_config(self, db: SummaryDB) -> None:
         cfg = self._cfg
-        db.ai_config.default_provider = str(cfg.get("default_provider") or db.ai_config.default_provider or "openai")
+        db.ai_config.default_provider = str(cfg.get("default_provider") or db.ai_config.default_provider or "telepilot")
         db.ai_config.default_prompt = str(cfg.get("default_prompt") or db.ai_config.default_prompt)
         db.ai_config.default_spoiler = _bool(cfg.get("default_spoiler"), db.ai_config.default_spoiler)
         db.ai_config.default_timeout = max(10, _int(cfg.get("timeout_seconds"), 60)) * 1000
@@ -486,7 +499,7 @@ class SummaryPlugin(Plugin):
             created_at=str(int(time.time() * 1000)),
             use_spoiler=db.ai_config.default_spoiler,
         )
-        result = await self._summarize_messages(task, message_data, db)
+        result = await self._summarize_messages(ctx, task, message_data, db)
         if not result["success"]:
             await self._edit_or_reply(event, f"❌ {_html(result['error'])}", parse_mode="html")
             return
@@ -602,17 +615,19 @@ class SummaryPlugin(Plugin):
             result += "\n".join(f"{name} - [查看原消息]({link})" for name, link in files if link)
         return result
 
-    async def _summarize_messages(self, task: SummaryTask, message_data: list[MessageData], db: SummaryDB) -> dict[str, Any]:
-        provider_name = task.ai_provider or db.ai_config.default_provider or "openai"
+    async def _summarize_messages(self, ctx: PluginContext, task: SummaryTask, message_data: list[MessageData], db: SummaryDB) -> dict[str, Any]:
+        provider_name = task.ai_provider or db.ai_config.default_provider or "telepilot"
         provider = db.ai_config.providers.get(provider_name)
         if not provider:
             return {"success": False, "error": f"未找到 AI 配置: {provider_name}"}
-        if not provider.api_key:
+        if provider.type != "telepilot" and not provider.api_key:
             return {"success": False, "error": f"AI 配置 {provider_name} 尚未设置 API Key"}
         prompt = task.ai_prompt or db.ai_config.default_prompt
         messages = self._format_messages_for_ai(message_data)
         try:
-            if provider.type == "gemini":
+            if provider.type == "telepilot":
+                result = await self._call_telepilot_ai(ctx, provider, messages, prompt, db.ai_config.default_timeout)
+            elif provider.type == "gemini":
                 result = await self._call_gemini(provider, messages, prompt, db.ai_config.default_timeout)
             else:
                 result = await self._call_openai(provider, messages, prompt, db.ai_config.default_timeout)
@@ -660,6 +675,75 @@ class SummaryPlugin(Plugin):
         if not content:
             raise RuntimeError("Gemini 返回内容为空")
         return str(content).strip()
+
+    async def _call_telepilot_ai(self, ctx: PluginContext, provider: Provider, messages: str, prompt: str, timeout_ms: int) -> str:
+        try:
+            from sqlalchemy import select
+
+            from app.db.models.command import LLMProvider
+            from app.db.session import AsyncSessionLocal
+            from app.services.llm_dto import LLMProviderDTO
+            from app.services.llm_invoke import invoke as invoke_ai_runtime
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError("当前 TelePilot 版本未暴露内置 AI runtime，请继续使用 OpenAI/Gemini 配置") from exc
+
+        async with AsyncSessionLocal() as db:
+            rows = list((await db.execute(select(LLMProvider).order_by(LLMProvider.id.asc()))).scalars().all())
+        if not rows:
+            raise RuntimeError("TelePilot 尚未配置任何 LLM Provider")
+
+        provider_dtos: dict[int, Any] = {}
+        for row in rows:
+            try:
+                dto = LLMProviderDTO.from_orm_row(row)
+                provider_dtos[int(dto.id)] = dto
+            except Exception:
+                continue
+        if not provider_dtos:
+            raise RuntimeError("TelePilot LLM Provider 配置不可用")
+
+        primary = self._select_telepilot_provider(provider, provider_dtos)
+        override_model = provider.model.strip() or None
+        user_prompt = f"{prompt}\n\n{messages}"
+        result, used_provider, _ = await invoke_ai_runtime(
+            primary,
+            provider_dtos,
+            "你是一个专业、简洁、可靠的中文群聊总结助手。",
+            user_prompt,
+            override_model=override_model,
+            max_tokens=4000,
+            timeout_seconds=max(10, timeout_ms // 1000),
+            account_id=ctx.account_id,
+            source="plugin:sum",
+            matched_tag="long_context",
+        )
+        text = str(getattr(result, "text", "") or "").strip()
+        if not text:
+            raise RuntimeError(f"TelePilot AI 返回内容为空（provider={getattr(used_provider, 'name', primary.id)}）")
+        return text
+
+    @staticmethod
+    def _select_telepilot_provider(provider: Provider, provider_dtos: dict[int, Any]) -> Any:
+        selector = (provider.base_url or "").strip()
+        if selector:
+            if selector.isdigit():
+                dto = provider_dtos.get(int(selector))
+                if dto is not None:
+                    return dto
+            lowered = selector.lower()
+            for dto in provider_dtos.values():
+                if str(getattr(dto, "name", "")).lower() == lowered:
+                    return dto
+            raise RuntimeError(f"未找到 TelePilot LLM Provider: {selector}")
+
+        candidates = list(provider_dtos.values())
+        usable = [dto for dto in candidates if getattr(dto, "has_api_key", False)]
+        candidates = usable or candidates
+        for tag in ("long_context", "chat", "smart", "reason"):
+            tagged = [dto for dto in candidates if tag in (getattr(dto, "tags", None) or [])]
+            if tagged:
+                return sorted(tagged, key=lambda item: (int(getattr(item, "cost_tier", 2) or 2), int(getattr(item, "id", 0) or 0)))[0]
+        return sorted(candidates, key=lambda item: int(getattr(item, "id", 0) or 0))[0]
 
     def _build_summary_text(self, task: SummaryTask, summary: str, db: SummaryDB) -> tuple[str, bool]:
         content = THINK_RE.sub("", summary).strip()
@@ -897,7 +981,7 @@ class SummaryPlugin(Plugin):
         messages = await self._get_group_messages(ctx, task.chat_id, count, hours=task.time_range)
         if not messages:
             return {"success": False, "message": "未找到可总结的消息"}
-        result = await self._summarize_messages(task, messages, db)
+        result = await self._summarize_messages(ctx, task, messages, db)
         if not result["success"]:
             return {"success": False, "message": result["error"]}
         summary_text, need_html = self._build_summary_text(task, str(result["result"]), db)
@@ -1025,9 +1109,14 @@ class SummaryPlugin(Plugin):
             for key, provider in db.ai_config.providers.items():
                 lines.append(f"<b>{_html(provider.name or key)}</b> ({_code(key)})")
                 lines.append(f"类型: {_code(provider.type)}")
-                lines.append(f"Base URL: {_code(provider.base_url)}")
-                lines.append(f"Model: {_code(provider.model)}")
-                lines.append(f"API Key: {'已设置' if provider.api_key else '未设置'}")
+                if provider.type == "telepilot":
+                    lines.append(f"Provider: {_code(provider.base_url or '自动选择')}")
+                    lines.append(f"Model 覆盖: {_code(provider.model or '使用平台默认')}")
+                    lines.append("API Key: 使用 TelePilot 内置配置")
+                else:
+                    lines.append(f"Base URL: {_code(provider.base_url)}")
+                    lines.append(f"Model: {_code(provider.model)}")
+                    lines.append(f"API Key: {'已设置' if provider.api_key else '未设置'}")
                 lines.append("")
             lines.append("⚙️ 全局设置")
             lines.append(f"默认配置: {_code(db.ai_config.default_provider)}")
@@ -1067,12 +1156,27 @@ class SummaryPlugin(Plugin):
             preset.api_key = args[1]
             db.ai_config.providers[name] = preset
         else:
+            if len(args) < 2:
+                await self._edit_or_reply(event, "❌ 自定义用法：sum config add <名称> <类型> <BaseURL/Provider> <Model>")
+                return
+            provider_type = args[1]
+            if provider_type == "telepilot":
+                db.ai_config.providers[name] = Provider(
+                    name=args[0],
+                    base_url=args[2] if len(args) >= 3 else "",
+                    api_key="",
+                    model=args[3] if len(args) >= 4 else "",
+                    type="telepilot",
+                )
+                await self._save_db(db)
+                await self._edit_or_reply(event, f"✅ 已添加 TelePilot 内置 AI 配置 {_code(name)}", parse_mode="html")
+                return
             if len(args) < 4:
                 await self._edit_or_reply(event, "❌ 自定义用法：sum config add <名称> <类型> <BaseURL> <Model>")
                 return
-            provider_type, base_url, model = args[1], args[2], args[3]
+            base_url, model = args[2], args[3]
             if provider_type not in {"openai", "gemini"}:
-                await self._edit_or_reply(event, "❌ 类型必须是 openai 或 gemini")
+                await self._edit_or_reply(event, "❌ 类型必须是 openai、gemini 或 telepilot")
                 return
             db.ai_config.providers[name] = Provider(name=args[0], base_url=base_url, api_key="", model=model, type=provider_type)
         await self._save_db(db)
@@ -1117,10 +1221,10 @@ class SummaryPlugin(Plugin):
                 provider.api_key = value
             elif prop == "model":
                 provider.model = value
-            elif prop == "url":
+            elif prop in {"url", "provider", "provider_id"}:
                 provider.base_url = value
             else:
-                await self._edit_or_reply(event, "❌ 无效属性，支持 key/model/url")
+                await self._edit_or_reply(event, "❌ 无效属性，支持 key/model/url/provider")
                 return
         await self._save_db(db)
         await self._edit_or_reply(event, "✅ 配置已更新")
@@ -1149,6 +1253,9 @@ class SummaryPlugin(Plugin):
 
 <b>AI 配置：</b>
 {_code(f"{prefix}{cmd} config list")}
+{_code(f"{prefix}{cmd} config set default telepilot")} - 使用 TelePilot 内置 AI
+{_code(f"{prefix}{cmd} config set telepilot provider <Provider ID或名称>")} - 指定内置 AI Provider
+{_code(f"{prefix}{cmd} config set telepilot model <模型ID>")} - 可选覆盖模型
 {_code(f"{prefix}{cmd} config add openai sk-xxx")}
 {_code(f"{prefix}{cmd} config add deepseek openai https://api.deepseek.com deepseek-chat")}
 {_code(f"{prefix}{cmd} config set <名称> key|model|url <值>")}

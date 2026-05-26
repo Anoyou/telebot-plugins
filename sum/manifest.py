@@ -36,7 +36,8 @@ CONFIG_SCHEMA = {
         "default_provider": {
             "type": "string",
             "title": "默认 AI 配置名",
-            "default": "openai",
+            "description": "可填 telepilot 直接使用 TelePilot 内置 AI，也可填通过 sum config add 创建的外部配置名。",
+            "default": "telepilot",
         },
         "default_prompt": {
             "type": "string",
@@ -105,10 +106,10 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.0.0",
+    version="1.1.0",
     min_telepilot_version="0.21.0",
     author="Anoyou",
-    description="使用 OpenAI/Gemini 兼容接口总结群组消息，支持快捷总结与定时任务",
+    description="使用 TelePilot 内置 AI 或 OpenAI/Gemini 兼容接口总结群组消息，支持快捷总结与定时任务",
     permissions=["send_message", "edit_message", "read_chat"],
     category="utility",
     interaction_entries=[],
