@@ -20,7 +20,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.9"
+VERSION = "1.1.10"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -328,6 +328,9 @@ class SummaryPlugin(Plugin):
 
     async def _cmd_sum(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
         try:
+            # 配置页保存后 worker 可能只热更新 config，不一定重建插件实例；
+            # 每次命令入口都同步一次内存配置，确保模板等字段立即生效。
+            self._cfg = dict(ctx.config or self._cfg or {})
             if not args:
                 await self._quick_summary(event, [], ctx)
                 return
@@ -604,10 +607,7 @@ class SummaryPlugin(Plugin):
             return
 
         summary_text, need_html = self._build_summary_text(task, str(result["result"]), db)
-        if db.ai_config.reply_mode:
-            await self._send_message(ctx, chat_targets, summary_text, parse_mode="html" if need_html else None, reply_to=_event_message_id(event))
-        else:
-            await self._edit_or_reply(event, summary_text, parse_mode="html" if need_html else None)
+        await self._edit_or_reply(event, summary_text, parse_mode="html" if need_html else None)
 
     async def _event_chat_target(self, event: Any, fallback: Any) -> Any:
         targets = await self._event_chat_targets(event, fallback)
