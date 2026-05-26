@@ -11,41 +11,30 @@ import html
 import json
 import re
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
-import httpx
 
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.4"
+VERSION = "1.1.5"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
 
 
 @dataclass
-class Provider:
-    name: str
-    base_url: str
-    api_key: str
-    model: str
-    type: str = "openai"
-
-
-@dataclass
 class AIConfig:
-    providers: dict[str, Provider] = field(default_factory=dict)
-    default_provider: str = "telepilot"
     default_prompt: str = "请总结以下群聊消息的主要内容，提取关键话题和重要信息："
     default_spoiler: bool = False
     default_timeout: int = 60000
     reply_mode: bool = True
     max_output_length: int = 0
+    telepilot_provider: str = ""
+    telepilot_model: str = ""
 
 
 @dataclass
@@ -58,7 +47,6 @@ class SummaryTask:
     message_count: int = 100
     time_range: int = 0
     push_target: str = ""
-    ai_provider: str = ""
     ai_prompt: str = ""
     use_spoiler: bool = False
     created_at: str = ""
@@ -67,6 +55,7 @@ class SummaryTask:
     last_error: str = ""
     disabled: bool = False
     remark: str = ""
+    managed_by_config: bool = False
 
 
 @dataclass
@@ -84,31 +73,6 @@ class MessageData:
     telegram_link: str
     urls: list[str] = field(default_factory=list)
     file_name: str = ""
-
-
-DEFAULT_PROVIDER_PRESETS = {
-    "openai": Provider(
-        name="OpenAI",
-        base_url="https://api.openai.com",
-        api_key="",
-        model="gpt-4o",
-        type="openai",
-    ),
-    "gemini": Provider(
-        name="Gemini",
-        base_url="https://generativelanguage.googleapis.com",
-        api_key="",
-        model="gemini-2.5-flash",
-        type="gemini",
-    ),
-    "telepilot": Provider(
-        name="TelePilot 内置 AI",
-        base_url="",
-        api_key="",
-        model="",
-        type="telepilot",
-    ),
-}
 
 
 def _html(value: Any) -> str:
@@ -139,13 +103,6 @@ def _bool(value: Any, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "n", "off", "关闭", "关", "否", ""}:
         return False
     return default
-
-
-def _plain_secret(value: Any) -> str:
-    secret = str(value or "").strip()
-    if len(secret) >= 3 and set(secret) <= {"*", "•"}:
-        return ""
-    return secret
 
 
 def _format_date(value: datetime | int | float | None = None) -> str:
@@ -208,6 +165,11 @@ def _parse_chat_identifier(raw: str) -> str:
     return value
 
 
+def _is_placeholder_chat_identifier(raw: Any) -> bool:
+    normalized = re.sub(r"[\s<>【】\[\]（）()]+", "", str(raw or "").strip().lower())
+    return normalized in {"", "群组id", "群id", "chatid", "groupid", "群组标识", "真实群id", "群组"}
+
+
 def _build_message_link(chat_id: str, message_id: int, username: str = "") -> str:
     if username:
         return f"https://t.me/{username}/{message_id}"
@@ -254,22 +216,8 @@ def _extract_entity_urls(message: Any, text: str) -> list[str]:
     return result
 
 
-def _coerce_provider(value: Any) -> Provider:
-    if isinstance(value, Provider):
-        return value
-    data = dict(value or {})
-    return Provider(
-        name=str(data.get("name") or ""),
-        base_url=str(data.get("base_url") or data.get("baseUrl") or ""),
-        api_key=str(data.get("api_key") or data.get("apiKey") or ""),
-        model=str(data.get("model") or ""),
-        type=str(data.get("type") or "openai").lower(),
-    )
-
-
 def _default_db() -> SummaryDB:
-    cfg = AIConfig(providers={k: Provider(**asdict(v)) for k, v in DEFAULT_PROVIDER_PRESETS.items()})
-    return SummaryDB(ai_config=cfg)
+    return SummaryDB()
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -405,7 +353,7 @@ class SummaryPlugin(Plugin):
             if sub == "config":
                 await self._config_command(event, rest, ctx)
                 return
-            if sub.isdigit() or sub in {"--provider", "-p"}:
+            if sub.isdigit():
                 await self._quick_summary(event, args, ctx)
                 return
 
@@ -428,23 +376,21 @@ class SummaryPlugin(Plugin):
         db.seq = _int(data.get("seq"), 0)
         db.default_push_target = str(data.get("defaultPushTarget") or data.get("default_push_target") or "")
         ai = data.get("aiConfig") or data.get("ai_config") or {}
-        providers = ai.get("providers") or {}
-        for name, provider_data in providers.items():
-            db.ai_config.providers[str(name)] = _coerce_provider(provider_data)
-        db.ai_config.default_provider = str(ai.get("default_provider") or db.ai_config.default_provider)
         db.ai_config.default_prompt = str(ai.get("default_prompt") or db.ai_config.default_prompt)
         db.ai_config.default_spoiler = _bool(ai.get("default_spoiler"), db.ai_config.default_spoiler)
         db.ai_config.default_timeout = _int(ai.get("default_timeout"), db.ai_config.default_timeout)
         db.ai_config.reply_mode = _bool(ai.get("reply_mode"), db.ai_config.reply_mode)
         db.ai_config.max_output_length = _int(ai.get("max_output_length"), db.ai_config.max_output_length)
+        db.ai_config.telepilot_provider = str(ai.get("telepilot_provider") or "")
+        db.ai_config.telepilot_model = str(ai.get("telepilot_model") or "")
+        old_telepilot = (ai.get("providers") or {}).get("telepilot") if isinstance(ai.get("providers"), dict) else None
+        if isinstance(old_telepilot, dict):
+            db.ai_config.telepilot_provider = db.ai_config.telepilot_provider or str(
+                old_telepilot.get("base_url") or old_telepilot.get("baseUrl") or ""
+            )
+            db.ai_config.telepilot_model = db.ai_config.telepilot_model or str(old_telepilot.get("model") or "")
         db.tasks = [self._coerce_task(item) for item in data.get("tasks", []) if isinstance(item, dict)]
         self._merge_runtime_config(db)
-        if (
-            db.ai_config.default_provider == "openai"
-            and not db.ai_config.providers.get("openai", Provider("", "", "", "")).api_key
-            and "telepilot" in db.ai_config.providers
-        ):
-            db.ai_config.default_provider = "telepilot"
         return db
 
     async def _save_db(self, db: SummaryDB) -> None:
@@ -452,13 +398,13 @@ class SummaryPlugin(Plugin):
             "seq": db.seq,
             "tasks": [self._task_to_json(t) for t in db.tasks],
             "aiConfig": {
-                "providers": {k: asdict(v) for k, v in db.ai_config.providers.items()},
-                "default_provider": db.ai_config.default_provider,
                 "default_prompt": db.ai_config.default_prompt,
                 "default_spoiler": db.ai_config.default_spoiler,
                 "default_timeout": db.ai_config.default_timeout,
                 "reply_mode": db.ai_config.reply_mode,
                 "max_output_length": db.ai_config.max_output_length,
+                "telepilot_provider": db.ai_config.telepilot_provider,
+                "telepilot_model": db.ai_config.telepilot_model,
             },
             "defaultPushTarget": db.default_push_target,
         }
@@ -466,42 +412,100 @@ class SummaryPlugin(Plugin):
 
     def _merge_runtime_config(self, db: SummaryDB) -> None:
         cfg = self._cfg
-        db.ai_config.default_provider = str(cfg.get("default_provider") or db.ai_config.default_provider or "telepilot")
         db.ai_config.default_prompt = str(cfg.get("default_prompt") or db.ai_config.default_prompt)
         db.ai_config.default_spoiler = _bool(cfg.get("default_spoiler"), db.ai_config.default_spoiler)
         db.ai_config.default_timeout = max(10, _int(cfg.get("timeout_seconds"), 60)) * 1000
         db.ai_config.reply_mode = _bool(cfg.get("reply_mode"), db.ai_config.reply_mode)
         db.ai_config.max_output_length = max(0, _int(cfg.get("max_output_length"), db.ai_config.max_output_length))
         db.default_push_target = str(cfg.get("default_push_target") or db.default_push_target or "")
-        for name in ("openai", "gemini"):
-            provider = db.ai_config.providers.get(name)
-            if provider:
-                base_url = str(cfg.get(f"{name}_base_url") or "").strip()
-                model = str(cfg.get(f"{name}_model") or "").strip()
-                api_key = _plain_secret(cfg.get(f"{name}_api_key"))
-                if base_url:
-                    provider.base_url = base_url.rstrip("/")
-                if model:
-                    provider.model = model
-                if api_key:
-                    provider.api_key = api_key
-        telepilot = db.ai_config.providers.get("telepilot")
-        if telepilot:
-            fixed_provider = str(cfg.get("telepilot_provider") or "").strip()
-            model_override = str(cfg.get("telepilot_model") or "").strip()
-            if fixed_provider:
-                telepilot.base_url = fixed_provider
-            if model_override:
-                telepilot.model = model_override
-        providers_json = str(cfg.get("providers_json") or "").strip()
-        if providers_json:
-            try:
-                raw = json.loads(providers_json)
-                raw_providers = raw.get("providers", raw) if isinstance(raw, dict) else {}
-                for name, provider_data in raw_providers.items():
-                    db.ai_config.providers[str(name)] = _coerce_provider(provider_data)
-            except Exception:
-                pass
+        db.ai_config.telepilot_provider = str(cfg.get("telepilot_provider") or db.ai_config.telepilot_provider or "").strip()
+        db.ai_config.telepilot_model = str(cfg.get("telepilot_model") or db.ai_config.telepilot_model or "").strip()
+        self._merge_configured_tasks(db, cfg.get("scheduled_tasks_json"))
+
+    def _merge_configured_tasks(self, db: SummaryDB, raw_value: Any) -> None:
+        raw = str(raw_value or "").strip()
+        previous = {task.id: task for task in db.tasks if task.managed_by_config}
+        db.tasks = [task for task in db.tasks if not task.managed_by_config]
+        if not raw or raw == "[]":
+            return
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            db.tasks.append(
+                SummaryTask(
+                    id="cfg:error",
+                    cron="",
+                    chat_id="",
+                    disabled=True,
+                    managed_by_config=True,
+                    last_error="配置页 scheduled_tasks_json 不是有效 JSON。",
+                    remark="配置页定时任务解析失败",
+                )
+            )
+            return
+        items = parsed.get("tasks", parsed) if isinstance(parsed, dict) else parsed
+        if not isinstance(items, list):
+            return
+        configured: list[SummaryTask] = []
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            task = self._coerce_config_task(item, index)
+            if task:
+                old = previous.get(task.id)
+                if old:
+                    task.last_run_at = old.last_run_at
+                    task.last_result = old.last_result
+                    task.last_error = task.last_error or old.last_error
+                configured.append(task)
+        db.tasks.extend(configured)
+
+    def _coerce_config_task(self, item: dict[str, Any], index: int) -> SummaryTask | None:
+        chat_raw = str(item.get("chatId") or item.get("chat_id") or item.get("chat") or "").strip()
+        task_id = str(item.get("id") or index).strip()
+        task_id = task_id if task_id.startswith("cfg:") else f"cfg:{task_id}"
+        if not chat_raw:
+            return SummaryTask(
+                id=task_id,
+                cron="",
+                chat_id="",
+                disabled=True,
+                managed_by_config=True,
+                last_error="配置页定时任务缺少 chatId。",
+                remark=str(item.get("remark") or "配置页定时任务缺少 chatId"),
+            )
+        chat_id = _parse_chat_identifier(chat_raw)
+        cron = str(item.get("cron") or "").strip()
+        interval = str(item.get("interval") or "").strip()
+        if not cron and interval:
+            cron, interval, _ = self._parse_interval([interval])
+        if cron and not interval:
+            interval = cron
+        disabled = _bool(item.get("disabled"), False)
+        last_error = ""
+        if not cron:
+            disabled = True
+            last_error = "配置页定时任务缺少 interval 或 cron。"
+        if _is_placeholder_chat_identifier(chat_id):
+            disabled = True
+            last_error = "请把 chatId 改成真实群 ID、@用户名或 t.me 链接。"
+        return SummaryTask(
+            id=task_id,
+            cron=cron,
+            chat_id=chat_id,
+            chat_display=str(item.get("chatDisplay") or item.get("chat_display") or chat_raw),
+            interval=interval,
+            message_count=max(1, _int(item.get("messageCount") or item.get("message_count") or item.get("count"), 100)),
+            time_range=max(0, _int(item.get("timeRange") or item.get("time_range") or item.get("hours"), 0)),
+            push_target=str(item.get("pushTarget") or item.get("push_target") or item.get("push") or ""),
+            ai_prompt=str(item.get("prompt") or item.get("aiPrompt") or item.get("ai_prompt") or ""),
+            use_spoiler=_bool(item.get("useSpoiler") if "useSpoiler" in item else item.get("spoiler"), False),
+            created_at=str(item.get("createdAt") or item.get("created_at") or int(time.time() * 1000)),
+            last_error=last_error,
+            disabled=disabled,
+            remark=str(item.get("remark") or "配置页定时任务"),
+            managed_by_config=True,
+        )
 
     @staticmethod
     def _coerce_task(item: dict[str, Any]) -> SummaryTask:
@@ -514,7 +518,6 @@ class SummaryPlugin(Plugin):
             message_count=max(1, _int(item.get("messageCount") or item.get("message_count"), 100)),
             time_range=max(0, _int(item.get("timeRange") or item.get("time_range"), 0)),
             push_target=str(item.get("pushTarget") or item.get("push_target") or ""),
-            ai_provider=str(item.get("aiProvider") or item.get("ai_provider") or ""),
             ai_prompt=str(item.get("aiPrompt") or item.get("ai_prompt") or ""),
             use_spoiler=_bool(item.get("useSpoiler") if "useSpoiler" in item else item.get("use_spoiler"), False),
             created_at=str(item.get("createdAt") or item.get("created_at") or ""),
@@ -523,6 +526,7 @@ class SummaryPlugin(Plugin):
             last_error=str(item.get("lastError") or item.get("last_error") or ""),
             disabled=_bool(item.get("disabled"), False),
             remark=str(item.get("remark") or ""),
+            managed_by_config=_bool(item.get("managedByConfig") or item.get("managed_by_config"), False),
         )
 
     @staticmethod
@@ -536,7 +540,6 @@ class SummaryPlugin(Plugin):
             "messageCount": task.message_count,
             "timeRange": task.time_range or None,
             "pushTarget": task.push_target,
-            "aiProvider": task.ai_provider,
             "aiPrompt": task.ai_prompt,
             "useSpoiler": task.use_spoiler,
             "createdAt": task.created_at,
@@ -545,23 +548,15 @@ class SummaryPlugin(Plugin):
             "lastError": task.last_error,
             "disabled": task.disabled,
             "remark": task.remark,
+            "managedByConfig": task.managed_by_config,
         }
 
     async def _quick_summary(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         count = max(1, _int(self._cfg.get("default_count"), 100))
         max_count = max(10, _int(self._cfg.get("max_fetch_count"), 300))
-        provider = ""
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            if arg in {"--provider", "-p"} and i + 1 < len(args):
-                provider = args[i + 1]
-                i += 2
-            elif str(arg).isdigit():
+        for arg in args:
+            if str(arg).isdigit():
                 count = _int(arg, count)
-                i += 1
-            else:
-                i += 1
         count = min(max(1, count), max_count)
         chat_id = str(_event_chat_id(event))
         if not chat_id or chat_id == "0":
@@ -582,7 +577,6 @@ class SummaryPlugin(Plugin):
             chat_id=chat_id,
             chat_display=await self._chat_display(ctx, chat_id, target=chat_targets),
             message_count=count,
-            ai_provider=provider or db.ai_config.default_provider,
             created_at=str(int(time.time() * 1000)),
             use_spoiler=db.ai_config.default_spoiler,
         )
@@ -623,6 +617,58 @@ class SummaryPlugin(Plugin):
         candidates.append(fallback)
         return _target_candidates(candidates)
 
+    async def _dialog_targets_for_chat(self, ctx: PluginContext, target: Any) -> list[Any]:
+        if not ctx.client:
+            return []
+        wanted = _parse_chat_identifier(str(target or ""))
+        if not wanted or _is_placeholder_chat_identifier(wanted):
+            return []
+        wanted_lower = wanted.lstrip("@").lower()
+        matched: list[Any] = []
+
+        async def inspect_dialog(dialog: Any) -> None:
+            entity = getattr(dialog, "entity", None) or getattr(dialog, "input_entity", None) or dialog
+            username = str(getattr(entity, "username", "") or "").lower()
+            raw_entity_id = (
+                getattr(entity, "id", None)
+                or getattr(entity, "channel_id", None)
+                or getattr(entity, "chat_id", None)
+                or getattr(entity, "user_id", None)
+            )
+            candidates = {
+                str(getattr(dialog, "id", "") or ""),
+                str(raw_entity_id or ""),
+            }
+            if raw_entity_id is not None:
+                candidates.add(f"-100{raw_entity_id}")
+            if username:
+                candidates.add(username)
+                candidates.add(f"@{username}")
+            if wanted in candidates or wanted_lower in {item.lower() for item in candidates}:
+                matched.extend([getattr(dialog, "input_entity", None), entity, getattr(dialog, "id", None)])
+
+        iter_dialogs = getattr(ctx.client, "iter_dialogs", None)
+        if callable(iter_dialogs):
+            try:
+                async for dialog in iter_dialogs():
+                    await inspect_dialog(dialog)
+                    if matched:
+                        return _target_candidates(matched)
+            except Exception:
+                pass
+
+        get_dialogs = getattr(ctx.client, "get_dialogs", None)
+        if callable(get_dialogs):
+            try:
+                dialogs = await _maybe_await(get_dialogs())
+                for dialog in dialogs or []:
+                    await inspect_dialog(dialog)
+                    if matched:
+                        return _target_candidates(matched)
+            except Exception:
+                pass
+        return _target_candidates(matched)
+
     async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0, target: Any = None) -> list[MessageData]:
         if not ctx.client:
             raise RuntimeError("Telegram 客户端未初始化")
@@ -642,6 +688,17 @@ class SummaryPlugin(Plugin):
                     last_lookup_error = exc
                     continue
                 raise
+        if messages is None:
+            for candidate in await self._dialog_targets_for_chat(ctx, chat_id):
+                try:
+                    messages = await _maybe_await(get_messages(_telegram_target(candidate), limit=count))
+                    used_target = candidate
+                    break
+                except Exception as exc:
+                    if _is_entity_lookup_error(exc):
+                        last_lookup_error = exc
+                        continue
+                    raise
         if messages is None and last_lookup_error is not None:
             raise _chat_lookup_error(chat_id, last_lookup_error) from last_lookup_error
         if messages is None:
@@ -699,10 +756,12 @@ class SummaryPlugin(Plugin):
         get_entity = getattr(ctx.client, "get_entity", None)
         if not get_entity:
             return None
-        try:
-            return await _maybe_await(get_entity(_telegram_target(target)))
-        except Exception:
-            return None
+        for candidate in _target_candidates(target, await self._dialog_targets_for_chat(ctx, target)):
+            try:
+                return await _maybe_await(get_entity(_telegram_target(candidate)))
+            except Exception:
+                continue
+        return None
 
     async def _chat_display(self, ctx: PluginContext, chat_id: str, *, target: Any = None) -> str:
         entity = await self._safe_get_entity(ctx, target if target is not None else chat_id)
@@ -743,67 +802,15 @@ class SummaryPlugin(Plugin):
         return result
 
     async def _summarize_messages(self, ctx: PluginContext, task: SummaryTask, message_data: list[MessageData], db: SummaryDB) -> dict[str, Any]:
-        provider_name = task.ai_provider or db.ai_config.default_provider or "telepilot"
-        provider = db.ai_config.providers.get(provider_name)
-        if not provider:
-            return {"success": False, "error": f"未找到 AI 配置: {provider_name}"}
-        if provider.type != "telepilot" and not provider.api_key:
-            return {"success": False, "error": f"AI 配置 {provider_name} 尚未设置 API Key"}
         prompt = task.ai_prompt or db.ai_config.default_prompt
         messages = self._format_messages_for_ai(message_data)
         try:
-            if provider.type == "telepilot":
-                result = await self._call_telepilot_ai(ctx, provider, messages, prompt, db.ai_config.default_timeout)
-            elif provider.type == "gemini":
-                result = await self._call_gemini(provider, messages, prompt, db.ai_config.default_timeout)
-            else:
-                result = await self._call_openai(provider, messages, prompt, db.ai_config.default_timeout)
+            result = await self._call_telepilot_ai(ctx, messages, prompt, db.ai_config)
             return {"success": True, "result": result}
-        except httpx.HTTPError as exc:
-            return {"success": False, "error": f"AI 调用失败: {type(exc).__name__}"}
         except Exception as exc:
             return {"success": False, "error": f"AI 调用失败: {exc}"}
 
-    async def _call_openai(self, provider: Provider, messages: str, prompt: str, timeout_ms: int) -> str:
-        base_url = provider.base_url.rstrip("/")
-        url = f"{base_url}/v1/chat/completions"
-        payload = {
-            "model": provider.model,
-            "messages": [{"role": "user", "content": f"{prompt}\n\n{messages}"}],
-            "max_tokens": 2000,
-        }
-        async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={"Authorization": f"Bearer {provider.api_key}", "Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content")
-        if not content:
-            raise RuntimeError("OpenAI 返回内容为空")
-        return str(content).strip()
-
-    async def _call_gemini(self, provider: Provider, messages: str, prompt: str, timeout_ms: int) -> str:
-        base_url = provider.base_url.rstrip("/")
-        url = f"{base_url}/v1beta/models/{provider.model}:generateContent"
-        payload = {"contents": [{"role": "user", "parts": [{"text": f"{prompt}\n\n{messages}"}]}]}
-        async with httpx.AsyncClient(timeout=timeout_ms / 1000) as client:
-            resp = await client.post(
-                url,
-                params={"key": provider.api_key},
-                json=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        content = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text")
-        if not content:
-            raise RuntimeError("Gemini 返回内容为空")
-        return str(content).strip()
-
-    async def _call_telepilot_ai(self, ctx: PluginContext, provider: Provider, messages: str, prompt: str, timeout_ms: int) -> str:
+    async def _call_telepilot_ai(self, ctx: PluginContext, messages: str, prompt: str, ai_config: AIConfig) -> str:
         try:
             from sqlalchemy import select
 
@@ -813,7 +820,7 @@ class SummaryPlugin(Plugin):
             from app.services.llm_invoke import invoke as invoke_ai_runtime
             from app.services.llm_router import pick_provider as pick_ai_provider
         except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("当前 TelePilot 版本未暴露内置 AI runtime，请继续使用 OpenAI/Gemini 配置") from exc
+            raise RuntimeError("当前 TelePilot 版本未暴露内置 AI runtime，请升级 TelePilot 后使用平台 AI 配置") from exc
 
         async with AsyncSessionLocal() as db:
             rows = list((await db.execute(select(LLMProvider).order_by(LLMProvider.id.asc()))).scalars().all())
@@ -831,8 +838,8 @@ class SummaryPlugin(Plugin):
             raise RuntimeError("TelePilot LLM Provider 配置不可用")
 
         matched_tag = "long_context"
-        if (provider.base_url or "").strip():
-            primary = self._select_telepilot_provider(provider, provider_dtos)
+        if ai_config.telepilot_provider:
+            primary = self._select_telepilot_provider(ai_config.telepilot_provider, provider_dtos)
             matched_tag = None
         else:
             provider_payloads = {
@@ -847,7 +854,7 @@ class SummaryPlugin(Plugin):
             )
             primary = provider_dtos[int(decision.provider_id)]
             matched_tag = decision.matched_tag
-        override_model = provider.model.strip() or None
+        override_model = ai_config.telepilot_model.strip() or None
         user_prompt = f"{prompt}\n\n{messages}"
         result, used_provider, _ = await invoke_ai_runtime(
             primary,
@@ -856,7 +863,7 @@ class SummaryPlugin(Plugin):
             user_prompt,
             override_model=override_model,
             max_tokens=4000,
-            timeout_seconds=max(10, timeout_ms // 1000),
+            timeout_seconds=max(10, ai_config.default_timeout // 1000),
             account_id=ctx.account_id,
             source="plugin:sum",
             matched_tag=matched_tag,
@@ -867,8 +874,8 @@ class SummaryPlugin(Plugin):
         return text
 
     @staticmethod
-    def _select_telepilot_provider(provider: Provider, provider_dtos: dict[int, Any]) -> Any:
-        selector = (provider.base_url or "").strip()
+    def _select_telepilot_provider(selector: str, provider_dtos: dict[int, Any]) -> Any:
+        selector = (selector or "").strip()
         if selector:
             if selector.isdigit():
                 dto = provider_dtos.get(int(selector))
@@ -907,6 +914,14 @@ class SummaryPlugin(Plugin):
         clean_kwargs = {k: v for k, v in kwargs.items() if v is not None}
         last_lookup_error: BaseException | None = None
         for target in _target_candidates(chat_id):
+            try:
+                return await ctx.client.send_message(_telegram_target(target), text, **clean_kwargs)
+            except Exception as exc:
+                if _is_entity_lookup_error(exc):
+                    last_lookup_error = exc
+                    continue
+                raise
+        for target in await self._dialog_targets_for_chat(ctx, chat_id):
             try:
                 return await ctx.client.send_message(_telegram_target(target), text, **clean_kwargs)
             except Exception as exc:
@@ -997,10 +1012,12 @@ class SummaryPlugin(Plugin):
         db.seq += 1
         task_id = str(db.seq)
         parsed_chat = _parse_chat_identifier(chat_input)
+        if _is_placeholder_chat_identifier(parsed_chat):
+            await self._edit_or_reply(event, "❌ 请填写真实群 ID、@用户名或 t.me 链接，不要使用“群组 ID”占位文字。")
+            return
         chat_display = await self._chat_display(ctx, parsed_chat)
         message_count = max(1, _int(self._cfg.get("default_count"), 100))
         time_range = 0
-        ai_provider = db.ai_config.default_provider
         use_spoiler = db.ai_config.default_spoiler
         remark_parts: list[str] = []
         rest = args[1 + used:]
@@ -1010,9 +1027,9 @@ class SummaryPlugin(Plugin):
             if arg == "--time" and i + 1 < len(rest):
                 time_range = max(0, _int(rest[i + 1], 0))
                 i += 2
-            elif arg in {"--provider", "-p"} and i + 1 < len(rest):
-                ai_provider = rest[i + 1]
-                i += 2
+            elif arg in {"--provider", "-p"}:
+                await self._edit_or_reply(event, "❌ 已移除模块内 AI 配置选择；总结会直接调用 TelePilot 已配置的 AI。")
+                return
             elif arg == "--spoiler":
                 use_spoiler = True
                 i += 1
@@ -1034,7 +1051,6 @@ class SummaryPlugin(Plugin):
             message_count=message_count,
             time_range=time_range,
             push_target=db.default_push_target,
-            ai_provider=ai_provider,
             use_spoiler=use_spoiler,
             created_at=str(int(time.time() * 1000)),
             remark=" ".join(remark_parts),
@@ -1048,7 +1064,7 @@ class SummaryPlugin(Plugin):
             f"群组: {task.chat_display or _code(task.chat_id)}",
             f"间隔: {_code(task.interval)}",
             f"范围: {'过去' + str(task.time_range) + '小时' if task.time_range else str(task.message_count) + '条消息'}",
-            f"AI配置: {_code(task.ai_provider)}",
+            "AI: TelePilot 已配置的 AI",
             f"推送: {_code(task.push_target or task.chat_id)}",
         ]
         if task.remark:
@@ -1134,6 +1150,8 @@ class SummaryPlugin(Plugin):
         return result
 
     async def _execute_summary_task(self, ctx: PluginContext, task: SummaryTask, db: SummaryDB) -> dict[str, Any]:
+        if _is_placeholder_chat_identifier(task.chat_id):
+            return {"success": False, "message": "任务 chatId 不是有效聊天标识，请填写真实群 ID、@用户名或 t.me 链接"}
         count = min(task.message_count, max(10, _int(self._cfg.get("max_fetch_count"), 300)))
         messages = await self._get_group_messages(ctx, task.chat_id, count, hours=task.time_range)
         if not messages:
@@ -1157,8 +1175,9 @@ class SummaryPlugin(Plugin):
             lines.append(f"群组: {task.chat_display or _html(task.chat_id)}")
             lines.append(f"间隔: {_code(task.interval)}")
             lines.append(f"范围: {'过去' + str(task.time_range) + '小时' if task.time_range else str(task.message_count) + '条消息'}")
-            lines.append(f"AI配置: {_code(task.ai_provider or db.ai_config.default_provider)}")
+            lines.append("AI: TelePilot 已配置的 AI")
             lines.append(f"推送: {_code(task.push_target or db.default_push_target or task.chat_id)}")
+            lines.append(f"来源: {'配置页' if task.managed_by_config else '命令'}")
             lines.append(f"状态: {'已禁用' if task.disabled else '运行中'}")
             if task.last_run_at:
                 lines.append(f"上次: {_format_date(_int(task.last_run_at) / 1000)}")
@@ -1175,6 +1194,10 @@ class SummaryPlugin(Plugin):
             await self._edit_or_reply(event, "请提供任务ID")
             return
         db = await self._load_db()
+        existing = next((task for task in db.tasks if task.id == task_id), None)
+        if existing and existing.managed_by_config:
+            await self._edit_or_reply(event, "❌ 该任务来自配置页，请在插件配置里的定时任务 JSON 中删除。")
+            return
         before = len(db.tasks)
         db.tasks = [task for task in db.tasks if task.id != task_id]
         if len(db.tasks) == before:
@@ -1205,7 +1228,7 @@ class SummaryPlugin(Plugin):
 
     async def _edit_task(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         if len(args) < 2:
-            await self._edit_or_reply(event, "❌ 用法：sum edit <任务ID> <spoiler/provider/prompt/push> <值>")
+            await self._edit_or_reply(event, "❌ 用法：sum edit <任务ID> <spoiler/prompt/push> <值>")
             return
         task_id, prop = args[0], args[1].lower()
         value = " ".join(args[2:])
@@ -1214,16 +1237,17 @@ class SummaryPlugin(Plugin):
         if not task:
             await self._edit_or_reply(event, f"未找到任务: {_code(task_id)}", parse_mode="html")
             return
+        if task.managed_by_config:
+            await self._edit_or_reply(event, "❌ 该任务来自配置页，请直接修改插件配置里的定时任务 JSON。")
+            return
         if prop == "spoiler":
             task.use_spoiler = _bool(value, task.use_spoiler)
-        elif prop == "provider":
-            task.ai_provider = value
         elif prop == "prompt":
             task.ai_prompt = value
         elif prop == "push":
             task.push_target = value
         else:
-            await self._edit_or_reply(event, "❌ 未知属性，支持 spoiler/provider/prompt/push")
+            await self._edit_or_reply(event, "❌ 未知属性，支持 spoiler/prompt/push")
             return
         await self._save_db(db)
         await self._edit_or_reply(event, f"✅ 已更新任务 {_code(task_id)} 的 {_code(prop)}", parse_mode="html")
@@ -1238,6 +1262,9 @@ class SummaryPlugin(Plugin):
         if not task:
             await self._edit_or_reply(event, f"未找到任务: {_code(task_id)}", parse_mode="html")
             return
+        if task.managed_by_config:
+            await self._edit_or_reply(event, "❌ 该任务来自配置页，请在插件配置里的定时任务 JSON 中修改 disabled。")
+            return
         task.disabled = not enable
         await self._save_db(db)
         if enable:
@@ -1248,61 +1275,45 @@ class SummaryPlugin(Plugin):
 
     async def _reorder_tasks(self, event: Any, ctx: PluginContext) -> None:
         db = await self._load_db()
-        old_ids = [task.id for task in db.tasks]
-        for idx, task in enumerate(db.tasks, start=1):
+        command_tasks = [task for task in db.tasks if not task.managed_by_config]
+        old_ids = [task.id for task in command_tasks]
+        for idx, task in enumerate(command_tasks, start=1):
             task.id = str(idx)
-        db.seq = len(db.tasks)
+        db.seq = len(command_tasks)
         await self._save_db(db)
         await self._unregister_all(ctx)
         await self._bootstrap_tasks(ctx)
         mapping = ", ".join(f"{old} → {i + 1}" for i, old in enumerate(old_ids))
-        await self._edit_or_reply(event, f"✅ 已重新排序 {len(db.tasks)} 个任务\n\n{_html(mapping)}", parse_mode="html")
+        await self._edit_or_reply(event, f"✅ 已重新排序 {len(command_tasks)} 个命令任务\n\n{_html(mapping)}", parse_mode="html")
 
     async def _config_command(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         action = args[0].lower() if args else ""
         db = await self._load_db()
         if action in {"list", "ls"}:
-            lines = ["🤖 AI 配置列表", ""]
-            for key, provider in db.ai_config.providers.items():
-                lines.append(f"<b>{_html(provider.name or key)}</b> ({_code(key)})")
-                lines.append(f"类型: {_code(provider.type)}")
-                if provider.type == "telepilot":
-                    lines.append(f"Provider: {_code(provider.base_url or '自动路由')}")
-                    lines.append(f"Model 覆盖: {_code(provider.model or '使用平台默认')}")
-                    lines.append("API Key: 使用 TelePilot 内置配置")
-                else:
-                    lines.append(f"Base URL: {_code(provider.base_url)}")
-                    lines.append(f"Model: {_code(provider.model)}")
-                    lines.append(f"API Key: {'已设置' if provider.api_key else '未设置'}")
-                lines.append("")
+            lines = ["🤖 sum 配置", ""]
+            lines.append("AI: TelePilot 已配置的 AI")
+            lines.append(f"Provider: {_code(db.ai_config.telepilot_provider or '自动路由')}")
+            lines.append(f"Model 覆盖: {_code(db.ai_config.telepilot_model or '使用平台默认')}")
+            lines.append("")
             lines.append("⚙️ 全局设置")
-            lines.append(f"默认配置: {_code(db.ai_config.default_provider)}")
             lines.append(f"默认推送: {_code(db.default_push_target or '来源聊天')}")
             lines.append(f"折叠显示: {'开启' if db.ai_config.default_spoiler else '关闭'}")
             lines.append(f"超时时间: {db.ai_config.default_timeout // 1000}秒")
             lines.append(f"回复模式: {'开启' if db.ai_config.reply_mode else '关闭'}")
             lines.append(f"最大输出: {db.ai_config.max_output_length or '不限制'}")
+            config_count = len([task for task in db.tasks if task.managed_by_config])
+            command_count = len(db.tasks) - config_count
+            lines.append(f"定时任务: 配置页 {config_count} 个 / 命令 {command_count} 个")
             await self._edit_or_reply(event, "\n".join(lines), parse_mode="html")
             return
         if action in {"providers", "provider", "llm"}:
             await self._list_telepilot_providers(event)
             return
-        if action == "add":
-            await self._config_add(event, args[1:], db)
-            return
         if action == "set":
             await self._config_set(event, args[1:], db)
             return
-        if action in {"del", "rm"}:
-            name = args[1] if len(args) > 1 else ""
-            if not name or name not in db.ai_config.providers:
-                await self._edit_or_reply(event, f"❌ 未找到配置: {_html(name)}", parse_mode="html")
-                return
-            del db.ai_config.providers[name]
-            if db.ai_config.default_provider == name:
-                db.ai_config.default_provider = next(iter(db.ai_config.providers), "")
-            await self._save_db(db)
-            await self._edit_or_reply(event, f"✅ 已删除配置 {_code(name)}", parse_mode="html")
+        if action in {"add", "del", "rm"}:
+            await self._edit_or_reply(event, "❌ 已移除模块内 AI 配置管理；请在 TelePilot 的 AI Provider 中维护模型。")
             return
         await self._edit_or_reply(event, self._help_text(), parse_mode="html")
 
@@ -1334,8 +1345,8 @@ class SummaryPlugin(Plugin):
         lines = [
             "🤖 TelePilot 可用 LLM Provider",
             "",
-            f"自动路由无需选择；如需固定某个 Provider，使用：{_code(f'{prefix}{cmd} config set telepilot provider <ID或名称>')}",
-            f"恢复自动路由：{_code(f'{prefix}{cmd} config set telepilot provider auto')}",
+            f"自动路由无需选择；如需固定某个 Provider，使用：{_code(f'{prefix}{cmd} config set provider <ID或名称>')}",
+            f"恢复自动路由：{_code(f'{prefix}{cmd} config set provider auto')}",
             "",
         ]
         for provider in providers:
@@ -1347,57 +1358,18 @@ class SummaryPlugin(Plugin):
             lines.append("")
         await self._edit_or_reply(event, "\n".join(lines).strip(), parse_mode="html")
 
-    async def _config_add(self, event: Any, args: list[str], db: SummaryDB) -> None:
-        if not args:
-            await self._edit_or_reply(event, "❌ 请提供配置名称")
-            return
-        name = args[0].lower().replace(" ", "_")
-        if name in DEFAULT_PROVIDER_PRESETS and len(args) >= 2:
-            preset = Provider(**asdict(DEFAULT_PROVIDER_PRESETS[name]))
-            preset.api_key = args[1]
-            db.ai_config.providers[name] = preset
-        else:
-            if len(args) < 2:
-                await self._edit_or_reply(event, "❌ 自定义用法：sum config add <名称> <类型> <BaseURL/Provider> <Model>")
-                return
-            provider_type = args[1]
-            if provider_type == "telepilot":
-                db.ai_config.providers[name] = Provider(
-                    name=args[0],
-                    base_url=args[2] if len(args) >= 3 else "",
-                    api_key="",
-                    model=args[3] if len(args) >= 4 else "",
-                    type="telepilot",
-                )
-                await self._save_db(db)
-                await self._edit_or_reply(event, f"✅ 已添加 TelePilot 内置 AI 配置 {_code(name)}", parse_mode="html")
-                return
-            if len(args) < 4:
-                await self._edit_or_reply(event, "❌ 自定义用法：sum config add <名称> <类型> <BaseURL> <Model>")
-                return
-            base_url, model = args[2], args[3]
-            if provider_type not in {"openai", "gemini"}:
-                await self._edit_or_reply(event, "❌ 类型必须是 openai、gemini 或 telepilot")
-                return
-            db.ai_config.providers[name] = Provider(name=args[0], base_url=base_url, api_key="", model=model, type=provider_type)
-        await self._save_db(db)
-        await self._edit_or_reply(event, f"✅ 已添加配置 {_code(name)}", parse_mode="html")
-
     async def _config_set(self, event: Any, args: list[str], db: SummaryDB) -> None:
-        if len(args) < 2:
-            await self._edit_or_reply(event, "用法：sum config set <名称/选项> <属性> <值>")
+        if not args:
+            await self._edit_or_reply(event, "用法：sum config set provider|model|push|prompt|spoiler|timeout|reply|maxoutput <值>")
             return
-        name, prop = args[0], args[1]
+        name = args[0].lower()
+        prop = args[1] if len(args) > 1 else ""
         value = " ".join(args[2:])
+        combined = " ".join(args[1:]).strip()
         if name == "push":
-            db.default_push_target = prop
-        elif name == "default":
-            if prop not in db.ai_config.providers:
-                await self._edit_or_reply(event, f"❌ 未找到配置: {_html(prop)}", parse_mode="html")
-                return
-            db.ai_config.default_provider = prop
+            db.default_push_target = combined
         elif name == "prompt":
-            db.ai_config.default_prompt = "请总结以下群聊消息的主要内容，提取关键话题和重要信息：" if prop == "reset" else " ".join([prop, value]).strip()
+            db.ai_config.default_prompt = "请总结以下群聊消息的主要内容，提取关键话题和重要信息：" if prop == "reset" else combined
         elif name == "spoiler":
             db.ai_config.default_spoiler = _bool(prop, db.ai_config.default_spoiler)
         elif name == "timeout":
@@ -1410,26 +1382,17 @@ class SummaryPlugin(Plugin):
             db.ai_config.reply_mode = _bool(prop, db.ai_config.reply_mode)
         elif name == "maxoutput":
             db.ai_config.max_output_length = max(0, _int(prop, 0))
+        elif name == "provider":
+            db.ai_config.telepilot_provider = "" if prop.lower() in {"auto", "reset", "clear", "default", "自动", "默认", "清空"} else combined
+        elif name == "model":
+            db.ai_config.telepilot_model = "" if prop.lower() in {"auto", "reset", "clear", "default", "自动", "默认", "清空"} else combined
+        elif name == "telepilot" and prop.lower() in {"provider", "provider_id"}:
+            db.ai_config.telepilot_provider = "" if value.lower() in {"auto", "reset", "clear", "default", "自动", "默认", "清空"} else value
+        elif name == "telepilot" and prop.lower() == "model":
+            db.ai_config.telepilot_model = "" if value.lower() in {"auto", "reset", "clear", "default", "自动", "默认", "清空"} else value
         else:
-            provider = db.ai_config.providers.get(name)
-            if not provider:
-                await self._edit_or_reply(event, f"❌ 未找到配置: {_html(name)}", parse_mode="html")
-                return
-            if not value:
-                await self._edit_or_reply(event, "请提供值")
-                return
-            if prop == "key":
-                provider.api_key = value
-            elif prop == "model":
-                provider.model = value
-            elif prop in {"url", "provider", "provider_id"}:
-                if provider.type == "telepilot" and value.strip().lower() in {"auto", "reset", "clear", "default", "自动", "默认", "清空"}:
-                    provider.base_url = ""
-                else:
-                    provider.base_url = value
-            else:
-                await self._edit_or_reply(event, "❌ 无效属性，支持 key/model/url/provider")
-                return
+            await self._edit_or_reply(event, "❌ 无效配置项。AI 只调用 TelePilot 已配置的 Provider，不再支持模块内 OpenAI/Gemini。")
+            return
         await self._save_db(db)
         await self._edit_or_reply(event, "✅ 配置已更新")
 
@@ -1443,30 +1406,25 @@ class SummaryPlugin(Plugin):
 <b>快捷总结当前群：</b>
 {_code(f"{prefix}{cmd}")} - 总结最近默认数量消息
 {_code(f"{prefix}{cmd} 100")} - 指定本次总结最近100条消息
-{_code(f"{prefix}{cmd} 100 --provider telepilot")} - 指定 AI 配置总结
 
 <b>定时总结：</b>
 {_code(f"{prefix}{cmd} add <群组标识> <间隔> [消息数] [选项]")}
 间隔支持 2h、30m，或平台 scheduler 支持的 5/6 字段 cron。
-选项：--time 小时、--provider 名称、--spoiler、--no-spoiler。
+选项：--time 小时、--spoiler、--no-spoiler。
+群组标识请填真实群 ID、@用户名或 t.me 链接。
 
 <b>管理命令：</b>
 {_code(f"{prefix}{cmd} list")} / {_code(f"{prefix}{cmd} del <任务ID>")} / {_code(f"{prefix}{cmd} run <任务ID>")}
-{_code(f"{prefix}{cmd} edit <任务ID> spoiler|provider|prompt|push <值>")}
+{_code(f"{prefix}{cmd} edit <任务ID> spoiler|prompt|push <值>")}
 {_code(f"{prefix}{cmd} disable|enable <任务ID>")} / {_code(f"{prefix}{cmd} reorder")}
 
 <b>AI 配置：</b>
+AI 调用固定走 TelePilot 已配置的 Provider，不再在模块内填写 API Key。
 {_code(f"{prefix}{cmd} config list")}
 {_code(f"{prefix}{cmd} config providers")} - 查看 TelePilot 可固定的 Provider
-{_code(f"{prefix}{cmd} config set default telepilot")} - 使用 TelePilot 自动路由
-{_code(f"{prefix}{cmd} config set telepilot provider <Provider ID或名称>")} - 固定内置 AI Provider
-{_code(f"{prefix}{cmd} config set telepilot provider auto")} - 恢复自动路由
-{_code(f"{prefix}{cmd} config set telepilot model <模型ID>")} - 可选覆盖模型
-{_code(f"{prefix}{cmd} config set openai key sk-xxx")} / {_code(f"{prefix}{cmd} config set openai model gpt-4o")}
-{_code(f"{prefix}{cmd} config set gemini key <API Key>")} / {_code(f"{prefix}{cmd} config set gemini model gemini-2.5-flash")}
-{_code(f"{prefix}{cmd} config add deepseek openai https://api.deepseek.com deepseek-chat")}
-{_code(f"{prefix}{cmd} config set <名称> key|model|url <值>")}
-{_code(f"{prefix}{cmd} config set default <名称>")}
+{_code(f"{prefix}{cmd} config set provider <Provider ID或名称>")} - 固定内置 AI Provider
+{_code(f"{prefix}{cmd} config set provider auto")} - 恢复自动路由
+{_code(f"{prefix}{cmd} config set model <模型ID>")} - 可选覆盖模型
 {_code(f"{prefix}{cmd} prompts")} - 查看推荐提示词"""
 
 

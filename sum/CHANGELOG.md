@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.1.5 (2026-05-26)
+- 移除模块内 OpenAI/Gemini API Key、Base URL、Model 和自定义 AI Provider 配置，只保留调用 TelePilot 已配置的 AI。
+- 新增配置页定时总结任务 `scheduled_tasks_json`，支持通过插件配置维护 `chatId`、`interval`、消息数、推送目标、提示词、折叠和禁用状态。
+- 定时任务执行时会在当前账号 dialogs 中补充解析 `-100...` 群 ID，减少无事件上下文时找不到实体的问题。
+- 帮助文案和 `sum config` 命令同步调整为 TelePilot AI 自动路由/固定 Provider 逻辑。
+
 ## 1.1.4 (2026-05-26)
 - 修复快捷总结当前群时 Telethon 偶发无法用裸 `-100...` 群 ID 找到实体的问题，优先复用命令事件自带的 InputPeer/Chat。
 - `sum debug` 与总结结果回发同样使用当前事件实体候选，减少 `Cannot find any entity` 报错。
