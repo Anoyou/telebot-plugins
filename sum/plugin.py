@@ -22,7 +22,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -289,6 +289,33 @@ def _telegram_target(value: Any) -> Any:
     return value
 
 
+def _loose_command_args(text: str, command: str, live_prefix: str) -> list[str] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    prefixes: list[str] = []
+    for prefix in (live_prefix, ".", "。", ",", "，"):
+        if prefix and prefix not in prefixes:
+            prefixes.append(prefix)
+
+    for prefix in sorted(prefixes, key=len, reverse=True):
+        if not raw.startswith(prefix):
+            continue
+        rest = raw[len(prefix):]
+        if prefix == live_prefix and rest and not rest[0].isspace():
+            return None
+        rest = rest.lstrip()
+        if not rest:
+            continue
+        parts = rest.split(None, 1)
+        name = parts[0].strip()
+        if name not in {command, "总结"}:
+            continue
+        args_raw = parts[1].strip() if len(parts) > 1 else ""
+        return args_raw.split() if args_raw else []
+    return None
+
+
 @register
 class SummaryPlugin(Plugin):
     key = "sum"
@@ -322,6 +349,12 @@ class SummaryPlugin(Plugin):
         self._tasks.clear()
         if ctx.log:
             await ctx.log("info", "[sum] 已停止")
+
+    async def on_message(self, ctx: PluginContext, event: Any) -> None:
+        args = _loose_command_args(_event_text(event), self._command, _command_prefix())
+        if args is None:
+            return
+        await self._cmd_sum(ctx.client, event, args, ctx.account_id, ctx)
 
     async def _cmd_sum(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
         try:
