@@ -22,7 +22,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -139,6 +139,13 @@ def _bool(value: Any, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "n", "off", "关闭", "关", "否", ""}:
         return False
     return default
+
+
+def _plain_secret(value: Any) -> str:
+    secret = str(value or "").strip()
+    if len(secret) >= 3 and set(secret) <= {"*", "•"}:
+        return ""
+    return secret
 
 
 def _format_date(value: datetime | int | float | None = None) -> str:
@@ -426,6 +433,26 @@ class SummaryPlugin(Plugin):
         db.ai_config.reply_mode = _bool(cfg.get("reply_mode"), db.ai_config.reply_mode)
         db.ai_config.max_output_length = max(0, _int(cfg.get("max_output_length"), db.ai_config.max_output_length))
         db.default_push_target = str(cfg.get("default_push_target") or db.default_push_target or "")
+        for name in ("openai", "gemini"):
+            provider = db.ai_config.providers.get(name)
+            if provider:
+                base_url = str(cfg.get(f"{name}_base_url") or "").strip()
+                model = str(cfg.get(f"{name}_model") or "").strip()
+                api_key = _plain_secret(cfg.get(f"{name}_api_key"))
+                if base_url:
+                    provider.base_url = base_url.rstrip("/")
+                if model:
+                    provider.model = model
+                if api_key:
+                    provider.api_key = api_key
+        telepilot = db.ai_config.providers.get("telepilot")
+        if telepilot:
+            fixed_provider = str(cfg.get("telepilot_provider") or "").strip()
+            model_override = str(cfg.get("telepilot_model") or "").strip()
+            if fixed_provider:
+                telepilot.base_url = fixed_provider
+            if model_override:
+                telepilot.model = model_override
         providers_json = str(cfg.get("providers_json") or "").strip()
         if providers_json:
             try:
@@ -1162,7 +1189,7 @@ class SummaryPlugin(Plugin):
                 lines.append(f"<b>{_html(provider.name or key)}</b> ({_code(key)})")
                 lines.append(f"类型: {_code(provider.type)}")
                 if provider.type == "telepilot":
-                    lines.append(f"Provider: {_code(provider.base_url or '自动选择')}")
+                    lines.append(f"Provider: {_code(provider.base_url or '自动路由')}")
                     lines.append(f"Model 覆盖: {_code(provider.model or '使用平台默认')}")
                     lines.append("API Key: 使用 TelePilot 内置配置")
                 else:
@@ -1178,6 +1205,9 @@ class SummaryPlugin(Plugin):
             lines.append(f"回复模式: {'开启' if db.ai_config.reply_mode else '关闭'}")
             lines.append(f"最大输出: {db.ai_config.max_output_length or '不限制'}")
             await self._edit_or_reply(event, "\n".join(lines), parse_mode="html")
+            return
+        if action in {"providers", "provider", "llm"}:
+            await self._list_telepilot_providers(event)
             return
         if action == "add":
             await self._config_add(event, args[1:], db)
@@ -1197,6 +1227,47 @@ class SummaryPlugin(Plugin):
             await self._edit_or_reply(event, f"✅ 已删除配置 {_code(name)}", parse_mode="html")
             return
         await self._edit_or_reply(event, self._help_text(), parse_mode="html")
+
+    async def _list_telepilot_providers(self, event: Any) -> None:
+        try:
+            from sqlalchemy import select
+
+            from app.db.models.command import LLMProvider
+            from app.db.session import AsyncSessionLocal
+            from app.services.llm_dto import LLMProviderDTO
+        except Exception:
+            await self._edit_or_reply(event, "❌ 当前 TelePilot 版本不支持读取内置 LLM Provider。")
+            return
+
+        async with AsyncSessionLocal() as session:
+            rows = list((await session.execute(select(LLMProvider).order_by(LLMProvider.id.asc()))).scalars().all())
+        providers = []
+        for row in rows:
+            try:
+                providers.append(LLMProviderDTO.from_orm_row(row))
+            except Exception:
+                continue
+        if not providers:
+            await self._edit_or_reply(event, "❌ TelePilot 尚未配置任何 LLM Provider。")
+            return
+
+        prefix = _command_prefix()
+        cmd = self._command
+        lines = [
+            "🤖 TelePilot 可用 LLM Provider",
+            "",
+            f"自动路由无需选择；如需固定某个 Provider，使用：{_code(f'{prefix}{cmd} config set telepilot provider <ID或名称>')}",
+            f"恢复自动路由：{_code(f'{prefix}{cmd} config set telepilot provider auto')}",
+            "",
+        ]
+        for provider in providers:
+            tags = ",".join(provider.tags or []) or "-"
+            ready = "可用" if provider.has_api_key else "未配置 API Key"
+            lines.append(f"{_code(provider.id)} <b>{_html(provider.name or '-')}</b>")
+            lines.append(f"类型: {_code(provider.provider)} · 默认模型: {_code(provider.default_model or '-')}")
+            lines.append(f"标签: {_code(tags)} · 成本档: {_code(provider.cost_tier)} · {ready}")
+            lines.append("")
+        await self._edit_or_reply(event, "\n".join(lines).strip(), parse_mode="html")
 
     async def _config_add(self, event: Any, args: list[str], db: SummaryDB) -> None:
         if not args:
@@ -1274,7 +1345,10 @@ class SummaryPlugin(Plugin):
             elif prop == "model":
                 provider.model = value
             elif prop in {"url", "provider", "provider_id"}:
-                provider.base_url = value
+                if provider.type == "telepilot" and value.strip().lower() in {"auto", "reset", "clear", "default", "自动", "默认", "清空"}:
+                    provider.base_url = ""
+                else:
+                    provider.base_url = value
             else:
                 await self._edit_or_reply(event, "❌ 无效属性，支持 key/model/url/provider")
                 return
@@ -1305,10 +1379,13 @@ class SummaryPlugin(Plugin):
 
 <b>AI 配置：</b>
 {_code(f"{prefix}{cmd} config list")}
-{_code(f"{prefix}{cmd} config set default telepilot")} - 使用 TelePilot 内置 AI
-{_code(f"{prefix}{cmd} config set telepilot provider <Provider ID或名称>")} - 指定内置 AI Provider
+{_code(f"{prefix}{cmd} config providers")} - 查看 TelePilot 可固定的 Provider
+{_code(f"{prefix}{cmd} config set default telepilot")} - 使用 TelePilot 自动路由
+{_code(f"{prefix}{cmd} config set telepilot provider <Provider ID或名称>")} - 固定内置 AI Provider
+{_code(f"{prefix}{cmd} config set telepilot provider auto")} - 恢复自动路由
 {_code(f"{prefix}{cmd} config set telepilot model <模型ID>")} - 可选覆盖模型
-{_code(f"{prefix}{cmd} config add openai sk-xxx")}
+{_code(f"{prefix}{cmd} config set openai key sk-xxx")} / {_code(f"{prefix}{cmd} config set openai model gpt-4o")}
+{_code(f"{prefix}{cmd} config set gemini key <API Key>")} / {_code(f"{prefix}{cmd} config set gemini model gemini-2.5-flash")}
 {_code(f"{prefix}{cmd} config add deepseek openai https://api.deepseek.com deepseek-chat")}
 {_code(f"{prefix}{cmd} config set <名称> key|model|url <值>")}
 {_code(f"{prefix}{cmd} config set default <名称>")}

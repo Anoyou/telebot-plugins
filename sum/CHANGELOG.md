@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.3 (2026-05-26)
+- 在配置页补充模块内 OpenAI/Gemini 的 API Key、Base URL、Model 字段，选择对应调用方式后无需再猜命令。
+- 增加 AI 配置说明，明确 TelePilot 自动路由不需要选择具体 Provider，固定 Provider 属于高级用法。
+- 新增 `sum config providers` 查看 TelePilot 已配置 LLM Provider，并支持 `sum config set telepilot provider auto` 恢复自动路由。
+
 ## 1.1.2 (2026-05-26)
 - 修复当前群 ID 被当作字符串用户名解析的问题，避免 `.sum 100` 在 `-100...` 群组里报 `Cannot find any entity`。
 - TelePilot 内置 AI 默认改为调用平台官方 AI 路由，根据 Provider 标签、API Key 状态和成本档自动选择模型。
