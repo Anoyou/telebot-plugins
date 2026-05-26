@@ -1,9 +1,9 @@
 """九宫格骰子竞猜远程插件。
 
 玩法：
-  1. 一局生成 9 组（每组 6 颗）骰子结果，以九宫格展示。
+  1. 一局生成 9 组（每组 6 颗）骰子结果；以九宫格展示。
   2. 仅公布一个目标总点数（该点数在 9 组中唯一）。
-  3. 群友回复 1-9 抢答对应格子，首个答对者获奖。
+  3. 群友回复 1-9 抢答对应格子；首个答对者获奖。
 """
 
 from __future__ import annotations
@@ -315,7 +315,7 @@ class DiceGridHuntPlugin(Plugin):
         self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
         self._round_message_template = (
             "<b>九宫格竞猜</b>\n"
-            "目标：<b>{target_sum}</b>，回 <code>1-9</code>\n"
+            "目标：<b>{target_sum}</b> · 回 <code>1-9</code>\n"
             "奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s"
         )
         self._in_progress_message_template = IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT
@@ -324,7 +324,7 @@ class DiceGridHuntPlugin(Plugin):
             "用时 {elapsed}s · 奖励 <b>+{prize}</b>"
         )
         self._timeout_message_template = (
-            "超时，答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>。"
+            "超时。答案是 <b>{answer_index}</b> · 点数和 <b>{target_sum}</b>。"
         )
         self._cancel_message_template = "已结束当前九宫格竞猜。"
         self._invalid_prize_message_template = INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT
@@ -375,7 +375,7 @@ class DiceGridHuntPlugin(Plugin):
         if ctx.log:
             await ctx.log(
                 "info",
-                f"[dice_grid_hunt] 已启动 v{MANIFEST.version}，指令：{self._command}，超时：{self._timeout}s",
+                f"[dice_grid_hunt] 已启动 v{MANIFEST.version}；指令：{self._command}；超时：{self._timeout}s",
             )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
@@ -400,7 +400,7 @@ class DiceGridHuntPlugin(Plugin):
         prize = int(payload.get("prize") or 100)
         timeout = int(payload.get("timeout") or self._timeout or 90)
         prefix = current_command_prefix()
-        return [{"type": "send_message", "text": f"🎯 九宫格竞猜入口已触发，奖励 +{prize}，限时 {timeout} 秒。发送 {prefix}{self._command} {prize} 开始本轮。"}]
+        return [{"type": "send_message", "text": f"🎯 九宫格竞猜入口已触发；奖励 +{prize}；限时 {timeout} 秒。发送 {prefix}{self._command} {prize} 开始本轮。"}]
 
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
@@ -656,7 +656,7 @@ class DiceGridHuntPlugin(Plugin):
         if ctx.log:
             await ctx.log(
                 "info",
-                f"[dice_grid_hunt] chat {chat_id} 超时，答案格：{rd.answer_index}，骰子：{_fmt_roll(answer_roll)}，点数和：{rd.target_sum}",
+                f"[dice_grid_hunt] chat {chat_id} 超时；答案格：{rd.answer_index}；骰子：{_fmt_roll(answer_roll)}；点数和：{rd.target_sum}",
             )
         if ctx.client and rd.message_id:
             await self._edit_round_message(

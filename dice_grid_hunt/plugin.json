@@ -1,9 +1,9 @@
 {
   "name": "dice_grid_hunt",
   "display_name": "九宫格骰子竞猜",
-  "description": "发送九宫格骰子图片，公布唯一目标点数，群内抢答格子赢奖励",
+  "description": "发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -25,7 +25,7 @@
   ],
   "config_schema": {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": false,
     "properties": {
       "command": {
@@ -65,12 +65,12 @@
       "template_placeholders": {
         "type": "string",
         "title": "可用占位符说明",
-        "default": "开局：{target_sum} 目标点数，{prize} 奖励，{timeout} 限时秒数，{guess_cooldown} 答题冷却。\n结果：{winner} 答对者，{answer_index} 正确格子，{elapsed} 用时秒数。\n指令：{command} 触发指令，{force_stop_command} 结束参数，{example} 示例奖励，{prefix} 系统前缀。\n\n旧版兼容：如果旧配置里仍有 {title}、{target_line}、{guide_line}、{reward_line}，它们会按内置旧模板展开：标题=九宫格竞猜；目标行=目标点数；引导行=回复 1-9；奖励行=奖励与超时。\n\n预览只使用固定示例值，不读取真实群消息，也不会触发发送。",
+        "default": "开局：{target_sum} 目标点数；{prize} 奖励；{timeout} 限时秒数；{guess_cooldown} 答题冷却。\n结果：{winner} 答对者；{answer_index} 正确格子；{elapsed} 用时秒数。\n指令：{command} 触发指令；{force_stop_command} 结束参数；{example} 示例奖励；{prefix} 系统前缀。\n\n旧版兼容：如果旧配置里仍有 {title}、{target_line}、{guide_line}、{reward_line}；它们会按内置旧模板展开：标题=九宫格竞猜；目标行=目标点数；引导行=回复 1-9；奖励行=奖励与超时。\n\n预览只使用固定示例值。不读取真实群消息；也不会触发发送。",
         "readOnly": true
       },
       "delete_after_round": {
         "type": "integer",
-        "title": "回合结束后删除消息延迟（秒，0为不删）",
+        "title": "回合结束后删除消息延迟（秒；0 表示不删除）",
         "default": 0,
         "minimum": 0,
         "maximum": 3600
@@ -85,58 +85,58 @@
       },
       "template_preview": {
         "type": "string",
-        "title": "模板渲染预览（只读，开局消息）",
-        "default": "<b>九宫格竞猜</b>\n目标：<b>17</b>，回 <code>1-9</code>\n奖 <b>+100</b> · 90s · 冷却 2.0s",
+        "title": "模板渲染预览（只读 - 开局消息）",
+        "default": "<b>九宫格竞猜</b>\n目标：<b>17</b> · 回 <code>1-9</code>\n奖 <b>+100</b> · 90s · 冷却 2.0s",
         "readOnly": true,
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。"
+        "description": "使用固定示例数据渲染最终消息。仅用于配置预览。"
       },
       "in_progress_preview": {
         "type": "string",
-        "title": "模板渲染预览（只读，进行中提示）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
-        "default": "上一局还没结束。继续猜，或发 <code>{prefix}dicegrid stop</code> 结束。",
+        "title": "模板渲染预览（只读 - 进行中提示）",
+        "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
+        "default": "上一局还没结束。继续猜；或发 <code>{prefix}dicegrid stop</code> 结束。",
         "readOnly": true
       },
       "success_preview": {
         "type": "string",
-        "title": "模板渲染预览（只读，答对结果）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+        "title": "模板渲染预览（只读 - 答对结果）",
+        "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
         "default": "小明 答对：<b>6</b>\n用时 8.2s · 奖励 <b>+100</b>",
         "readOnly": true
       },
       "timeout_preview": {
         "type": "string",
-        "title": "模板渲染预览（只读，超时结果）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
-        "default": "超时，答案是 <b>6</b>，点数和 <b>17</b>。",
+        "title": "模板渲染预览（只读 - 超时结果）",
+        "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
+        "default": "超时。答案是 <b>6</b> · 点数和 <b>17</b>。",
         "readOnly": true
       },
       "cancel_preview": {
         "type": "string",
-        "title": "模板渲染预览（只读，强制结束）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+        "title": "模板渲染预览（只读 - 强制结束）",
+        "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
         "default": "已结束当前九宫格竞猜。",
         "readOnly": true
       },
       "invalid_prize_preview": {
         "type": "string",
-        "title": "模板渲染预览（只读，奖励参数错误）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
-        "default": "请指定奖励金额，例如：{prefix}dicegrid 100",
+        "title": "模板渲染预览（只读 - 奖励参数错误）",
+        "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
+        "default": "请指定奖励金额。例：{prefix}dicegrid 100",
         "readOnly": true
       },
       "prize_preview": {
         "type": "string",
-        "title": "模板渲染预览（只读，奖励入账消息）",
-        "description": "使用固定示例数据渲染最终消息，仅用于配置预览。",
+        "title": "模板渲染预览（只读 - 奖励入账消息）",
+        "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
         "default": "+100",
         "readOnly": true
       },
       "round_message_template": {
         "type": "string",
         "title": "开局消息模板",
-        "description": "支持占位符：{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}、{prefix}。旧配置中的 {title}、{target_line}、{guide_line}、{reward_line} 仍会兼容展开，但新模板建议直接写完整文案。",
-        "default": "<b>九宫格竞猜</b>\n目标：<b>{target_sum}</b>，回 <code>1-9</code>\n奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s",
+        "description": "支持占位符：{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}、{prefix}。旧配置中的 {title}、{target_line}、{guide_line}、{reward_line} 仍会兼容展开；新模板建议直接写完整文案。",
+        "default": "<b>九宫格竞猜</b>\n目标：<b>{target_sum}</b> · 回 <code>1-9</code>\n奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s",
         "minLength": 1,
         "maxLength": 1200
       },
@@ -144,7 +144,7 @@
         "type": "string",
         "title": "进行中提示模板",
         "description": "支持占位符：{prefix}、{command}、{force_stop_command}",
-        "default": "上一局还没结束。继续猜，或发 <code>{prefix}{command} {force_stop_command}</code> 结束。",
+        "default": "上一局还没结束。继续猜；或发 <code>{prefix}{command} {force_stop_command}</code> 结束。",
         "minLength": 1,
         "maxLength": 800
       },
@@ -160,7 +160,7 @@
         "type": "string",
         "title": "超时结果模板",
         "description": "支持占位符：{answer_index}、{target_sum}",
-        "default": "超时，答案是 <b>{answer_index}</b>，点数和 <b>{target_sum}</b>。",
+        "default": "超时。答案是 <b>{answer_index}</b> · 点数和 <b>{target_sum}</b>。",
         "minLength": 1,
         "maxLength": 800
       },
@@ -176,7 +176,7 @@
         "type": "string",
         "title": "奖励参数错误模板",
         "description": "支持占位符：{prefix}、{command}、{example}",
-        "default": "请指定奖励金额，例如：{prefix}{command} {example}",
+        "default": "请指定奖励金额。例：{prefix}{command} {example}",
         "minLength": 1,
         "maxLength": 400
       },
