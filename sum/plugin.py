@@ -22,7 +22,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.3"
+VERSION = "1.1.4"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -289,6 +289,46 @@ def _telegram_target(value: Any) -> Any:
     return value
 
 
+def _target_candidates(*values: Any) -> list[Any]:
+    out: list[Any] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                add(item)
+            return
+        if isinstance(value, str) and not value.strip():
+            return
+        key = (type(value).__name__, str(value))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(value)
+
+    for value in values:
+        add(value)
+    return out
+
+
+def _is_entity_lookup_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return (
+        "Cannot find any entity corresponding" in text
+        or "Could not find the input entity" in text
+    )
+
+
+def _chat_lookup_error(chat_id: Any, exc: BaseException) -> RuntimeError:
+    return RuntimeError(
+        f"无法解析聊天 {chat_id}。请确认当前账号仍在该群/频道内；"
+        "如果是定时任务，请优先使用公开 @用户名或 t.me 链接创建任务。"
+        f"原始错误：{exc}"
+    )
+
+
 @register
 class SummaryPlugin(Plugin):
     key = "sum"
@@ -529,8 +569,8 @@ class SummaryPlugin(Plugin):
             return
 
         await self._edit_or_reply(event, "⏳ 正在获取消息并总结...")
-        chat_target = await self._event_chat_target(event, chat_id)
-        message_data = await self._get_group_messages(ctx, chat_id, count, target=chat_target)
+        chat_targets = await self._event_chat_targets(event, chat_id)
+        message_data = await self._get_group_messages(ctx, chat_id, count, target=chat_targets)
         if not message_data:
             await self._edit_or_reply(event, "❌ 未找到可总结的消息")
             return
@@ -540,7 +580,7 @@ class SummaryPlugin(Plugin):
             id="temp",
             cron="",
             chat_id=chat_id,
-            chat_display=await self._chat_display(ctx, chat_id, target=chat_target),
+            chat_display=await self._chat_display(ctx, chat_id, target=chat_targets),
             message_count=count,
             ai_provider=provider or db.ai_config.default_provider,
             created_at=str(int(time.time() * 1000)),
@@ -553,24 +593,35 @@ class SummaryPlugin(Plugin):
 
         summary_text, need_html = self._build_summary_text(task, str(result["result"]), db)
         if db.ai_config.reply_mode:
-            await self._send_message(ctx, chat_target, summary_text, parse_mode="html" if need_html else None, reply_to=_event_message_id(event))
+            await self._send_message(ctx, chat_targets, summary_text, parse_mode="html" if need_html else None, reply_to=_event_message_id(event))
         else:
             await self._edit_or_reply(event, summary_text, parse_mode="html" if need_html else None)
 
     async def _event_chat_target(self, event: Any, fallback: Any) -> Any:
-        get_input_chat = getattr(event, "get_input_chat", None)
-        if callable(get_input_chat):
-            try:
-                target = await _maybe_await(get_input_chat())
+        targets = await self._event_chat_targets(event, fallback)
+        return targets[0] if targets else _telegram_target(fallback)
+
+    async def _event_chat_targets(self, event: Any, fallback: Any) -> list[Any]:
+        candidates: list[Any] = []
+        for source in (event, getattr(event, "message", None)):
+            if source is None:
+                continue
+            for method_name in ("get_input_chat", "get_chat"):
+                method = getattr(source, method_name, None)
+                if not callable(method):
+                    continue
+                try:
+                    target = await _maybe_await(method())
+                    if target is not None:
+                        candidates.append(target)
+                except Exception:
+                    pass
+            for attr in ("input_chat", "chat"):
+                target = getattr(source, attr, None)
                 if target is not None:
-                    return target
-            except Exception:
-                pass
-        for attr in ("input_chat", "chat"):
-            target = getattr(event, attr, None)
-            if target is not None:
-                return target
-        return _telegram_target(fallback)
+                    candidates.append(target)
+        candidates.append(fallback)
+        return _target_candidates(candidates)
 
     async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0, target: Any = None) -> list[MessageData]:
         if not ctx.client:
@@ -578,14 +629,28 @@ class SummaryPlugin(Plugin):
         get_messages = getattr(ctx.client, "get_messages", None)
         if not get_messages:
             raise RuntimeError("当前客户端没有读取消息能力")
-        messages = await _maybe_await(get_messages(_telegram_target(target if target is not None else chat_id), limit=count))
+        messages = None
+        used_target = None
+        last_lookup_error: BaseException | None = None
+        for candidate in _target_candidates(target, chat_id):
+            try:
+                messages = await _maybe_await(get_messages(_telegram_target(candidate), limit=count))
+                used_target = candidate
+                break
+            except Exception as exc:
+                if _is_entity_lookup_error(exc):
+                    last_lookup_error = exc
+                    continue
+                raise
+        if messages is None and last_lookup_error is not None:
+            raise _chat_lookup_error(chat_id, last_lookup_error) from last_lookup_error
         if messages is None:
             return []
         if not isinstance(messages, list):
             messages = list(messages)
 
         username = ""
-        entity = await self._safe_get_entity(ctx, target if target is not None else chat_id)
+        entity = await self._safe_get_entity(ctx, used_target if used_target is not None else chat_id)
         if entity is not None:
             username = str(getattr(entity, "username", "") or "")
 
@@ -839,7 +904,19 @@ class SummaryPlugin(Plugin):
     async def _send_message(self, ctx: PluginContext, chat_id: Any, text: str, **kwargs: Any) -> Any:
         if not ctx.client:
             raise RuntimeError("Telegram 客户端未初始化")
-        return await ctx.client.send_message(_telegram_target(chat_id), text, **{k: v for k, v in kwargs.items() if v is not None})
+        clean_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        last_lookup_error: BaseException | None = None
+        for target in _target_candidates(chat_id):
+            try:
+                return await ctx.client.send_message(_telegram_target(target), text, **clean_kwargs)
+            except Exception as exc:
+                if _is_entity_lookup_error(exc):
+                    last_lookup_error = exc
+                    continue
+                raise
+        if last_lookup_error is not None:
+            raise _chat_lookup_error(chat_id, last_lookup_error) from last_lookup_error
+        raise RuntimeError("无法识别发送目标")
 
     async def _edit_or_reply(self, event: Any, text: str, *, parse_mode: str | None = None) -> None:
         try:
@@ -874,7 +951,8 @@ class SummaryPlugin(Plugin):
         count = max(1, min(_int(args[0], 50) if args else 50, _int(self._cfg.get("max_fetch_count"), 300)))
         chat_id = str(_event_chat_id(event))
         await self._edit_or_reply(event, "⏳ 正在获取消息...")
-        data = await self._get_group_messages(ctx, chat_id, count)
+        chat_targets = await self._event_chat_targets(event, chat_id)
+        data = await self._get_group_messages(ctx, chat_id, count, target=chat_targets)
         if not data:
             await self._edit_or_reply(event, "❌ 未找到消息")
             return

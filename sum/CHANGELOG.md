@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.4 (2026-05-26)
+- 修复快捷总结当前群时 Telethon 偶发无法用裸 `-100...` 群 ID 找到实体的问题，优先复用命令事件自带的 InputPeer/Chat。
+- `sum debug` 与总结结果回发同样使用当前事件实体候选，减少 `Cannot find any entity` 报错。
+- 当定时任务仍无法解析目标群时，错误提示改为说明账号入群状态和公开用户名/链接要求。
+
 ## 1.1.3 (2026-05-26)
 - 在配置页补充模块内 OpenAI/Gemini 的 API Key、Base URL、Model 字段，选择对应调用方式后无需再猜命令。
 - 增加 AI 配置说明，明确 TelePilot 自动路由不需要选择具体 Provider，固定 Provider 属于高级用法。
