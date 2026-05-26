@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.7 (2026-05-26)
+- 修复 Telethon 事件懒加载聊天属性内部触发 `client.get_entity` 导致 installed 插件沙箱报错的问题。
+- 事件目标解析改为只读取已存在的原始属性，读取失败直接回退到当前 `chat_id`。
+- 群名展示辅助不再调用 Telegram 客户端解析接口，避免影响 `.sum 100` 主流程。
+
 ## 1.1.6 (2026-05-26)
 - 修复 installed 插件沙箱下调用 `client.get_entity` 被权限拦截的问题。
 - 移除定时任务兜底解析里的 `iter_dialogs/get_dialogs` 调用，严格只使用 Manifest 已声明的 `read_chat` 能力范围。

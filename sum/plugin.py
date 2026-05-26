@@ -20,7 +20,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.6"
+VERSION = "1.1.7"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -259,6 +259,13 @@ def _target_candidates(*values: Any) -> list[Any]:
     for value in values:
         add(value)
     return out
+
+
+def _safe_attr(obj: Any, name: str, default: Any = None) -> Any:
+    try:
+        return getattr(obj, name, default)
+    except Exception:
+        return default
 
 
 def _is_entity_lookup_error(exc: BaseException) -> bool:
@@ -600,43 +607,15 @@ class SummaryPlugin(Plugin):
         for source in (event, getattr(event, "message", None)):
             if source is None:
                 continue
-            for method_name in ("get_input_chat", "get_chat"):
-                method = getattr(source, method_name, None)
-                if not callable(method):
-                    continue
-                try:
-                    target = await _maybe_await(method())
-                    if target is not None:
-                        candidates.append(target)
-                except Exception:
-                    pass
             for attr in ("input_chat", "chat"):
-                target = getattr(source, attr, None)
+                target = _safe_attr(source, attr, None)
                 if target is not None:
                     candidates.append(target)
         candidates.append(fallback)
         return _target_candidates(candidates)
 
     async def _client_chat_targets(self, ctx: PluginContext, target: Any) -> list[Any]:
-        if not ctx.client:
-            return []
-        if _is_placeholder_chat_identifier(target):
-            return []
-        get_chat = getattr(ctx.client, "get_chat", None)
-        if not callable(get_chat):
-            return []
-        out: list[Any] = []
-        for candidate in _target_candidates(target):
-            try:
-                chat = await _maybe_await(get_chat(_telegram_target(candidate)))
-            except Exception:
-                continue
-            if chat is not None:
-                out.append(chat)
-                input_entity = getattr(chat, "input_entity", None)
-                if input_entity is not None:
-                    out.append(input_entity)
-        return _target_candidates(out)
+        return []
 
     async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0, target: Any = None) -> list[MessageData]:
         if not ctx.client:
@@ -676,9 +655,7 @@ class SummaryPlugin(Plugin):
             messages = list(messages)
 
         username = ""
-        entity = await self._safe_get_chat(ctx, used_target if used_target is not None else chat_id)
-        if entity is not None:
-            username = str(getattr(entity, "username", "") or "")
+        username = str(_safe_attr(used_target, "username", "") or "")
 
         start_ts = time.time() - hours * 3600 if hours else 0
         rows: list[MessageData] = []
@@ -720,16 +697,6 @@ class SummaryPlugin(Plugin):
         return rows
 
     async def _safe_get_chat(self, ctx: PluginContext, target: Any) -> Any:
-        if not ctx.client:
-            return None
-        get_chat = getattr(ctx.client, "get_chat", None)
-        if not callable(get_chat):
-            return None
-        for candidate in _target_candidates(target):
-            try:
-                return await _maybe_await(get_chat(_telegram_target(candidate)))
-            except Exception:
-                continue
         return None
 
     async def _chat_display(self, ctx: PluginContext, chat_id: str, *, target: Any = None) -> str:
