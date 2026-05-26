@@ -1,5 +1,12 @@
 # 更新日志
 
+## 1.1.9 (2026-05-26)
+- 新增结果输出模板 `message_template` 配置项，可自定义总结结果消息格式。
+- 新增 `template_placeholders` 与 `template_preview` 只读字段，按 TelePilot 通用模板预览规则展示占位符说明和渲染预览。
+- 总结发送逻辑改为统一按模板渲染，支持 `{summary}`、`{chat_display}`、`{chat_id}`、`{time}`、`{message_count}` 占位符。
+- TelePilot 模型下拉新增文本模型约束，避免在总结模块里误选 `gpt-image-*` 一类图像模型。
+- 最低 TelePilot 版本提升到 `0.24.2`，确保插件独立配置页可正确加载 Provider/Model 下拉和模板预览示例。
+
 ## 1.1.8 (2026-05-26)
 - 声明 TelePilot 新增的 `resolve_entity` 能力，配合平台沙箱按需放行 `client.get_entity`，修复 `.sum 100` 在真实事件流程中仍被权限拦截的问题。
 - 配置页 Provider 和 Model 字段改为动态下拉选择，不再要求手动输入 Provider ID 或模型名。

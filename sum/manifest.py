@@ -54,6 +54,35 @@ CONFIG_SCHEMA = {
             "default": "",
             "x-ui-widget": "llm-model-select",
             "x-ui-provider-field": "telepilot_provider",
+            "x-ui-model-modality": "text",
+        },
+        "template_placeholders": {
+            "type": "string",
+            "title": "结果模板占位符（只读）",
+            "readOnly": True,
+            "default": (
+                "{summary} 总结正文（保留 AI 返回的 HTML）\n"
+                "{chat_display} 聊天显示名（回退 chat_id）\n"
+                "{chat_id} 聊天 ID\n"
+                "{time} 生成时间（yyyy-mm-dd HH:MM）\n"
+                "{message_count} 本次总结消息数"
+            ),
+        },
+        "message_template": {
+            "type": "string",
+            "title": "结果输出模板",
+            "description": "支持占位符：{summary}、{chat_display}、{chat_id}、{time}、{message_count}",
+            "default": "📊 群组总结\n来源: {chat_display}\n时间: {time}\n数量: {message_count}\n\n{summary}",
+            "x-ui-widget": "textarea",
+            "minLength": 1,
+            "maxLength": 8000,
+        },
+        "template_preview": {
+            "type": "string",
+            "title": "结果模板预览（只读）",
+            "description": "使用固定示例值渲染最终消息，仅用于配置预览。",
+            "readOnly": True,
+            "default": "📊 群组总结\n来源: {chat_display}\n时间: {time}\n数量: {message_count}\n\n{summary}",
         },
         "default_prompt": {
             "type": "string",
@@ -107,6 +136,7 @@ CONFIG_SCHEMA = {
         "command",
         "default_count",
         "max_fetch_count",
+        "message_template",
         "default_prompt",
         "default_spoiler",
         "timeout_seconds",
@@ -121,8 +151,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.8",
-    min_telepilot_version="0.24.1",
+    version="1.1.9",
+    min_telepilot_version="0.24.2",
     author="Anoyou",
     description="调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
     permissions=["send_message", "edit_message", "read_chat", "resolve_entity"],

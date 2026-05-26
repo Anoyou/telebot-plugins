@@ -20,10 +20,17 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.8"
+VERSION = "1.1.9"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
+SUMMARY_MESSAGE_TEMPLATE_DEFAULT = (
+    "📊 群组总结\n"
+    "来源: {chat_display}\n"
+    "时间: {time}\n"
+    "数量: {message_count}\n\n"
+    "{summary}"
+)
 
 
 @dataclass
@@ -35,6 +42,7 @@ class AIConfig:
     max_output_length: int = 0
     telepilot_provider: str = ""
     telepilot_model: str = ""
+    message_template: str = SUMMARY_MESSAGE_TEMPLATE_DEFAULT
 
 
 @dataclass
@@ -390,6 +398,7 @@ class SummaryPlugin(Plugin):
         db.ai_config.max_output_length = _int(ai.get("max_output_length"), db.ai_config.max_output_length)
         db.ai_config.telepilot_provider = str(ai.get("telepilot_provider") or "")
         db.ai_config.telepilot_model = str(ai.get("telepilot_model") or "")
+        db.ai_config.message_template = str(ai.get("message_template") or db.ai_config.message_template)
         old_telepilot = (ai.get("providers") or {}).get("telepilot") if isinstance(ai.get("providers"), dict) else None
         if isinstance(old_telepilot, dict):
             db.ai_config.telepilot_provider = db.ai_config.telepilot_provider or str(
@@ -412,6 +421,7 @@ class SummaryPlugin(Plugin):
                 "max_output_length": db.ai_config.max_output_length,
                 "telepilot_provider": db.ai_config.telepilot_provider,
                 "telepilot_model": db.ai_config.telepilot_model,
+                "message_template": db.ai_config.message_template,
             },
             "defaultPushTarget": db.default_push_target,
         }
@@ -427,6 +437,7 @@ class SummaryPlugin(Plugin):
         db.default_push_target = str(cfg.get("default_push_target") or db.default_push_target or "")
         db.ai_config.telepilot_provider = str(cfg.get("telepilot_provider") or db.ai_config.telepilot_provider or "").strip()
         db.ai_config.telepilot_model = str(cfg.get("telepilot_model") or db.ai_config.telepilot_model or "").strip()
+        db.ai_config.message_template = str(cfg.get("message_template") or db.ai_config.message_template or "").strip() or SUMMARY_MESSAGE_TEMPLATE_DEFAULT
         self._merge_configured_tasks(db, cfg.get("scheduled_tasks_json"))
 
     def _merge_configured_tasks(self, db: SummaryDB, raw_value: Any) -> None:
@@ -840,9 +851,25 @@ class SummaryPlugin(Plugin):
         use_spoiler = bool(task.use_spoiler)
         if use_spoiler and "<blockquote expandable>" not in content:
             content = f"<blockquote expandable>{content}</blockquote>"
-        header = f"📊 群组总结\n来源: {task.chat_display or _html(task.chat_id)}\n时间: {_format_date()}\n\n"
-        need_html = use_spoiler or "<" in content
-        return header + content, need_html
+        values = {
+            "summary": content,
+            "chat_id": str(task.chat_id),
+            "chat_display": task.chat_display or task.chat_id,
+            "time": _format_date(),
+            "message_count": str(max(1, int(task.message_count or 1))),
+        }
+        rendered = self._render_message_template(db.ai_config.message_template, values)
+        need_html = use_spoiler or "<" in rendered
+        return rendered, need_html
+
+    @staticmethod
+    def _render_message_template(template: str, values: dict[str, str]) -> str:
+        raw = (template or "").strip() or SUMMARY_MESSAGE_TEMPLATE_DEFAULT
+        return re.sub(
+            r"\{([a-zA-Z0-9_]+)\}",
+            lambda m: values.get(m.group(1), m.group(0)),
+            raw,
+        )
 
     async def _send_message(self, ctx: PluginContext, chat_id: Any, text: str, **kwargs: Any) -> Any:
         if not ctx.client:
