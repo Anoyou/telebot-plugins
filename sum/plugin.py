@@ -22,7 +22,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -157,9 +157,17 @@ def _command_prefix() -> str:
 
 def _event_chat_id(event: Any) -> int:
     raw = getattr(event, "chat_id", None)
+    if isinstance(raw, int):
+        return int(raw)
     channel_id = getattr(raw, "channel_id", None)
     if channel_id is not None:
-        return int(channel_id)
+        return int(f"-100{channel_id}")
+    chat_id = getattr(raw, "chat_id", None)
+    if chat_id is not None:
+        return -int(chat_id)
+    user_id = getattr(raw, "user_id", None)
+    if user_id is not None:
+        return int(user_id)
     return int(raw or 0)
 
 
@@ -260,6 +268,17 @@ def _default_db() -> SummaryDB:
 async def _maybe_await(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
+    return value
+
+
+def _telegram_target(value: Any) -> Any:
+    if isinstance(value, str):
+        target = value.strip()
+        if re.fullmatch(r"-?\d+", target):
+            return int(target)
+        if target.startswith("@"):
+            return target[1:]
+        return target
     return value
 
 
@@ -483,7 +502,8 @@ class SummaryPlugin(Plugin):
             return
 
         await self._edit_or_reply(event, "⏳ 正在获取消息并总结...")
-        message_data = await self._get_group_messages(ctx, chat_id, count)
+        chat_target = await self._event_chat_target(event, chat_id)
+        message_data = await self._get_group_messages(ctx, chat_id, count, target=chat_target)
         if not message_data:
             await self._edit_or_reply(event, "❌ 未找到可总结的消息")
             return
@@ -493,7 +513,7 @@ class SummaryPlugin(Plugin):
             id="temp",
             cron="",
             chat_id=chat_id,
-            chat_display=await self._chat_display(ctx, chat_id),
+            chat_display=await self._chat_display(ctx, chat_id, target=chat_target),
             message_count=count,
             ai_provider=provider or db.ai_config.default_provider,
             created_at=str(int(time.time() * 1000)),
@@ -506,24 +526,39 @@ class SummaryPlugin(Plugin):
 
         summary_text, need_html = self._build_summary_text(task, str(result["result"]), db)
         if db.ai_config.reply_mode:
-            await self._send_message(ctx, chat_id, summary_text, parse_mode="html" if need_html else None, reply_to=_event_message_id(event))
+            await self._send_message(ctx, chat_target, summary_text, parse_mode="html" if need_html else None, reply_to=_event_message_id(event))
         else:
             await self._edit_or_reply(event, summary_text, parse_mode="html" if need_html else None)
 
-    async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0) -> list[MessageData]:
+    async def _event_chat_target(self, event: Any, fallback: Any) -> Any:
+        get_input_chat = getattr(event, "get_input_chat", None)
+        if callable(get_input_chat):
+            try:
+                target = await _maybe_await(get_input_chat())
+                if target is not None:
+                    return target
+            except Exception:
+                pass
+        for attr in ("input_chat", "chat"):
+            target = getattr(event, attr, None)
+            if target is not None:
+                return target
+        return _telegram_target(fallback)
+
+    async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0, target: Any = None) -> list[MessageData]:
         if not ctx.client:
             raise RuntimeError("Telegram 客户端未初始化")
         get_messages = getattr(ctx.client, "get_messages", None)
         if not get_messages:
             raise RuntimeError("当前客户端没有读取消息能力")
-        messages = await _maybe_await(get_messages(chat_id, limit=count))
+        messages = await _maybe_await(get_messages(_telegram_target(target if target is not None else chat_id), limit=count))
         if messages is None:
             return []
         if not isinstance(messages, list):
             messages = list(messages)
 
         username = ""
-        entity = await self._safe_get_entity(ctx, chat_id)
+        entity = await self._safe_get_entity(ctx, target if target is not None else chat_id)
         if entity is not None:
             username = str(getattr(entity, "username", "") or "")
 
@@ -573,12 +608,12 @@ class SummaryPlugin(Plugin):
         if not get_entity:
             return None
         try:
-            return await _maybe_await(get_entity(target))
+            return await _maybe_await(get_entity(_telegram_target(target)))
         except Exception:
             return None
 
-    async def _chat_display(self, ctx: PluginContext, chat_id: str) -> str:
-        entity = await self._safe_get_entity(ctx, chat_id)
+    async def _chat_display(self, ctx: PluginContext, chat_id: str, *, target: Any = None) -> str:
+        entity = await self._safe_get_entity(ctx, target if target is not None else chat_id)
         if not entity:
             return chat_id
         parts = []
@@ -684,6 +719,7 @@ class SummaryPlugin(Plugin):
             from app.db.session import AsyncSessionLocal
             from app.services.llm_dto import LLMProviderDTO
             from app.services.llm_invoke import invoke as invoke_ai_runtime
+            from app.services.llm_router import pick_provider as pick_ai_provider
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError("当前 TelePilot 版本未暴露内置 AI runtime，请继续使用 OpenAI/Gemini 配置") from exc
 
@@ -702,7 +738,23 @@ class SummaryPlugin(Plugin):
         if not provider_dtos:
             raise RuntimeError("TelePilot LLM Provider 配置不可用")
 
-        primary = self._select_telepilot_provider(provider, provider_dtos)
+        matched_tag = "long_context"
+        if (provider.base_url or "").strip():
+            primary = self._select_telepilot_provider(provider, provider_dtos)
+            matched_tag = None
+        else:
+            provider_payloads = {
+                provider_id: {**dto.to_dict(), "api_key_enc": getattr(dto, "api_key_enc", None)}
+                for provider_id, dto in provider_dtos.items()
+            }
+            decision = await pick_ai_provider(
+                messages,
+                None,
+                False,
+                provider_payloads,
+            )
+            primary = provider_dtos[int(decision.provider_id)]
+            matched_tag = decision.matched_tag
         override_model = provider.model.strip() or None
         user_prompt = f"{prompt}\n\n{messages}"
         result, used_provider, _ = await invoke_ai_runtime(
@@ -715,7 +767,7 @@ class SummaryPlugin(Plugin):
             timeout_seconds=max(10, timeout_ms // 1000),
             account_id=ctx.account_id,
             source="plugin:sum",
-            matched_tag="long_context",
+            matched_tag=matched_tag,
         )
         text = str(getattr(result, "text", "") or "").strip()
         if not text:
@@ -760,7 +812,7 @@ class SummaryPlugin(Plugin):
     async def _send_message(self, ctx: PluginContext, chat_id: Any, text: str, **kwargs: Any) -> Any:
         if not ctx.client:
             raise RuntimeError("Telegram 客户端未初始化")
-        return await ctx.client.send_message(chat_id, text, **{k: v for k, v in kwargs.items() if v is not None})
+        return await ctx.client.send_message(_telegram_target(chat_id), text, **{k: v for k, v in kwargs.items() if v is not None})
 
     async def _edit_or_reply(self, event: Any, text: str, *, parse_mode: str | None = None) -> None:
         try:
