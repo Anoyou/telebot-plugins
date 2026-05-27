@@ -20,7 +20,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.11"
+VERSION = "1.1.12"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -121,6 +121,22 @@ def _format_date(value: datetime | int | float | None = None) -> str:
     else:
         dt = datetime.fromtimestamp(float(value))
     return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _duration_to_seconds(raw: str) -> int:
+    text = str(raw or "").strip().lower()
+    match = re.fullmatch(r"(\d+)([mhd])", text)
+    if not match:
+        return 0
+    value = int(match.group(1))
+    unit = match.group(2)
+    if value <= 0:
+        return 0
+    if unit == "m":
+        return value * 60
+    if unit == "h":
+        return value * 3600
+    return value * 86400
 
 
 def _command_prefix() -> str:
@@ -371,7 +387,7 @@ class SummaryPlugin(Plugin):
             if sub == "config":
                 await self._config_command(event, rest, ctx)
                 return
-            if sub.isdigit():
+            if sub.isdigit() or _duration_to_seconds(sub) > 0 or sub == "--time":
                 await self._quick_summary(event, args, ctx)
                 return
 
@@ -575,9 +591,27 @@ class SummaryPlugin(Plugin):
     async def _quick_summary(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         count = max(1, _int(self._cfg.get("default_count"), 100))
         max_count = max(10, _int(self._cfg.get("max_fetch_count"), 300))
-        for arg in args:
-            if str(arg).isdigit():
+        since_seconds = 0
+        i = 0
+        while i < len(args):
+            arg = str(args[i]).strip().lower()
+            if arg == "--time":
+                if i + 1 >= len(args):
+                    await self._edit_or_reply(event, "❌ --time 需要跟时间段，例如 1h / 1d / 30m")
+                    return
+                since_seconds = _duration_to_seconds(args[i + 1])
+                if since_seconds <= 0:
+                    await self._edit_or_reply(event, "❌ 时间段格式无效，支持 30m / 1h / 1d")
+                    return
+                i += 2
+                continue
+            if arg.isdigit():
                 count = _int(arg, count)
+            else:
+                duration_seconds = _duration_to_seconds(arg)
+                if duration_seconds > 0:
+                    since_seconds = duration_seconds
+            i += 1
         count = min(max(1, count), max_count)
         chat_id = str(_event_chat_id(event))
         if not chat_id or chat_id == "0":
@@ -586,7 +620,7 @@ class SummaryPlugin(Plugin):
 
         await self._edit_or_reply(event, "⏳ 正在获取消息并总结...")
         chat_targets = await self._event_chat_targets(event, chat_id)
-        message_data = await self._get_group_messages(ctx, chat_id, count, target=chat_targets)
+        message_data = await self._get_group_messages(ctx, chat_id, count, since_seconds=since_seconds, target=chat_targets)
         if not message_data:
             await self._edit_or_reply(event, "❌ 未找到可总结的消息")
             return
@@ -597,7 +631,7 @@ class SummaryPlugin(Plugin):
             cron="",
             chat_id=chat_id,
             chat_display=await self._chat_display(ctx, chat_id, target=chat_targets),
-            message_count=count,
+            message_count=len(message_data),
             created_at=str(int(time.time() * 1000)),
             use_spoiler=db.ai_config.default_spoiler,
         )
@@ -628,7 +662,7 @@ class SummaryPlugin(Plugin):
     async def _client_chat_targets(self, ctx: PluginContext, target: Any) -> list[Any]:
         return []
 
-    async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0, target: Any = None) -> list[MessageData]:
+    async def _get_group_messages(self, ctx: PluginContext, chat_id: str, count: int, *, hours: int = 0, since_seconds: int = 0, target: Any = None) -> list[MessageData]:
         if not ctx.client:
             raise RuntimeError("Telegram 客户端未初始化")
         get_messages = getattr(ctx.client, "get_messages", None)
@@ -668,7 +702,7 @@ class SummaryPlugin(Plugin):
         username = ""
         username = str(_safe_attr(used_target, "username", "") or "")
 
-        start_ts = time.time() - hours * 3600 if hours else 0
+        start_ts = time.time() - since_seconds if since_seconds > 0 else (time.time() - hours * 3600 if hours else 0)
         rows: list[MessageData] = []
         for message in messages:
             msg_text = str(getattr(message, "message", None) or getattr(message, "raw_text", None) or "")
@@ -1308,6 +1342,9 @@ class SummaryPlugin(Plugin):
 <b>快捷总结当前群：</b>
 {_code(f"{prefix}{cmd}")} - 总结最近默认数量消息
 {_code(f"{prefix}{cmd} 100")} - 指定本次总结最近100条消息
+{_code(f"{prefix}{cmd} 1h")} - 按最近1小时消息总结
+{_code(f"{prefix}{cmd} 1d")} - 按最近1天消息总结
+{_code(f"{prefix}{cmd} 100 1h")} - 最近1小时内，最多读取100条消息
 
 <b>定时总结：</b>
 {_code(f"{prefix}{cmd} add <群组标识> <间隔> [消息数] [选项]")}
