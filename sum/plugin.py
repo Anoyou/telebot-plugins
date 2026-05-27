@@ -23,7 +23,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.18"
+VERSION = "1.1.19"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -141,6 +141,19 @@ def _duration_to_seconds(raw: str) -> int:
     if unit == "h":
         return value * 3600
     return value * 86400
+
+
+def _normalize_cli_token(raw: str) -> str:
+    text = str(raw or "").strip()
+    # 兼容全角/长短横线输入
+    for ch in ("—", "–", "－", "﹣", "−"):
+        text = text.replace(ch, "-")
+    return text
+
+
+def _raw_text_wants_cloud(raw_text: str) -> bool:
+    text = _normalize_cli_token(raw_text).lower()
+    return bool(re.search(r"(^|\s)(--?cy|cy|词云)(\s|$)", text))
 
 
 def _safe_filename(value: str) -> str:
@@ -411,8 +424,8 @@ class SummaryPlugin(Plugin):
         if not args:
             return True
         for arg in args:
-            text = str(arg).strip().lower()
-            if text in {"--cy", "--time"}:
+            text = _normalize_cli_token(arg).lower()
+            if text in {"--cy", "-cy", "cy", "词云", "--time", "-time", "time"}:
                 continue
             if text.isdigit():
                 continue
@@ -617,18 +630,19 @@ class SummaryPlugin(Plugin):
         max_count = max(10, _int(self._cfg.get("max_fetch_count"), 300))
         since_seconds = 0
         enable_cloud = False
+        raw_text = _event_text(event)
         i = 0
         while i < len(args):
-            arg = str(args[i]).strip().lower()
-            if arg == "--cy":
+            arg = _normalize_cli_token(args[i]).lower()
+            if arg in {"--cy", "-cy", "cy", "词云"}:
                 enable_cloud = True
                 i += 1
                 continue
-            if arg == "--time":
+            if arg in {"--time", "-time", "time"}:
                 if i + 1 >= len(args):
                     await self._edit_command_message(event, "❌ --time 需要跟时间段，例如 1h / 1d / 30m")
                     return
-                since_seconds = _duration_to_seconds(args[i + 1])
+                since_seconds = _duration_to_seconds(_normalize_cli_token(args[i + 1]))
                 if since_seconds <= 0:
                     await self._edit_command_message(event, "❌ 时间段格式无效，支持 30m / 1h / 1d")
                     return
@@ -641,6 +655,10 @@ class SummaryPlugin(Plugin):
                 if duration_seconds > 0:
                     since_seconds = duration_seconds
             i += 1
+        if not enable_cloud and _raw_text_wants_cloud(raw_text):
+            enable_cloud = True
+        if ctx.log:
+            await ctx.log("info", f"[sum] quick raw={raw_text!r} args={args!r} parsed count={count} since={since_seconds}s cloud={enable_cloud}")
         count = min(max(1, count), max_count)
         chat_id = str(_event_chat_id(event))
         if not chat_id or chat_id == "0":
