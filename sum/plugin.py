@@ -24,7 +24,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.23"
+VERSION = "1.1.24"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -713,14 +713,32 @@ class SummaryPlugin(Plugin):
             return False, f"词云发送失败：{exc}"
 
     def _wordcloud_font_path(self) -> str | None:
+        assets_dir = Path(__file__).resolve().parent / "assets"
+        bundled_candidates = [
+            assets_dir / "font.ttc",
+            assets_dir / "font.ttf",
+            assets_dir / "PingFang.ttc",
+            assets_dir / "PingFangSC-Regular.ttf",
+        ]
+        for item in bundled_candidates:
+            if item.exists():
+                return str(item)
         # 使用常规系统中文字体，避免花体/装饰体影响可读性。
         candidates = [
             "/System/Library/Fonts/PingFang.ttc",
             "/System/Library/Fonts/Hiragino Sans GB.ttc",
             "/System/Library/Fonts/STHeiti Light.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.otf",
+            "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+            "/usr/share/fonts/opentype/noto/NotoSansSC-Regular.otf",
             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
             "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.otf",
+            "/usr/share/fonts/truetype/noto/NotoSansSC-Regular.otf",
+            "/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf",
+            "/usr/share/fonts/opentype/source-han-sans/SourceHanSansCN-Regular.otf",
             "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         ]
         for item in candidates:
             if Path(item).exists():
@@ -793,6 +811,8 @@ class SummaryPlugin(Plugin):
         image = Image.new("RGB", (width, height), (255, 255, 255))
         draw = ImageDraw.Draw(image)
         font_path = self._wordcloud_font_path()
+        if not font_path:
+            return None, "缺少中文字体。请将 Noto Sans CJK/思源黑体等常规中文字体放到 sum/assets/font.ttc，或在 VPS 安装 fonts-noto-cjk 后重载模块。"
         max_count = freq[0][1]
         min_count = freq[-1][1]
         spread = max(1, max_count - min_count)
@@ -809,9 +829,9 @@ class SummaryPlugin(Plugin):
             for shrink in range(4):
                 size = max(10, base_size - shrink * 4)
                 try:
-                    font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
-                except Exception:
-                    font = ImageFont.load_default()
+                    font = ImageFont.truetype(font_path, size)
+                except Exception as exc:
+                    return None, f"中文字体加载失败：{font_path}（{exc}）"
                 bbox = draw.textbbox((0, 0), word, font=font)
                 tw = max(1, bbox[2] - bbox[0])
                 th = max(1, bbox[3] - bbox[1])
@@ -836,9 +856,6 @@ class SummaryPlugin(Plugin):
         if not placed:
             return None, "热词密度过高，排版失败"
 
-        footer = f"最近消息热词云 | 有效消息 {len(message_data)} 条 | 生成时间 {_format_date()}"
-        small = ImageFont.load_default()
-        draw.text((42, height - 34), footer, font=small, fill=(17, 24, 39))
         buff = io.BytesIO()
         image.save(buff, format="PNG")
         return buff.getvalue(), ""

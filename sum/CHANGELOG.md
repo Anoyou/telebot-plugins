@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.1.24 (2026-05-27)
+- 词云字体改为随包字体优先：优先加载 `sum/assets/font.ttc` / `sum/assets/font.ttf`，用于 VPS/Docker 环境稳定渲染中文。
+- 增加 Linux 常见开源中文字体路径兜底（Noto Sans CJK、思源黑体、文泉驿）。
+- 找不到中文字体时不再生成方块图，改为提示安装 `fonts-noto-cjk` 或放置随包字体。
+- 去掉词云图片左下角 footer 水印，仅保留纯词云内容。
+
 ## 1.1.23 (2026-05-27)
 - 词云布局按 `cy.ts` 的 `layoutWords` 逻辑重写：使用 `angle = t * 0.38`、`radius = 5.2 * sqrt(t)` 的中心螺旋排布，高频词从中心开始尝试落位。
 - 字号映射按 `cy.ts` 的 `buildWordItems` 逻辑调整为 `12 + ratio^0.7 * 68`，避免最大词过度膨胀、低频词过度拥挤。
