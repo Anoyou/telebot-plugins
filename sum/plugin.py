@@ -24,7 +24,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.20"
+VERSION = "1.1.21"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -677,7 +677,7 @@ class SummaryPlugin(Plugin):
             await self._edit_command_message(event, "⏳ 正在生成热词云...")
             cloud_ok, cloud_message = await self._maybe_send_wordcloud(ctx, event, message_data)
             if cloud_ok:
-                await self._delete_command_message(event)
+                await self._delete_command_message(ctx, event)
             else:
                 await self._edit_command_message(event, f"❌ {cloud_message}")
             return
@@ -1074,13 +1074,28 @@ class SummaryPlugin(Plugin):
                 return
             raise RuntimeError("当前消息无法编辑（已按你的要求禁用 reply 回退）")
 
-    async def _delete_command_message(self, event: Any) -> None:
+    async def _delete_command_message(self, ctx: PluginContext, event: Any) -> None:
+        # 优先走事件删除；失败再用客户端按 chat_id+message_id 强删。
         try:
             delete = getattr(event, "delete", None)
             if callable(delete):
                 await delete()
-        except Exception:
-            pass
+                return
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warning", f"[sum] event.delete 失败：{type(exc).__name__}: {exc}")
+        message_id = _event_message_id(event)
+        chat_id = str(_event_chat_id(event))
+        if not message_id or not chat_id or not ctx.client:
+            return
+        try:
+            delete_messages = getattr(ctx.client, "delete_messages", None)
+            if callable(delete_messages):
+                await _maybe_await(delete_messages(_telegram_target(chat_id), [int(message_id)]))
+                return
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warning", f"[sum] client.delete_messages 失败：{type(exc).__name__}: {exc}")
 
     async def _show_prompts(self, event: Any) -> None:
         prompts = [
