@@ -24,7 +24,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.21"
+VERSION = "1.1.22"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -713,9 +713,18 @@ class SummaryPlugin(Plugin):
             return False, f"词云发送失败：{exc}"
 
     def _wordcloud_font_path(self) -> str | None:
-        candidate = Path(__file__).resolve().parent.parent / "redpack-byRBQ" / "assets" / "font.ttf"
-        if candidate.exists():
-            return str(candidate)
+        # 使用常规系统中文字体，避免花体/装饰体影响可读性。
+        candidates = [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        ]
+        for item in candidates:
+            if Path(item).exists():
+                return item
         return None
 
     def _render_wordcloud_png(self, message_data: list[MessageData]) -> tuple[bytes | None, str]:
@@ -733,10 +742,24 @@ class SummaryPlugin(Plugin):
             "使用", "需要", "更新", "主要", "内容", "新增", "版本", "发布", "包括", "所有", "不会",
             "the", "and", "for", "with", "this", "that", "you", "are", "not", "but", "from", "have",
             "http", "https", "com", "www", "telegram", "t.me", "true", "false", "null", "undefined",
+            "条有效消息", "有效消息", "正在获取消息", "消息并总结", "词云已生成并发送", "热词云", "群组总结",
+            "总结最近", "最近条", "最近消息", "生成并发送", "正在生成热词云",
         }
+        blocked_fragments = (
+            "正在获取消息", "消息并总结", "词云已生成并发送", "热词云", "群组总结", "总结最近", "条有效消息",
+        )
         counts: Counter[str] = Counter()
         for item in message_data:
             text = str(item.content or item.text or "")
+            if not text:
+                continue
+            # 过滤系统/命令文案，避免污染高频词。
+            normalized = text.strip().lower()
+            if any(fragment in normalized for fragment in blocked_fragments):
+                continue
+            prefix = _command_prefix()
+            if normalized.startswith(prefix + self._command) or normalized.startswith(prefix + "总结"):
+                continue
             text = re.sub(r"https?://\S+", " ", text, flags=re.IGNORECASE)
             text = re.sub(r"[@#][\w_\u4e00-\u9fff-]+", " ", text)
             # 英文词
@@ -762,7 +785,21 @@ class SummaryPlugin(Plugin):
                         counts[w] += (1 + edge_bonus) if size <= 3 else (2 + edge_bonus)
         if not counts:
             return None, "未提取到可用热词"
-        freq = [(w, c) for w, c in counts.most_common(220) if c >= 2]
+        freq = [(w, c) for w, c in counts.most_common(260) if c >= 2]
+        # 去掉高度相似/包含关系的短语，减少“同一句滑窗碎片”霸榜。
+        deduped: list[tuple[str, int]] = []
+        for word, count in freq:
+            too_similar = False
+            for kept_word, kept_count in deduped:
+                if (word in kept_word or kept_word in word) and abs(kept_count - count) <= max(2, kept_count // 5):
+                    too_similar = True
+                    break
+            if too_similar:
+                continue
+            deduped.append((word, count))
+            if len(deduped) >= 180:
+                break
+        freq = deduped
         if not freq:
             return None, "没有统计到足够的热词"
         width, height = 1280, 720
