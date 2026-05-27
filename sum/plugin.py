@@ -10,6 +10,7 @@ import asyncio
 import html
 import io
 import json
+import math
 import random
 import re
 import time
@@ -23,7 +24,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.19"
+VERSION = "1.1.20"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -675,7 +676,10 @@ class SummaryPlugin(Plugin):
         if enable_cloud:
             await self._edit_command_message(event, "⏳ 正在生成热词云...")
             cloud_ok, cloud_message = await self._maybe_send_wordcloud(ctx, event, message_data)
-            await self._edit_command_message(event, cloud_message if cloud_ok else f"❌ {cloud_message}")
+            if cloud_ok:
+                await self._delete_command_message(event)
+            else:
+                await self._edit_command_message(event, f"❌ {cloud_message}")
             return
 
         db = await self._load_db()
@@ -701,7 +705,7 @@ class SummaryPlugin(Plugin):
         if not image_data:
             return False, f"词云生成失败：{error or '未知错误'}"
         chat_id = str(_event_chat_id(event))
-        caption = f"☁️ 热词云（最近 {len(message_data)} 条有效消息）"
+        caption = ""
         try:
             await self._send_photo(ctx, chat_id, image_data, caption=caption)
             return True, f"☁️ 词云已生成并发送（最近 {len(message_data)} 条有效消息）"
@@ -721,29 +725,57 @@ class SummaryPlugin(Plugin):
             return None, "缺少 Pillow 依赖"
 
         stop_words = {
-            "今天", "这个", "那个", "然后", "就是", "我们", "你们", "他们", "不是", "可以", "一下", "一个", "还是",
-            "真的", "感觉", "现在", "已经", "还有", "什么", "怎么", "没有", "自己", "因为", "所以", "但是", "如果",
+            "这个", "那个", "就是", "不是", "可以", "没有", "一下", "一个", "什么", "怎么", "为什么",
+            "然后", "现在", "还是", "但是", "因为", "所以", "如果", "已经", "应该", "可能", "感觉",
+            "不要", "知道", "看看", "哈哈", "哈哈哈", "你们", "我们", "他们", "自己", "直接", "确实",
+            "来源", "情况", "情况下", "耗时", "输入", "输出", "回复", "问题", "最近", "消息", "有效",
+            "今天", "昨天", "明天", "时候", "东西", "里面", "这里", "那里", "这样", "那样", "进行",
+            "使用", "需要", "更新", "主要", "内容", "新增", "版本", "发布", "包括", "所有", "不会",
+            "the", "and", "for", "with", "this", "that", "you", "are", "not", "but", "from", "have",
+            "http", "https", "com", "www", "telegram", "t.me", "true", "false", "null", "undefined",
         }
-        words: list[str] = []
+        counts: Counter[str] = Counter()
         for item in message_data:
-            for token in WORD_RE.findall((item.content or item.text or "").lower()):
-                if len(token) <= 1 or token in stop_words or token.isdigit():
+            text = str(item.content or item.text or "")
+            text = re.sub(r"https?://\S+", " ", text, flags=re.IGNORECASE)
+            text = re.sub(r"[@#][\w_\u4e00-\u9fff-]+", " ", text)
+            # 英文词
+            for token in re.findall(r"[A-Za-z][A-Za-z0-9_+\-.]{1,24}", text):
+                w = token.lower().strip()
+                if w in stop_words or w.isdigit() or re.fullmatch(r"[a-z]{1,2}", w):
                     continue
-                words.append(token)
-        if not words:
+                counts[w] += 2
+            # 中文连续片段：2~5字滑窗
+            for part in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+                if len(part) <= 4:
+                    w = part.lower().strip()
+                    if w not in stop_words:
+                        counts[w] += 3
+                    continue
+                plen = len(part)
+                for size in range(2, 6):
+                    for i in range(0, plen - size + 1):
+                        w = part[i:i + size].lower().strip()
+                        if w in stop_words:
+                            continue
+                        edge_bonus = 1 if (i == 0 or i == plen - size) else 0
+                        counts[w] += (1 + edge_bonus) if size <= 3 else (2 + edge_bonus)
+        if not counts:
             return None, "未提取到可用热词"
-
-        freq = Counter(words).most_common(160)
+        freq = [(w, c) for w, c in counts.most_common(220) if c >= 2]
+        if not freq:
+            return None, "没有统计到足够的热词"
         width, height = 1280, 720
         image = Image.new("RGB", (width, height), (250, 250, 250))
         draw = ImageDraw.Draw(image)
         font_path = self._wordcloud_font_path()
-        min_size, max_size = 22, 108
+        min_size, max_size = 16, 116
         fmax = max(v for _, v in freq) if freq else 1
         placed: list[tuple[int, int, int, int]] = []
         palette = [(214, 39, 40), (31, 119, 180), (44, 160, 44), (148, 103, 189), (23, 190, 207), (188, 139, 9), (10, 110, 96)]
-
-        for word, count in freq:
+        center_x = width // 2
+        center_y = height // 2 - 10
+        for index, (word, count) in enumerate(freq):
             scale = (count / fmax) ** 0.55
             size = int(min_size + (max_size - min_size) * scale)
             try:
@@ -756,9 +788,14 @@ class SummaryPlugin(Plugin):
             if tw >= width - 20 or th >= height - 20:
                 continue
             placed_ok = False
-            for _ in range(140):
-                x = random.randint(10, max(10, width - tw - 10))
-                y = random.randint(10, max(10, height - th - 10))
+            base_radius = 2 + index * 2
+            for attempt in range(220):
+                theta = (attempt * 137.50776405) * math.pi / 180.0
+                radius = base_radius + attempt * 3.0
+                x = int(center_x + math.cos(theta) * radius - tw / 2)
+                y = int(center_y + math.sin(theta) * radius - th / 2)
+                x = min(max(8, x), width - tw - 8)
+                y = min(max(8, y), height - th - 8)
                 rect = (x, y, x + tw, y + th)
                 if any(not (rect[2] < p[0] or rect[0] > p[2] or rect[3] < p[1] or rect[1] > p[3]) for p in placed):
                     continue
@@ -766,8 +803,11 @@ class SummaryPlugin(Plugin):
                 placed.append(rect)
                 placed_ok = True
                 break
-            if not placed_ok and len(placed) < 20:
-                draw.text((20 + len(placed) * 8, 20 + len(placed) * 6), word, font=font, fill=random.choice(palette))
+            if not placed_ok and len(placed) < 8:
+                x = min(max(8, 16 + len(placed) * 14), width - tw - 8)
+                y = min(max(8, height - 52 - len(placed) * 12), height - th - 8)
+                draw.text((x, y), word, font=font, fill=random.choice(palette))
+                placed.append((x, y, x + tw, y + th))
         if not placed:
             return None, "热词密度过高，排版失败"
 
@@ -1033,6 +1073,14 @@ class SummaryPlugin(Plugin):
                 await event.edit(text)
                 return
             raise RuntimeError("当前消息无法编辑（已按你的要求禁用 reply 回退）")
+
+    async def _delete_command_message(self, event: Any) -> None:
+        try:
+            delete = getattr(event, "delete", None)
+            if callable(delete):
+                await delete()
+        except Exception:
+            pass
 
     async def _show_prompts(self, event: Any) -> None:
         prompts = [
