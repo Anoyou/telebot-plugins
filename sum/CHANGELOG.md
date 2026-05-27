@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.1.25 (2026-05-28)
+- 补回 `sum/assets/font.otf` 随包 Noto Sans CJK SC Regular 开源常规中文字体，VPS/Docker 未安装系统中文字体时也能直接生成词云。
+- 保留 `sum/assets/font.ttc` / 系统 Noto Sans CJK 等字体兜底，允许部署方替换为自己的开源中文字体。
+
 ## 1.1.24 (2026-05-27)
 - 词云字体改为随包字体优先：优先加载 `sum/assets/font.ttc` / `sum/assets/font.ttf`，用于 VPS/Docker 环境稳定渲染中文。
 - 增加 Linux 常见开源中文字体路径兜底（Noto Sans CJK、思源黑体、文泉驿）。
