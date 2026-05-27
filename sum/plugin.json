@@ -3,7 +3,7 @@
   "display_name": "群消息总结",
   "description": "调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
   "author": "Anoyou",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -38,6 +38,12 @@
         "minLength": 1,
         "maxLength": 32,
         "pattern": "^\\S+$"
+      },
+      "usage_preview": {
+        "type": "string",
+        "title": "使用说明预览（只读）",
+        "readOnly": true,
+        "default": "常用命令：\n{prefix}sum\n{prefix}sum 100\n{prefix}sum 1h\n{prefix}sum --time 90m\n{prefix}sum 500 --cy\n{prefix}sum 100 1h --cy\n\n说明：sum 只调用 TelePilot 已配置的 AI Provider；一般保持自动路由即可。"
       },
       "default_count": {
         "type": "integer",
