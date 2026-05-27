@@ -35,9 +35,18 @@ CONFIG_SCHEMA = {
         },
         "ai_usage_guide": {
             "type": "string",
-            "title": "AI 配置说明",
+            "title": "使用说明",
             "description": "说明项，不需要编辑。",
-            "default": "sum 只调用 TelePilot 已配置的 AI Provider；普通使用保持自动路由即可。需要固定时可在下方选择 Provider 和模型。",
+            "default": (
+                "常用命令：\n"
+                "{prefix}sum\n"
+                "{prefix}sum 100\n"
+                "{prefix}sum 1h\n"
+                "{prefix}sum --time 90m\n"
+                "{prefix}sum 500 --cy\n"
+                "{prefix}sum 100 1h --cy\n\n"
+                "说明：sum 只调用 TelePilot 已配置的 AI Provider；一般保持自动路由即可。"
+            ),
             "readOnly": True,
         },
         "telepilot_provider": {
@@ -151,7 +160,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.13",
+    version="1.1.14",
     min_telepilot_version="0.24.2",
     author="Anoyou",
     description="调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",

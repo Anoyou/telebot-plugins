@@ -23,7 +23,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.13"
+VERSION = "1.1.14"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
