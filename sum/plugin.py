@@ -24,7 +24,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.22"
+VERSION = "1.1.23"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -785,75 +785,82 @@ class SummaryPlugin(Plugin):
                         counts[w] += (1 + edge_bonus) if size <= 3 else (2 + edge_bonus)
         if not counts:
             return None, "未提取到可用热词"
-        freq = [(w, c) for w, c in counts.most_common(260) if c >= 2]
-        # 去掉高度相似/包含关系的短语，减少“同一句滑窗碎片”霸榜。
-        deduped: list[tuple[str, int]] = []
-        for word, count in freq:
-            too_similar = False
-            for kept_word, kept_count in deduped:
-                if (word in kept_word or kept_word in word) and abs(kept_count - count) <= max(2, kept_count // 5):
-                    too_similar = True
-                    break
-            if too_similar:
-                continue
-            deduped.append((word, count))
-            if len(deduped) >= 180:
-                break
-        freq = deduped
+        freq = [(w, c) for w, c in counts.most_common(220) if c >= 2]
         if not freq:
             return None, "没有统计到足够的热词"
-        width, height = 1280, 720
-        image = Image.new("RGB", (width, height), (250, 250, 250))
+        width, height = 900, 640
+        margin = 32
+        image = Image.new("RGB", (width, height), (255, 255, 255))
         draw = ImageDraw.Draw(image)
         font_path = self._wordcloud_font_path()
-        min_size, max_size = 16, 116
-        fmax = max(v for _, v in freq) if freq else 1
-        placed: list[tuple[int, int, int, int]] = []
+        max_count = freq[0][1]
+        min_count = freq[-1][1]
+        spread = max(1, max_count - min_count)
+        placed: list[tuple[int, int, int, int, str]] = []
         palette = [(214, 39, 40), (31, 119, 180), (44, 160, 44), (148, 103, 189), (23, 190, 207), (188, 139, 9), (10, 110, 96)]
-        center_x = width // 2
-        center_y = height // 2 - 10
+        center_x = width / 2
+        center_y = height / 2 - 28
+
         for index, (word, count) in enumerate(freq):
-            scale = (count / fmax) ** 0.55
-            size = int(min_size + (max_size - min_size) * scale)
-            try:
-                font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
-            except Exception:
-                font = ImageFont.load_default()
-            bbox = draw.textbbox((0, 0), word, font=font)
-            tw = max(1, bbox[2] - bbox[0])
-            th = max(1, bbox[3] - bbox[1])
-            if tw >= width - 20 or th >= height - 20:
-                continue
             placed_ok = False
-            base_radius = 2 + index * 2
-            for attempt in range(220):
-                theta = (attempt * 137.50776405) * math.pi / 180.0
-                radius = base_radius + attempt * 3.0
-                x = int(center_x + math.cos(theta) * radius - tw / 2)
-                y = int(center_y + math.sin(theta) * radius - th / 2)
-                x = min(max(8, x), width - tw - 8)
-                y = min(max(8, y), height - th - 8)
-                rect = (x, y, x + tw, y + th)
-                if any(not (rect[2] < p[0] or rect[0] > p[2] or rect[3] < p[1] or rect[1] > p[3]) for p in placed):
+            ratio = (count - min_count) / spread
+            base_size = round(12 + (ratio ** 0.7) * 68)
+            color = palette[index % len(palette)]
+            for shrink in range(4):
+                size = max(10, base_size - shrink * 4)
+                try:
+                    font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
+                except Exception:
+                    font = ImageFont.load_default()
+                bbox = draw.textbbox((0, 0), word, font=font)
+                tw = max(1, bbox[2] - bbox[0])
+                th = max(1, bbox[3] - bbox[1])
+                if tw > width - margin * 2:
                     continue
-                draw.text((x, y), word, font=font, fill=random.choice(palette))
-                placed.append(rect)
-                placed_ok = True
-                break
-            if not placed_ok and len(placed) < 8:
-                x = min(max(8, 16 + len(placed) * 14), width - tw - 8)
-                y = min(max(8, height - 52 - len(placed) * 12), height - th - 8)
-                draw.text((x, y), word, font=font, fill=random.choice(palette))
-                placed.append((x, y, x + tw, y + th))
+                for t in range(3600):
+                    angle = t * 0.38
+                    radius = 5.2 * math.sqrt(t)
+                    x = int(center_x + math.cos(angle) * radius - tw / 2)
+                    y = int(center_y + math.sin(angle) * radius - th / 2)
+                    if x < margin or y < margin or x + tw > width - margin or y + th > height - 78:
+                        continue
+                    rect = (x, y, x + tw, y + th, word)
+                    if self._wordcloud_overlaps(rect, placed):
+                        continue
+                    placed.append(rect)
+                    draw.text((x, y), word, font=font, fill=color)
+                    placed_ok = True
+                    break
+                if placed_ok:
+                    break
         if not placed:
             return None, "热词密度过高，排版失败"
 
         footer = f"最近消息热词云 | 有效消息 {len(message_data)} 条 | 生成时间 {_format_date()}"
         small = ImageFont.load_default()
-        draw.text((24, height - 30), footer, font=small, fill=(90, 90, 90))
+        draw.text((42, height - 34), footer, font=small, fill=(17, 24, 39))
         buff = io.BytesIO()
         image.save(buff, format="PNG")
         return buff.getvalue(), ""
+
+    @staticmethod
+    def _wordcloud_overlaps(rect: tuple[int, int, int, int, str], placed: list[tuple[int, int, int, int, str]]) -> bool:
+        padding = 4
+        ax1, ay1, ax2, ay2, word = rect
+        ax1 -= padding
+        ay1 -= padding
+        ax2 += padding
+        ay2 += padding
+        for bx1, by1, bx2, by2, other_word in placed:
+            if word in other_word or other_word in word:
+                return True
+            bx1 -= padding
+            by1 -= padding
+            bx2 += padding
+            by2 += padding
+            if ax1 < bx2 and ax2 > bx1 and ay1 < by2 and ay2 > by1:
+                return True
+        return False
 
     async def _send_photo(self, ctx: PluginContext, chat_id: Any, image_data: bytes, *, caption: str = "") -> Any:
         if not ctx.client:
