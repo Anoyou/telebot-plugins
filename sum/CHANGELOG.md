@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.11 (2026-05-27)
+- 改为通过 TelePilot `ctx.ai.complete()` 调用平台 LLM，不再直接 import 后端数据库和 LLM 私有服务。
+- Manifest / plugin.json 声明 `ai_text` 权限，配合 TelePilot 0.25 插件 AI facade 运行。
+- `sum config providers` 改为读取 `ctx.ai.list_providers()`，避免触碰平台内部 Provider 表。
+
 ## 1.1.10 (2026-05-26)
 - 修复模板热更新不及时：每次命令入口都同步 `ctx.config`，配置页修改 `message_template` 后立即生效。
 - 调整快捷总结交互：`.sum` / `.sum 100` 的最终结果改为直接编辑原命令消息，不再回复“正在获取消息并总结...”这条消息。

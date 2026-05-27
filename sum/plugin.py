@@ -20,7 +20,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.10"
+VERSION = "1.1.11"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -758,90 +758,27 @@ class SummaryPlugin(Plugin):
             return {"success": False, "error": f"AI 调用失败: {exc}"}
 
     async def _call_telepilot_ai(self, ctx: PluginContext, messages: str, prompt: str, ai_config: AIConfig) -> str:
-        try:
-            from sqlalchemy import select
+        ai = getattr(ctx, "ai", None)
+        complete = getattr(ai, "complete", None) if ai is not None else None
+        if complete is None:
+            raise RuntimeError("当前 TelePilot 未向插件暴露 ctx.ai；请启用 ai_text 权限并升级到支持 ctx.ai 的 TelePilot 版本。")
 
-            from app.db.models.command import LLMProvider
-            from app.db.session import AsyncSessionLocal
-            from app.services.llm_dto import LLMProviderDTO
-            from app.services.llm_invoke import invoke as invoke_ai_runtime
-            from app.services.llm_router import pick_provider as pick_ai_provider
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError("当前 TelePilot 版本未暴露内置 AI runtime，请升级 TelePilot 后使用平台 AI 配置") from exc
-
-        async with AsyncSessionLocal() as db:
-            rows = list((await db.execute(select(LLMProvider).order_by(LLMProvider.id.asc()))).scalars().all())
-        if not rows:
-            raise RuntimeError("TelePilot 尚未配置任何 LLM Provider")
-
-        provider_dtos: dict[int, Any] = {}
-        for row in rows:
-            try:
-                dto = LLMProviderDTO.from_orm_row(row)
-                provider_dtos[int(dto.id)] = dto
-            except Exception:
-                continue
-        if not provider_dtos:
-            raise RuntimeError("TelePilot LLM Provider 配置不可用")
-
-        matched_tag = "long_context"
-        if ai_config.telepilot_provider:
-            primary = self._select_telepilot_provider(ai_config.telepilot_provider, provider_dtos)
-            matched_tag = None
-        else:
-            provider_payloads = {
-                provider_id: {**dto.to_dict(), "api_key_enc": getattr(dto, "api_key_enc", None)}
-                for provider_id, dto in provider_dtos.items()
-            }
-            decision = await pick_ai_provider(
-                messages,
-                None,
-                False,
-                provider_payloads,
-            )
-            primary = provider_dtos[int(decision.provider_id)]
-            matched_tag = decision.matched_tag
         override_model = ai_config.telepilot_model.strip() or None
         user_prompt = f"{prompt}\n\n{messages}"
-        result, used_provider, _ = await invoke_ai_runtime(
-            primary,
-            provider_dtos,
+        result = await complete(
             "你是一个专业、简洁、可靠的中文群聊总结助手。",
             user_prompt,
-            override_model=override_model,
+            provider=ai_config.telepilot_provider.strip() or None,
+            model=override_model,
+            provider_tag="long_context",
             max_tokens=4000,
             timeout_seconds=max(10, ai_config.default_timeout // 1000),
-            account_id=ctx.account_id,
             source="plugin:sum",
-            matched_tag=matched_tag,
         )
-        text = str(getattr(result, "text", "") or "").strip()
+        text = result.text.strip()
         if not text:
-            raise RuntimeError(f"TelePilot AI 返回内容为空（provider={getattr(used_provider, 'name', primary.id)}）")
+            raise RuntimeError("TelePilot AI 返回内容为空")
         return text
-
-    @staticmethod
-    def _select_telepilot_provider(selector: str, provider_dtos: dict[int, Any]) -> Any:
-        selector = (selector or "").strip()
-        if selector:
-            if selector.isdigit():
-                dto = provider_dtos.get(int(selector))
-                if dto is not None:
-                    return dto
-            lowered = selector.lower()
-            for dto in provider_dtos.values():
-                if str(getattr(dto, "name", "")).lower() == lowered:
-                    return dto
-            raise RuntimeError(f"未找到 TelePilot LLM Provider: {selector}")
-
-        candidates = list(provider_dtos.values())
-        usable = [dto for dto in candidates if getattr(dto, "has_api_key", False)]
-        candidates = usable or candidates
-        for tag in ("long_context", "chat", "smart", "reason"):
-            tagged = [dto for dto in candidates if tag in (getattr(dto, "tags", None) or [])]
-            if tagged:
-                return sorted(tagged, key=lambda item: (int(getattr(item, "cost_tier", 2) or 2), int(getattr(item, "id", 0) or 0)))[0]
-        return sorted(candidates, key=lambda item: int(getattr(item, "id", 0) or 0))[0]
 
     def _build_summary_text(self, task: SummaryTask, summary: str, db: SummaryDB) -> tuple[str, bool]:
         content = THINK_RE.sub("", summary).strip()
@@ -1270,7 +1207,7 @@ class SummaryPlugin(Plugin):
             await self._edit_or_reply(event, "\n".join(lines), parse_mode="html")
             return
         if action in {"providers", "provider", "llm"}:
-            await self._list_telepilot_providers(event)
+            await self._list_telepilot_providers(event, ctx)
             return
         if action == "set":
             await self._config_set(event, args[1:], db)
@@ -1280,25 +1217,14 @@ class SummaryPlugin(Plugin):
             return
         await self._edit_or_reply(event, self._help_text(), parse_mode="html")
 
-    async def _list_telepilot_providers(self, event: Any) -> None:
-        try:
-            from sqlalchemy import select
-
-            from app.db.models.command import LLMProvider
-            from app.db.session import AsyncSessionLocal
-            from app.services.llm_dto import LLMProviderDTO
-        except Exception:
-            await self._edit_or_reply(event, "❌ 当前 TelePilot 版本不支持读取内置 LLM Provider。")
+    async def _list_telepilot_providers(self, event: Any, ctx: PluginContext) -> None:
+        ai = getattr(ctx, "ai", None)
+        list_providers = getattr(ai, "list_providers", None) if ai is not None else None
+        if list_providers is None:
+            await self._edit_or_reply(event, "ℹ️ 当前插件上下文未提供 Provider 列表接口。请在 TelePilot 的 AI 设置页查看可用 Provider；sum 默认会通过 ctx.ai 自动路由。")
             return
 
-        async with AsyncSessionLocal() as session:
-            rows = list((await session.execute(select(LLMProvider).order_by(LLMProvider.id.asc()))).scalars().all())
-        providers = []
-        for row in rows:
-            try:
-                providers.append(LLMProviderDTO.from_orm_row(row))
-            except Exception:
-                continue
+        providers = list(await _maybe_await(list_providers()) or [])
         if not providers:
             await self._edit_or_reply(event, "❌ TelePilot 尚未配置任何 LLM Provider。")
             return
@@ -1313,13 +1239,26 @@ class SummaryPlugin(Plugin):
             "",
         ]
         for provider in providers:
-            tags = ",".join(provider.tags or []) or "-"
-            ready = "可用" if provider.has_api_key else "未配置 API Key"
-            lines.append(f"{_code(provider.id)} <b>{_html(provider.name or '-')}</b>")
-            lines.append(f"类型: {_code(provider.provider)} · 默认模型: {_code(provider.default_model or '-')}")
-            lines.append(f"标签: {_code(tags)} · 成本档: {_code(provider.cost_tier)} · {ready}")
+            provider_id = self._provider_value(provider, "id", "-")
+            name = self._provider_value(provider, "name", "-")
+            provider_kind = self._provider_value(provider, "provider", self._provider_value(provider, "type", "-"))
+            default_model = self._provider_value(provider, "default_model", self._provider_value(provider, "model", "-"))
+            tags_raw = self._provider_value(provider, "tags", [])
+            tags = ",".join(tags_raw) if isinstance(tags_raw, list) else str(tags_raw or "-")
+            has_api_key = self._provider_value(provider, "has_api_key", None)
+            ready = "可用" if has_api_key is True else ("未配置 API Key" if has_api_key is False else "状态由平台管理")
+            cost_tier = self._provider_value(provider, "cost_tier", "-")
+            lines.append(f"{_code(provider_id)} <b>{_html(name or '-')}</b>")
+            lines.append(f"类型: {_code(provider_kind)} · 默认模型: {_code(default_model or '-')}")
+            lines.append(f"标签: {_code(tags or '-')} · 成本档: {_code(cost_tier)} · {ready}")
             lines.append("")
         await self._edit_or_reply(event, "\n".join(lines).strip(), parse_mode="html")
+
+    @staticmethod
+    def _provider_value(provider: Any, key: str, default: Any = None) -> Any:
+        if isinstance(provider, dict):
+            return provider.get(key, default)
+        return getattr(provider, key, default)
 
     async def _config_set(self, event: Any, args: list[str], db: SummaryDB) -> None:
         if not args:
