@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import html
+import io
 import json
+import random
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +23,11 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.12"
+VERSION = "1.1.13"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
+WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_+-]{1,}")
 SUMMARY_MESSAGE_TEMPLATE_DEFAULT = (
     "📊 群组总结\n"
     "来源: {chat_display}\n"
@@ -137,6 +141,11 @@ def _duration_to_seconds(raw: str) -> int:
     if unit == "h":
         return value * 3600
     return value * 86400
+
+
+def _safe_filename(value: str) -> str:
+    base = re.sub(r"[^0-9A-Za-z._-]+", "_", value).strip("._")
+    return base or "sum_wordcloud"
 
 
 def _command_prefix() -> str:
@@ -387,7 +396,7 @@ class SummaryPlugin(Plugin):
             if sub == "config":
                 await self._config_command(event, rest, ctx)
                 return
-            if sub.isdigit() or _duration_to_seconds(sub) > 0 or sub == "--time":
+            if self._looks_like_quick_summary_args(args):
                 await self._quick_summary(event, args, ctx)
                 return
 
@@ -396,6 +405,21 @@ class SummaryPlugin(Plugin):
             if ctx.log:
                 await ctx.log("error", f"[sum] 命令执行失败：{type(exc).__name__}: {exc}")
             await self._edit_or_reply(event, f"❌ 错误：{_html(exc)}", parse_mode="html")
+
+    @staticmethod
+    def _looks_like_quick_summary_args(args: list[str]) -> bool:
+        if not args:
+            return True
+        for arg in args:
+            text = str(arg).strip().lower()
+            if text in {"--cy", "--time"}:
+                continue
+            if text.isdigit():
+                continue
+            if _duration_to_seconds(text) > 0:
+                continue
+            return False
+        return True
 
     async def _load_db(self) -> SummaryDB:
         if not DB_PATH.exists():
@@ -592,9 +616,14 @@ class SummaryPlugin(Plugin):
         count = max(1, _int(self._cfg.get("default_count"), 100))
         max_count = max(10, _int(self._cfg.get("max_fetch_count"), 300))
         since_seconds = 0
+        enable_cloud = False
         i = 0
         while i < len(args):
             arg = str(args[i]).strip().lower()
+            if arg == "--cy":
+                enable_cloud = True
+                i += 1
+                continue
             if arg == "--time":
                 if i + 1 >= len(args):
                     await self._edit_or_reply(event, "❌ --time 需要跟时间段，例如 1h / 1d / 30m")
@@ -640,8 +669,103 @@ class SummaryPlugin(Plugin):
             await self._edit_or_reply(event, f"❌ {_html(result['error'])}", parse_mode="html")
             return
 
+        if enable_cloud:
+            await self._maybe_send_wordcloud(ctx, event, task, message_data)
         summary_text, need_html = self._build_summary_text(task, str(result["result"]), db)
         await self._edit_or_reply(event, summary_text, parse_mode="html" if need_html else None)
+
+    async def _maybe_send_wordcloud(self, ctx: PluginContext, event: Any, task: SummaryTask, message_data: list[MessageData]) -> None:
+        image_data, error = self._render_wordcloud_png(message_data)
+        if not image_data:
+            await self._edit_or_reply(event, f"⚠️ 词云生成失败：{_html(error or '未知错误')}", parse_mode="html")
+            return
+        chat_id = str(_event_chat_id(event))
+        caption = f"☁️ 热词云（最近 {len(message_data)} 条有效消息）"
+        try:
+            await self._send_photo(ctx, chat_id, image_data, caption=caption)
+        except Exception as exc:
+            await self._edit_or_reply(event, f"⚠️ 词云发送失败：{_html(exc)}", parse_mode="html")
+
+    def _wordcloud_font_path(self) -> str | None:
+        candidate = Path(__file__).resolve().parent.parent / "redpack-byRBQ" / "assets" / "font.ttf"
+        if candidate.exists():
+            return str(candidate)
+        return None
+
+    def _render_wordcloud_png(self, message_data: list[MessageData]) -> tuple[bytes | None, str]:
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except Exception:
+            return None, "缺少 Pillow 依赖"
+
+        stop_words = {
+            "今天", "这个", "那个", "然后", "就是", "我们", "你们", "他们", "不是", "可以", "一下", "一个", "还是",
+            "真的", "感觉", "现在", "已经", "还有", "什么", "怎么", "没有", "自己", "因为", "所以", "但是", "如果",
+        }
+        words: list[str] = []
+        for item in message_data:
+            for token in WORD_RE.findall((item.content or item.text or "").lower()):
+                if len(token) <= 1 or token in stop_words or token.isdigit():
+                    continue
+                words.append(token)
+        if not words:
+            return None, "未提取到可用热词"
+
+        freq = Counter(words).most_common(160)
+        width, height = 1280, 720
+        image = Image.new("RGB", (width, height), (250, 250, 250))
+        draw = ImageDraw.Draw(image)
+        font_path = self._wordcloud_font_path()
+        min_size, max_size = 22, 108
+        fmax = max(v for _, v in freq) if freq else 1
+        placed: list[tuple[int, int, int, int]] = []
+        palette = [(214, 39, 40), (31, 119, 180), (44, 160, 44), (148, 103, 189), (23, 190, 207), (188, 139, 9), (10, 110, 96)]
+
+        for word, count in freq:
+            scale = (count / fmax) ** 0.55
+            size = int(min_size + (max_size - min_size) * scale)
+            try:
+                font = ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
+            except Exception:
+                font = ImageFont.load_default()
+            bbox = draw.textbbox((0, 0), word, font=font)
+            tw = max(1, bbox[2] - bbox[0])
+            th = max(1, bbox[3] - bbox[1])
+            if tw >= width - 20 or th >= height - 20:
+                continue
+            placed_ok = False
+            for _ in range(140):
+                x = random.randint(10, max(10, width - tw - 10))
+                y = random.randint(10, max(10, height - th - 10))
+                rect = (x, y, x + tw, y + th)
+                if any(not (rect[2] < p[0] or rect[0] > p[2] or rect[3] < p[1] or rect[1] > p[3]) for p in placed):
+                    continue
+                draw.text((x, y), word, font=font, fill=random.choice(palette))
+                placed.append(rect)
+                placed_ok = True
+                break
+            if not placed_ok and len(placed) < 20:
+                draw.text((20 + len(placed) * 8, 20 + len(placed) * 6), word, font=font, fill=random.choice(palette))
+        if not placed:
+            return None, "热词密度过高，排版失败"
+
+        footer = f"最近消息热词云 | 有效消息 {len(message_data)} 条 | 生成时间 {_format_date()}"
+        small = ImageFont.load_default()
+        draw.text((24, height - 30), footer, font=small, fill=(90, 90, 90))
+        buff = io.BytesIO()
+        image.save(buff, format="PNG")
+        return buff.getvalue(), ""
+
+    async def _send_photo(self, ctx: PluginContext, chat_id: Any, image_data: bytes, *, caption: str = "") -> Any:
+        if not ctx.client:
+            raise RuntimeError("Telegram 客户端未初始化")
+        send_file = getattr(ctx.client, "send_file", None)
+        if send_file is None:
+            raise RuntimeError("缺少 send_file 权限，无法发送词云图片")
+        file_obj = io.BytesIO(image_data)
+        file_obj.name = f"{_safe_filename(str(chat_id))}_cy.png"
+        clean_caption = caption[:1000] if caption else ""
+        return await send_file(_telegram_target(chat_id), file_obj, caption=clean_caption, force_document=False)
 
     async def _event_chat_target(self, event: Any, fallback: Any) -> Any:
         targets = await self._event_chat_targets(event, fallback)
@@ -1345,6 +1469,7 @@ class SummaryPlugin(Plugin):
 {_code(f"{prefix}{cmd} 1h")} - 按最近1小时消息总结
 {_code(f"{prefix}{cmd} 1d")} - 按最近1天消息总结
 {_code(f"{prefix}{cmd} 100 1h")} - 最近1小时内，最多读取100条消息
+{_code(f"{prefix}{cmd} 100 --cy")} - 总结并发送热词云（简写参数）
 
 <b>定时总结：</b>
 {_code(f"{prefix}{cmd} add <群组标识> <间隔> [消息数] [选项]")}
