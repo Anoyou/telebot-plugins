@@ -23,7 +23,7 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.15"
+VERSION = "1.1.16"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -626,11 +626,11 @@ class SummaryPlugin(Plugin):
                 continue
             if arg == "--time":
                 if i + 1 >= len(args):
-                    await self._edit_or_reply(event, "❌ --time 需要跟时间段，例如 1h / 1d / 30m")
+                    await self._edit_command_message(event, "❌ --time 需要跟时间段，例如 1h / 1d / 30m")
                     return
                 since_seconds = _duration_to_seconds(args[i + 1])
                 if since_seconds <= 0:
-                    await self._edit_or_reply(event, "❌ 时间段格式无效，支持 30m / 1h / 1d")
+                    await self._edit_command_message(event, "❌ 时间段格式无效，支持 30m / 1h / 1d")
                     return
                 i += 2
                 continue
@@ -644,14 +644,20 @@ class SummaryPlugin(Plugin):
         count = min(max(1, count), max_count)
         chat_id = str(_event_chat_id(event))
         if not chat_id or chat_id == "0":
-            await self._edit_or_reply(event, "❌ 无法识别当前聊天。")
+            await self._edit_command_message(event, "❌ 无法识别当前聊天。")
             return
 
-        await self._edit_or_reply(event, "⏳ 正在获取消息并总结...")
+        await self._edit_command_message(event, "⏳ 正在获取消息...")
         chat_targets = await self._event_chat_targets(event, chat_id)
         message_data = await self._get_group_messages(ctx, chat_id, count, since_seconds=since_seconds, target=chat_targets)
         if not message_data:
-            await self._edit_or_reply(event, "❌ 未找到可总结的消息")
+            await self._edit_command_message(event, "❌ 未找到可处理的消息")
+            return
+
+        if enable_cloud:
+            await self._edit_command_message(event, "⏳ 正在生成热词云...")
+            cloud_ok, cloud_message = await self._maybe_send_wordcloud(ctx, event, message_data)
+            await self._edit_command_message(event, cloud_message if cloud_ok else f"❌ {cloud_message}")
             return
 
         db = await self._load_db()
@@ -666,25 +672,23 @@ class SummaryPlugin(Plugin):
         )
         result = await self._summarize_messages(ctx, task, message_data, db)
         if not result["success"]:
-            await self._edit_or_reply(event, f"❌ {_html(result['error'])}", parse_mode="html")
+            await self._edit_command_message(event, f"❌ {result['error']}")
             return
 
-        if enable_cloud:
-            await self._maybe_send_wordcloud(ctx, event, task, message_data)
         summary_text, need_html = self._build_summary_text(task, str(result["result"]), db)
-        await self._edit_or_reply(event, summary_text, parse_mode="html" if need_html else None)
+        await self._edit_command_message(event, summary_text, parse_mode="html" if need_html else None)
 
-    async def _maybe_send_wordcloud(self, ctx: PluginContext, event: Any, task: SummaryTask, message_data: list[MessageData]) -> None:
+    async def _maybe_send_wordcloud(self, ctx: PluginContext, event: Any, message_data: list[MessageData]) -> tuple[bool, str]:
         image_data, error = self._render_wordcloud_png(message_data)
         if not image_data:
-            await self._edit_or_reply(event, f"⚠️ 词云生成失败：{_html(error or '未知错误')}", parse_mode="html")
-            return
+            return False, f"词云生成失败：{error or '未知错误'}"
         chat_id = str(_event_chat_id(event))
         caption = f"☁️ 热词云（最近 {len(message_data)} 条有效消息）"
         try:
             await self._send_photo(ctx, chat_id, image_data, caption=caption)
+            return True, f"☁️ 词云已生成并发送（最近 {len(message_data)} 条有效消息）"
         except Exception as exc:
-            await self._edit_or_reply(event, f"⚠️ 词云发送失败：{_html(exc)}", parse_mode="html")
+            return False, f"词云发送失败：{exc}"
 
     def _wordcloud_font_path(self) -> str | None:
         candidate = Path(__file__).resolve().parent.parent / "redpack-byRBQ" / "assets" / "font.ttf"
@@ -1001,6 +1005,16 @@ class SummaryPlugin(Plugin):
             await event.reply(text, parse_mode=parse_mode)
         except Exception:
             pass
+
+    async def _edit_command_message(self, event: Any, text: str, *, parse_mode: str | None = None) -> None:
+        try:
+            await event.edit(text, parse_mode=parse_mode)
+            return
+        except Exception:
+            if parse_mode:
+                await event.edit(text)
+                return
+            raise RuntimeError("当前消息无法编辑（已按你的要求禁用 reply 回退）")
 
     async def _show_prompts(self, event: Any) -> None:
         prompts = [
@@ -1469,7 +1483,7 @@ class SummaryPlugin(Plugin):
 {_code(f"{prefix}{cmd} 1h")} - 按最近1小时消息总结
 {_code(f"{prefix}{cmd} 1d")} - 按最近1天消息总结
 {_code(f"{prefix}{cmd} 100 1h")} - 最近1小时内，最多读取100条消息
-{_code(f"{prefix}{cmd} 100 --cy")} - 总结并发送热词云（简写参数）
+{_code(f"{prefix}{cmd} 100 --cy")} - 仅生成并发送热词云（简写参数）
 
 <b>定时总结：</b>
 {_code(f"{prefix}{cmd} add <群组标识> <间隔> [消息数] [选项]")}
