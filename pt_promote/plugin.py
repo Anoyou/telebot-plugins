@@ -30,7 +30,6 @@
 """
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
@@ -97,13 +96,10 @@ def _format_params(params: dict[str, str]) -> str:
     lines = []
 
     # 促销类型
-    promo_name = "Free" if params["promotion_type"] == "2" else "2X Free"
-    lines.append(f"类型：{promo_name}")
+    lines.append(f"促销类型：{_promotion_type_label(params)}")
 
     # 时长
-    hours = int(params["duration"])
-    days = hours // 24
-    lines.append(f"时长：{days}天")
+    lines.append(f"促销时长：{_duration_label(params)}")
 
     # 竞价
     if params["competitive_bonus"]:
@@ -118,6 +114,28 @@ def _format_params(params: dict[str, str]) -> str:
         lines.append(f"奖励人数：{params['reward_user_num']}人")
 
     return "\n".join(lines)
+
+
+def _promotion_type_label(params: dict[str, str]) -> str:
+    return "Free" if params["promotion_type"] == "2" else "2X Free"
+
+
+def _duration_label(params: dict[str, str]) -> str:
+    hours = int(params["duration"])
+    if hours % 24 == 0:
+        return f"{hours // 24} 天"
+    return f"{hours} 小时"
+
+
+def _format_bonus_amount(value: Any) -> str:
+    try:
+        return f"{int(str(value).replace(',', '').strip()):,}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _details_url(site_url: str, torrent_id: str) -> str:
+    return f"{site_url}/details.php?id={torrent_id}"
 
 
 @register
@@ -173,45 +191,50 @@ class PTPromotePlugin(Plugin):
         params = _parse_args(args[1:])
         params_desc = _format_params(params)
 
-        await event.edit(f"⏳ 正在获取种子 {torrent_id} 的促销信息...")
+        await event.edit(f"⏳ 正在获取 ID 为 {torrent_id} 的种子的促销信息...")
 
         try:
             # Step 1: 获取促销信息
             info_result = await self._get_promotion_info(ctx, site_url, cookie, torrent_id)
             if not info_result["success"]:
-                await event.edit(f"❌ {info_result['error']}")
+                await event.edit(f"❌ ID 为 {torrent_id} 的种子当前不符合促销条件：{info_result['error']}")
                 return
 
             is_exists = info_result["is_exists"]
 
             # Step 2: 预计算消耗
-            await event.edit(f"📋 {params_desc}\n\n⏳ 正在计算消耗...")
+            await event.edit(
+                f"📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
+                f"{params_desc}\n\n"
+                f"⏳ 正在计算预计消耗..."
+            )
             calc_result = await self._calculate_cost(ctx, site_url, cookie, torrent_id, params, is_exists)
             if not calc_result["success"]:
-                await event.edit(f"❌ {calc_result['error']}")
+                await event.edit(f"❌ 计算消耗失败：{calc_result['error']}")
                 return
 
-            cost = calc_result["cost_bonus"]
+            cost = _format_bonus_amount(calc_result["cost_bonus"])
             expression = calc_result["expression"]
 
             # Step 3: 确认促销
             await event.edit(
-                f"📋 {params_desc}\n\n"
-                f"💰 预计消耗：{cost} 蝌蚪\n"
-                f"📝 {expression}\n\n"
-                f"⏳ 正在确认..."
+                f"📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
+                f"{params_desc}\n"
+                f"预计消耗：{cost} 蝌蚪\n"
+                f"计算方式：{expression}\n\n"
+                f"⏳ 正在确认置顶..."
             )
             confirm_result = await self._confirm_promotion(ctx, site_url, cookie, torrent_id, params, is_exists)
 
             if confirm_result["success"]:
                 await event.edit(
-                    f"✅ 置顶促销成功！\n\n"
-                    f"种子：{torrent_id}\n"
+                    f"✅ 种子置顶促销成功！\n\n"
+                    f"种子 ID：{torrent_id}\n"
                     f"{params_desc}\n"
                     f"消耗：{cost} 蝌蚪"
                 )
             else:
-                await event.edit(f"❌ {confirm_result['error']}")
+                await event.edit(f"❌ 置顶失败：{confirm_result['error']}")
 
         except Exception as e:
             await event.edit(f"❌ 发生错误：{str(e)[:200]}")
@@ -241,7 +264,7 @@ class PTPromotePlugin(Plugin):
             await event.edit("❌ 缺少 external_http 权限")
             return
 
-        await event.edit(f"⏳ 正在查询种子 {torrent_id} 的促销历史...")
+        await event.edit(f"⏳ 正在查询 ID 为 {torrent_id} 的种子是否符合促销条件...")
 
         try:
             url = f"{site_url}/plugin/sticky-promotion-history?torrent_id={torrent_id}"
@@ -253,11 +276,10 @@ class PTPromotePlugin(Plugin):
             response = await ctx.http.get(url, headers=headers)
 
             if response.status_code == 200:
-                html = response.text
-                if "暂无记录" in html or "没有记录" in html:
-                    await event.edit(f"📋 种子 {torrent_id} 暂无促销记录")
-                else:
-                    await event.edit(f"📋 种子 {torrent_id} 有促销记录\n{site_url}/details.php?id={torrent_id}")
+                await event.edit(
+                    f"📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n"
+                    f"{_details_url(site_url, torrent_id)}"
+                )
             else:
                 await event.edit(f"❌ 查询失败：HTTP {response.status_code}")
 
