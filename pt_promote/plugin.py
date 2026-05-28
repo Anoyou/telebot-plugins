@@ -2,13 +2,27 @@
 
 功能：
   - 在青娃PT上为种子设置置顶促销
+  - 支持自定义促销类型、时长、竞价和奖励
   - 支持查询促销历史
-  - 自动处理表单和确认流程
 
 用法：
-  {prefix}pt <种子ID>
-  {prefix}pt 12345           # 置顶促销（使用站点默认参数）
-  {prefix}ptinfo <种子ID>    # 查询促销历史
+  {prefix}pt <种子ID> [选项]
+
+选项（可选，用空格分隔）：
+  free        促销类型：free=Free, 2x=2X Free（默认 free）
+  1d/2d/3d/7d 时长：1天/2天/3天/7天（默认 1天）
+  bid=100     竞价蝌蚪（越高排名越靠前）
+  reward=50   奖励蝌蚪（吸引下载者）
+  users=10    奖励人数
+
+示例：
+  {prefix}pt 12345                    # 默认：Free 1天
+  {prefix}pt 12345 free 7d            # Free 7天
+  {prefix}pt 12345 2x 3d bid=200      # 2X Free 3天 竞价200
+  {prefix}pt 12345 free 7d bid=100 reward=50 users=10
+
+查询：
+  {prefix}ptinfo <种子ID>
 
 注意：
   - 需要站点账号权限（消耗蝌蚪）
@@ -21,28 +35,89 @@ from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
+# 促销类型映射
+PROMO_TYPES = {
+    "free": "2",
+    "2x": "4",
+    "2xfree": "4",
+}
 
-def _extract_form_fields(html: str) -> dict[str, str]:
-    """从促销表单 HTML 中提取字段和默认值。"""
-    fields = {}
-    for match in re.finditer(
-        r'<(?:input|select)[^>]*name="([^"]+)"[^>]*(?:value="([^"]*)")?',
-        html,
-        re.DOTALL,
-    ):
-        name = match.group(1)
-        value = match.group(2) or ""
-        if name and name not in ('torrent_id',):
-            fields[name] = value
+# 时长映射（天 -> 小时）
+DURATION_MAP = {
+    "1d": "24",
+    "2d": "48",
+    "3d": "72",
+    "7d": "168",
+    "1": "24",
+    "2": "48",
+    "3": "72",
+    "7": "168",
+}
 
-    for match in re.finditer(
-        r'<select[^>]*name="([^"]+)"[^>]*>.*?<option[^>]*value="([^"]*)"[^>]*selected',
-        html,
-        re.DOTALL,
-    ):
-        fields[match.group(1)] = match.group(2)
 
-    return fields
+def _parse_args(args: list[str]) -> dict[str, str]:
+    """解析命令参数。"""
+    result = {
+        "promotion_type": "2",  # 默认 Free
+        "duration": "24",       # 默认 1天
+        "competitive_bonus": "",
+        "reward_bonus": "",
+        "reward_user_num": "",
+    }
+
+    for arg in args:
+        arg_lower = arg.lower()
+
+        # 促销类型
+        if arg_lower in PROMO_TYPES:
+            result["promotion_type"] = PROMO_TYPES[arg_lower]
+
+        # 时长
+        elif arg_lower in DURATION_MAP:
+            result["duration"] = DURATION_MAP[arg_lower]
+
+        # 键值对参数
+        elif "=" in arg:
+            key, _, value = arg.partition("=")
+            key = key.lower().strip()
+            value = value.strip()
+
+            if key == "bid":
+                result["competitive_bonus"] = value
+            elif key == "reward":
+                result["reward_bonus"] = value
+            elif key == "users":
+                result["reward_user_num"] = value
+
+    return result
+
+
+def _format_params(params: dict[str, str]) -> str:
+    """格式化参数为可读文本。"""
+    lines = []
+
+    # 促销类型
+    promo_name = "Free" if params["promotion_type"] == "2" else "2X Free"
+    lines.append(f"类型：{promo_name}")
+
+    # 时长
+    hours = int(params["duration"])
+    days = hours // 24
+    lines.append(f"时长：{days}天")
+
+    # 竞价
+    if params["competitive_bonus"]:
+        lines.append(f"竞价：{params['competitive_bonus']} 蝌蚪")
+
+    # 奖励
+    if params["reward_bonus"]:
+        lines.append(f"奖励：{params['reward_bonus']} 蝌蚪")
+
+    # 奖励人数
+    if params["reward_user_num"]:
+        lines.append(f"奖励人数：{params['reward_user_num']}人")
+
+    return "\n".join(lines)
 
 
 @register
@@ -70,7 +145,16 @@ class PTPromotePlugin(Plugin):
         """处理置顶促销命令。"""
         if not args:
             prefix = ctx.config.get("command", "pt")
-            await event.edit(f"用法：{prefix} <种子ID>\n示例：{prefix} 12345")
+            await event.edit(
+                f"用法：{prefix} <种子ID> [选项]\n\n"
+                f"选项：\n"
+                f"  free/2x — 促销类型（默认 free）\n"
+                f"  1d/2d/3d/7d — 时长（默认 1天）\n"
+                f"  bid=100 — 竞价蝌蚪\n"
+                f"  reward=50 — 奖励蝌蚪\n"
+                f"  users=10 — 奖励人数\n\n"
+                f"示例：{prefix} 12345 free 7d bid=100"
+            )
             return
 
         torrent_id = args[0]
@@ -85,21 +169,24 @@ class PTPromotePlugin(Plugin):
             await event.edit("❌ 缺少 external_http 权限")
             return
 
+        # 解析参数
+        params = _parse_args(args[1:])
+        params_desc = _format_params(params)
+
         await event.edit(f"⏳ 正在获取种子 {torrent_id} 的促销信息...")
 
         try:
-            # Step 1: 获取促销信息和表单
+            # Step 1: 获取促销信息
             info_result = await self._get_promotion_info(ctx, site_url, cookie, torrent_id)
             if not info_result["success"]:
                 await event.edit(f"❌ {info_result['error']}")
                 return
 
-            form_fields = info_result["form_fields"]
             is_exists = info_result["is_exists"]
 
             # Step 2: 预计算消耗
-            await event.edit(f"⏳ 正在计算消耗...")
-            calc_result = await self._calculate_cost(ctx, site_url, cookie, torrent_id, form_fields, is_exists)
+            await event.edit(f"📋 {params_desc}\n\n⏳ 正在计算消耗...")
+            calc_result = await self._calculate_cost(ctx, site_url, cookie, torrent_id, params, is_exists)
             if not calc_result["success"]:
                 await event.edit(f"❌ {calc_result['error']}")
                 return
@@ -108,11 +195,21 @@ class PTPromotePlugin(Plugin):
             expression = calc_result["expression"]
 
             # Step 3: 确认促销
-            await event.edit(f"💰 预计消耗：{cost} 蝌蚪\n📝 {expression}\n⏳ 正在确认...")
-            confirm_result = await self._confirm_promotion(ctx, site_url, cookie, torrent_id, form_fields, is_exists)
+            await event.edit(
+                f"📋 {params_desc}\n\n"
+                f"💰 预计消耗：{cost} 蝌蚪\n"
+                f"📝 {expression}\n\n"
+                f"⏳ 正在确认..."
+            )
+            confirm_result = await self._confirm_promotion(ctx, site_url, cookie, torrent_id, params, is_exists)
 
             if confirm_result["success"]:
-                await event.edit(f"✅ 置顶促销成功！\n种子：{torrent_id}\n消耗：{cost} 蝌蚪")
+                await event.edit(
+                    f"✅ 置顶促销成功！\n\n"
+                    f"种子：{torrent_id}\n"
+                    f"{params_desc}\n"
+                    f"消耗：{cost} 蝌蚪"
+                )
             else:
                 await event.edit(f"❌ {confirm_result['error']}")
 
@@ -170,7 +267,7 @@ class PTPromotePlugin(Plugin):
     async def _get_promotion_info(
         self, ctx: PluginContext, site_url: str, cookie: str, torrent_id: str,
     ) -> dict[str, Any]:
-        """获取促销信息和表单。"""
+        """获取促销信息。"""
         url = f"{site_url}/plugin/sticky-promotion-info"
         headers = {
             "Cookie": cookie,
@@ -186,27 +283,32 @@ class PTPromotePlugin(Plugin):
         if data.get("ret") != 0:
             return {"success": False, "error": data.get("msg", "未知错误")}
 
-        content = data.get("data", {}).get("content", "")
         is_exists = data.get("data", {}).get("is_exists", 0)
-        form_fields = _extract_form_fields(content)
-
-        return {"success": True, "form_fields": form_fields, "is_exists": is_exists}
+        return {"success": True, "is_exists": is_exists}
 
     async def _calculate_cost(
         self, ctx: PluginContext, site_url: str, cookie: str,
-        torrent_id: str, form_fields: dict[str, str], is_exists: int,
+        torrent_id: str, params: dict[str, str], is_exists: int,
     ) -> dict[str, Any]:
         """预计算消耗。"""
-        params = {**form_fields, "torrent_id": torrent_id, "__just_calculate": "1"}
-        url = f"{site_url}/plugin/sticky-promotion-append" if is_exists == 1 else f"{site_url}/plugin/sticky-promotion"
+        request_params = {
+            "torrent_id": torrent_id,
+            "promotion_type": params["promotion_type"],
+            "duration": params["duration"],
+            "competitive_bonus": params["competitive_bonus"] or "0",
+            "reward_bonus": params["reward_bonus"] or "0",
+            "reward_user_num": params["reward_user_num"] or "0",
+            "__just_calculate": "1",
+        }
 
+        url = f"{site_url}/plugin/sticky-promotion-append" if is_exists == 1 else f"{site_url}/plugin/sticky-promotion"
         headers = {
             "Cookie": cookie,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-        response = await ctx.http.post(url, params=params, headers=headers)
+        response = await ctx.http.post(url, params=request_params, headers=headers)
 
         if response.status_code != 200:
             return {"success": False, "error": f"HTTP {response.status_code}"}
@@ -223,19 +325,26 @@ class PTPromotePlugin(Plugin):
 
     async def _confirm_promotion(
         self, ctx: PluginContext, site_url: str, cookie: str,
-        torrent_id: str, form_fields: dict[str, str], is_exists: int,
+        torrent_id: str, params: dict[str, str], is_exists: int,
     ) -> dict[str, Any]:
         """确认促销。"""
-        params = {**form_fields, "torrent_id": torrent_id}
-        url = f"{site_url}/plugin/sticky-promotion-append" if is_exists == 1 else f"{site_url}/plugin/sticky-promotion"
+        request_params = {
+            "torrent_id": torrent_id,
+            "promotion_type": params["promotion_type"],
+            "duration": params["duration"],
+            "competitive_bonus": params["competitive_bonus"] or "0",
+            "reward_bonus": params["reward_bonus"] or "0",
+            "reward_user_num": params["reward_user_num"] or "0",
+        }
 
+        url = f"{site_url}/plugin/sticky-promotion-append" if is_exists == 1 else f"{site_url}/plugin/sticky-promotion"
         headers = {
             "Cookie": cookie,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-        response = await ctx.http.post(url, params=params, headers=headers)
+        response = await ctx.http.post(url, params=request_params, headers=headers)
 
         if response.status_code != 200:
             return {"success": False, "error": f"HTTP {response.status_code}"}
