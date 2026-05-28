@@ -24,11 +24,19 @@ from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.25"
+VERSION = "1.1.26"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
 WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_+-]{1,}")
+CN_BOUNDARY_RE = re.compile(
+    r"(?:已经|可以|应该|可能|需要|就是|不是|没有|不要|知道|看看|直接|确实|"
+    r"如果|因为|所以|但是|然后|现在|还是|感觉|进行|使用|更新|发布|包括|"
+    r"这个|那个|一下|一个|什么|怎么|为什么|这里|那里|这样|那样|"
+    r"今日份|今天|昨天|明天|时候|里面|来源|情况|问题|最近|消息|有效|"
+    r"即可|请|我要|你要|他要|她要|我们|你们|他们|自己|任意|"
+    r"[我你他她它咱您的是有在把被给对向从到和与或及并而就都也还只再又很挺太更最了得地着过吗呢吧啊呀哦])"
+)
 SUMMARY_MESSAGE_TEMPLATE_DEFAULT = (
     "📊 群组总结\n"
     "来源: {chat_display}\n"
@@ -164,6 +172,22 @@ def _safe_filename(value: str) -> str:
 
 def _command_prefix() -> str:
     return current_command_prefix(fallback=",")
+
+
+def _is_noisy_chinese_word(word: str) -> bool:
+    if not re.fullmatch(r"[\u4e00-\u9fff]{2,}", word):
+        return False
+    if len(word) > 12:
+        return True
+    if re.search(r"(?:认转账联|账联动是|付费娱|今日份阳|对收款|心里已|经有答案|答案了|了的|已经有)", word):
+        return True
+    if re.search(r"[我你他她它咱您的是有在把被给对向从到和与或及并而就都也还只再又很挺太更最了得地着过吗呢吧啊呀哦]", word[1:-1]):
+        return True
+    if re.search(r"(?:的|了|是|有|在|给|把|被|和|与|就|都|也|还|吗|呢|吧)$", word):
+        return True
+    if re.search(r"^(?:我|你|他|她|它|咱|您|的|了|是|有|在|给|把|被|和|与|就|都|也|还|请)", word):
+        return True
+    return False
 
 
 def _event_chat_id(event: Any) -> int:
@@ -746,12 +770,7 @@ class SummaryPlugin(Plugin):
                 return item
         return None
 
-    def _render_wordcloud_png(self, message_data: list[MessageData]) -> tuple[bytes | None, str]:
-        try:
-            from PIL import Image, ImageDraw, ImageFont
-        except Exception:
-            return None, "缺少 Pillow 依赖"
-
+    def _collect_wordcloud_counts(self, message_data: list[MessageData]) -> Counter[str]:
         stop_words = {
             "这个", "那个", "就是", "不是", "可以", "没有", "一下", "一个", "什么", "怎么", "为什么",
             "然后", "现在", "还是", "但是", "因为", "所以", "如果", "已经", "应该", "可能", "感觉",
@@ -768,40 +787,89 @@ class SummaryPlugin(Plugin):
             "正在获取消息", "消息并总结", "词云已生成并发送", "热词云", "群组总结", "总结最近", "条有效消息",
         )
         counts: Counter[str] = Counter()
+        prefix = _command_prefix()
         for item in message_data:
             text = str(item.content or item.text or "")
             if not text:
                 continue
-            # 过滤系统/命令文案，避免污染高频词。
             normalized = text.strip().lower()
             if any(fragment in normalized for fragment in blocked_fragments):
                 continue
-            prefix = _command_prefix()
             if normalized.startswith(prefix + self._command) or normalized.startswith(prefix + "总结"):
                 continue
             text = re.sub(r"https?://\S+", " ", text, flags=re.IGNORECASE)
             text = re.sub(r"[@#][\w_\u4e00-\u9fff-]+", " ", text)
-            # 英文词
             for token in re.findall(r"[A-Za-z][A-Za-z0-9_+\-.]{1,24}", text):
                 w = token.lower().strip()
                 if w in stop_words or w.isdigit() or re.fullmatch(r"[a-z]{1,2}", w):
                     continue
                 counts[w] += 2
-            # 中文连续片段：2~5字滑窗
+            for token in re.findall(r"\d{2,}[A-Za-z%]?", text):
+                w = token.lower().strip()
+                if w not in stop_words:
+                    counts[w] += 1
             for part in re.findall(r"[\u4e00-\u9fff]{2,}", text):
-                if len(part) <= 4:
-                    w = part.lower().strip()
-                    if w not in stop_words:
-                        counts[w] += 3
-                    continue
-                plen = len(part)
-                for size in range(2, 6):
-                    for i in range(0, plen - size + 1):
-                        w = part[i:i + size].lower().strip()
-                        if w in stop_words:
+                for word, weight in self._wordcloud_chinese_candidates(part, stop_words):
+                    counts[word] += weight
+        return self._wordcloud_filter_counts(counts)
+
+    @staticmethod
+    def _wordcloud_chinese_candidates(part: str, stop_words: set[str]) -> list[tuple[str, int]]:
+        candidates: list[tuple[str, int]] = []
+        for match in re.finditer(r"[\u4e00-\u9fff]{2,}(?:模块|模式|插件|联动|转账|收款|红包|答案|回复|娱乐|消息|配置|词云|总结|用户|群组|群聊|文件|图片)", part):
+            word = match.group(0)
+            if word not in stop_words and not _is_noisy_chinese_word(word):
+                candidates.append((word, 5 + min(len(word), 8)))
+        pieces = [piece for piece in CN_BOUNDARY_RE.split(part) if piece]
+        for piece in pieces:
+            if CN_BOUNDARY_RE.fullmatch(piece):
+                continue
+            if not re.fullmatch(r"[\u4e00-\u9fff]{2,}", piece):
+                continue
+            if piece in stop_words or _is_noisy_chinese_word(piece):
+                continue
+            length = len(piece)
+            if length <= 10:
+                candidates.append((piece, 3 + min(length, 6)))
+            else:
+                for size in (10, 8, 6, 4):
+                    for i in range(0, length - size + 1):
+                        word = piece[i:i + size]
+                        if word in stop_words or _is_noisy_chinese_word(word):
                             continue
-                        edge_bonus = 1 if (i == 0 or i == plen - size) else 0
-                        counts[w] += (1 + edge_bonus) if size <= 3 else (2 + edge_bonus)
+                        edge_bonus = 1 if (i == 0 or i == length - size) else 0
+                        candidates.append((word, 2 + size // 2 + edge_bonus))
+        return candidates
+
+    @staticmethod
+    def _wordcloud_filter_counts(counts: Counter[str]) -> Counter[str]:
+        entries = [(word, count) for word, count in counts.items() if count >= 2 and not _is_noisy_chinese_word(word)]
+        entries.sort(key=lambda item: (item[1], len(item[0])), reverse=True)
+        filtered: Counter[str] = Counter()
+        for word, count in entries:
+            skip = False
+            remove: list[str] = []
+            for kept, kept_count in list(filtered.items()):
+                if word in kept and len(word) < len(kept) and count <= kept_count * 1.25:
+                    skip = True
+                    break
+                if kept in word and len(kept) < len(word) and kept_count <= count * 0.8:
+                    remove.append(kept)
+            if not skip:
+                for kept in remove:
+                    filtered.pop(kept, None)
+                filtered[word] = count
+            if len(filtered) >= 240:
+                break
+        return filtered
+
+    def _render_wordcloud_png(self, message_data: list[MessageData]) -> tuple[bytes | None, str]:
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+        except Exception:
+            return None, "缺少 Pillow 依赖"
+
+        counts = self._collect_wordcloud_counts(message_data)
         if not counts:
             return None, "未提取到可用热词"
         freq = [(w, c) for w, c in counts.most_common(220) if c >= 2]
