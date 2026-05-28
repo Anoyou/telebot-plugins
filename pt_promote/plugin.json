@@ -1,0 +1,51 @@
+{
+  "name": "pt_promote",
+  "display_name": "PT 种子促销",
+  "description": "在青娃PT置顶促销某个种子（消耗蝌蚪）",
+  "author": "xiaoyou",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "min_telepilot_version": "0.24.0",
+  "commands": ["pt", "促销", "ptinfo"],
+  "tags": ["pt", "torrent", "promote", "utility"],
+  "category": "utility",
+  "cleanup_mode": "no-op",
+  "permissions": ["send_message", "edit_message", "external_http"],
+  "allowed_hosts": ["www.qingwapt.com"],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "single",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "触发指令名",
+        "description": "不含系统命令前缀。例：pt、促销",
+        "default": "pt",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$"
+      },
+      "site_url": {
+        "type": "string",
+        "title": "PT 站点地址",
+        "description": "站点根 URL，默认 https://www.qingwapt.com",
+        "default": "https://www.qingwapt.com"
+      },
+      "cookie": {
+        "type": "string",
+        "title": "Cookie",
+        "description": "登录后浏览器复制的完整 Cookie 字符串",
+        "default": ""
+      },
+      "timeout": {
+        "type": "integer",
+        "title": "请求超时（秒）",
+        "default": 30,
+        "minimum": 5,
+        "maximum": 120
+      }
+    },
+    "required": ["command", "cookie"]
+  }
+}
