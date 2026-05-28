@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.0",
+    version="1.0.3",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",
