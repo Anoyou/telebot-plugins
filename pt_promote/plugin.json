@@ -37,13 +37,6 @@
         "title": "Cookie",
         "description": "登录后浏览器复制的完整 Cookie 字符串",
         "default": ""
-      },
-      "timeout": {
-        "type": "integer",
-        "title": "请求超时（秒）",
-        "default": 30,
-        "minimum": 5,
-        "maximum": 120
       }
     },
     "required": ["command", "cookie"]
