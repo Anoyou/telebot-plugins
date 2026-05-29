@@ -30,7 +30,12 @@
 """
 from __future__ import annotations
 
+import re
+from html import escape as html_escape
+from html import unescape as html_unescape
+from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urljoin
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
@@ -134,8 +139,241 @@ def _format_bonus_amount(value: Any) -> str:
         return str(value)
 
 
+def _duration_seconds(value: Any, default: int) -> int:
+    text = str(value or "").strip().lower()
+    if not text:
+        return default
+    match = re.fullmatch(r"(\d+)\s*([smhd]?)", text)
+    if not match:
+        return default
+    amount = int(match.group(1))
+    unit = match.group(2) or "s"
+    multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
+    return max(0, min(amount * multiplier, 30 * 86400))
+
+
+def _format_duration(seconds: int) -> str:
+    seconds = max(0, int(seconds or 0))
+    if seconds >= 86400:
+        days, rest = divmod(seconds, 86400)
+        hours = rest // 3600
+        return f"{days}天{hours}小时" if hours else f"{days}天"
+    if seconds >= 3600:
+        hours, rest = divmod(seconds, 3600)
+        minutes = rest // 60
+        return f"{hours}小时{minutes}分钟" if minutes else f"{hours}小时"
+    if seconds >= 60:
+        minutes, rest = divmod(seconds, 60)
+        return f"{minutes}分钟{rest}秒" if rest else f"{minutes}分钟"
+    return f"{seconds}秒"
+
+
 def _details_url(site_url: str, torrent_id: str) -> str:
     return f"{site_url}/details.php?id={torrent_id}"
+
+
+def _compact_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _first_meta_value(payload: Any, keys: tuple[str, ...]) -> str:
+    if isinstance(payload, dict):
+        lowered = {str(key).lower(): value for key, value in payload.items()}
+        for key in keys:
+            value = lowered.get(key)
+            if value not in (None, ""):
+                return _compact_text(value)
+        for value in payload.values():
+            found = _first_meta_value(value, keys)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for item in payload:
+            found = _first_meta_value(item, keys)
+            if found:
+                return found
+    return ""
+
+
+def _extract_torrent_meta(payload: Any) -> dict[str, str]:
+    return {
+        "title": _first_meta_value(
+            payload,
+            (
+                "title",
+                "name",
+                "torrent_title",
+                "torrent_name",
+                "subject",
+                "filename",
+            ),
+        ),
+        "subtitle": _first_meta_value(
+            payload,
+            (
+                "subtitle",
+                "sub_title",
+                "small_descr",
+                "small_description",
+                "description",
+                "descr",
+                "intro",
+            ),
+        ),
+    }
+
+
+class _TorrentDetailsHTMLParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.text_chunks: list[str] = []
+        self.title_chunks: list[str] = []
+        self.h1_chunks: list[str] = []
+        self._in_title = False
+        self._h1_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        tag = tag.lower()
+        if tag == "title":
+            self._in_title = True
+        elif tag == "h1":
+            self._h1_depth += 1
+        if tag in {"br", "div", "p", "tr", "td", "th", "li", "h1", "h2", "h3"}:
+            self.text_chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "title":
+            self._in_title = False
+        elif tag == "h1" and self._h1_depth > 0:
+            self._h1_depth -= 1
+        if tag in {"div", "p", "tr", "td", "th", "li", "h1", "h2", "h3"}:
+            self.text_chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        text = _compact_text(data)
+        if not text:
+            return
+        self.text_chunks.append(text)
+        if self._in_title:
+            self.title_chunks.append(text)
+        if self._h1_depth > 0:
+            self.h1_chunks.append(text)
+
+
+def _clean_html_title(value: str) -> str:
+    title = _compact_text(value)
+    if not title:
+        return ""
+    for separator in (" - ", " – ", " | ", "::"):
+        if separator in title:
+            title = title.split(separator, 1)[0].strip()
+    return title
+
+
+def _extract_torrent_meta_from_html(html: str) -> dict[str, str]:
+    parser = _TorrentDetailsHTMLParser()
+    parser.feed(html or "")
+    plain = "\n".join(parser.text_chunks)
+    title = _clean_html_title(" ".join(parser.h1_chunks))
+    if not title:
+        title = _clean_html_title(" ".join(parser.title_chunks))
+
+    subtitle = ""
+    plain_unescaped = html_unescape(plain)
+    for label in ("副标题", "小标题", "简介", "描述"):
+        match = re.search(rf"{label}\s*[:：]\s*([^\n]+)", plain_unescaped)
+        if match:
+            subtitle = _compact_text(match.group(1))
+            break
+
+    return {"title": title, "subtitle": subtitle}
+
+
+def _format_torrent_lines(site_url: str, torrent_id: str, meta: dict[str, str]) -> str:
+    url = html_escape(urljoin(f"{site_url.rstrip('/')}/", f"details.php?id={torrent_id}"), quote=True)
+    title = _compact_text(meta.get("title")) or f"ID {torrent_id}"
+    subtitle = _compact_text(meta.get("subtitle"))
+
+    lines = [
+        (
+            f"种子：<a href=\"{url}\">{html_escape(title, quote=False)}</a>"
+            f"（ID：<code>{html_escape(torrent_id, quote=False)}</code>）"
+        )
+    ]
+    if subtitle:
+        lines.append(f"副标题：{html_escape(subtitle, quote=False)}")
+    return "\n".join(lines)
+
+
+def _int_value(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _interaction_args_from_payload(payload: dict[str, Any]) -> list[str]:
+    event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    raw_text = str(
+        payload.get("message_text")
+        or payload.get("text")
+        or event.get("text")
+        or ""
+    ).strip()
+    raw_options = payload.get("options") or payload.get("default_options") or ""
+    options = str(raw_options or "").strip().split()
+
+    for key in ("torrent_id", "id"):
+        value = payload.get(key) or event.get(key)
+        if _int_value(value) is not None:
+            return [str(value).strip(), *options]
+
+    id_match = re.search(r"(?<!\w)id\s*=\s*(\d+)", raw_text, flags=re.IGNORECASE)
+    if id_match:
+        tail_options = raw_text[id_match.end():].strip().split()
+        return [id_match.group(1), *tail_options, *options]
+
+    first_number = re.search(r"\b(\d{2,})\b", raw_text)
+    if first_number:
+        tail_options = raw_text[first_number.end():].strip().split()
+        return [first_number.group(1), *tail_options, *options]
+
+    return options
+
+
+def _payload_message_id(payload: dict[str, Any]) -> int | None:
+    event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    return _int_value(payload.get("message_id") or event.get("message_id"))
+
+
+def _redirect_error(status_code: int) -> str:
+    return (
+        f"站点返回 HTTP {status_code} 重定向，可能已处于置顶状态或站点拒绝重复提交，"
+        "本次不再继续处理。"
+    )
+
+
+class _InteractionReplyEvent:
+    """让交互 Bot 入口复用命令处理逻辑，只收集最终消息。"""
+
+    def __init__(self) -> None:
+        self.outputs: list[tuple[str, dict[str, Any]]] = []
+        self.success: bool = False
+
+    async def edit(self, text: str, **kwargs: Any) -> None:
+        self.outputs.append((str(text or ""), dict(kwargs or {})))
+
+    async def respond(self, text: str, **kwargs: Any) -> None:
+        await self.edit(text, **kwargs)
+
+    async def reply(self, text: str, **kwargs: Any) -> None:
+        await self.edit(text, **kwargs)
+
+    @property
+    def final_text(self) -> str:
+        return self.outputs[-1][0] if self.outputs else ""
 
 
 @register
@@ -151,6 +389,43 @@ class PTPromotePlugin(Plugin):
             "促销": self._handle_promote,
             "ptinfo": self._handle_info,
         }
+
+    async def on_interaction(
+        self,
+        ctx: PluginContext,
+        entry_key: str,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]] | None:
+        if entry_key != "promote_torrent":
+            return None
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        event_type = str(payload.get("event_type") or event.get("type") or "")
+        if event_type not in {"keyword", "payment_confirmed", "message"}:
+            return []
+
+        args = _interaction_args_from_payload(payload)
+        if not args:
+            return [
+                {
+                    "type": "send_message",
+                    "text": "没有种子 ID，请使用：置顶 id=12345",
+                    "reply_to_message_id": _payload_message_id(payload),
+                },
+                {"type": "no_session"},
+            ]
+
+        event = _InteractionReplyEvent()
+        await self._handle_promote(ctx.client, event, args, ctx.account_id, ctx)
+        text = event.final_text or "置顶流程没有返回结果，请稍后再试。"
+        return [
+            {
+                "type": "send_message",
+                "text": text,
+                "reply_to_message_id": _payload_message_id(payload),
+            },
+            {"type": "result", "success": event.success},
+            {"type": "no_session"},
+        ]
 
     async def _handle_promote(
         self,
@@ -187,6 +462,11 @@ class PTPromotePlugin(Plugin):
             await event.edit("❌ 缺少 external_http 权限")
             return
 
+        guard = await self._claim_torrent_guard(ctx, torrent_id)
+        if not guard["allowed"]:
+            await event.edit(str(guard["message"]))
+            return
+
         # 解析参数
         params = _parse_args(args[1:])
         params_desc = _format_params(params)
@@ -201,6 +481,17 @@ class PTPromotePlugin(Plugin):
                 return
 
             is_exists = info_result["is_exists"]
+            torrent_meta = info_result.get("torrent_meta", {})
+            if not torrent_meta.get("title") or not torrent_meta.get("subtitle"):
+                fetched_meta = await self._fetch_torrent_meta(ctx, site_url, cookie, torrent_id)
+                torrent_meta = {**fetched_meta, **{key: value for key, value in torrent_meta.items() if value}}
+            if str(is_exists) == "1":
+                await self._mark_torrent_promoted(ctx, torrent_id)
+                await event.edit(
+                    f"ℹ️ ID 为 {torrent_id} 的种子已处于置顶状态或 12 小时内已置顶过，"
+                    "本次不再处理。"
+                )
+                return
 
             # Step 2: 预计算消耗
             await event.edit(
@@ -227,17 +518,23 @@ class PTPromotePlugin(Plugin):
             confirm_result = await self._confirm_promotion(ctx, site_url, cookie, torrent_id, params, is_exists)
 
             if confirm_result["success"]:
+                await self._mark_torrent_promoted(ctx, torrent_id)
+                if isinstance(event, _InteractionReplyEvent):
+                    event.success = True
                 await event.edit(
                     f"✅ 种子置顶促销成功！\n\n"
-                    f"种子 ID：{torrent_id}\n"
+                    f"{_format_torrent_lines(site_url, torrent_id, torrent_meta)}\n"
                     f"{params_desc}\n"
-                    f"消耗：{cost} 蝌蚪"
+                    f"消耗：{cost} 蝌蚪",
+                    parse_mode="html",
                 )
             else:
                 await event.edit(f"❌ 置顶失败：{confirm_result['error']}")
 
         except Exception as e:
             await event.edit(f"❌ 发生错误：{str(e)[:200]}")
+        finally:
+            await self._release_torrent_guard(ctx, str(guard.get("lock_key") or ""))
 
     async def _handle_info(
         self,
@@ -299,14 +596,37 @@ class PTPromotePlugin(Plugin):
         response = await ctx.http.get(url, params={"torrent_id": torrent_id}, headers=headers)
 
         if response.status_code != 200:
+            if response.status_code in {301, 302, 303, 307, 308}:
+                return {"success": False, "error": _redirect_error(response.status_code)}
             return {"success": False, "error": f"HTTP {response.status_code}"}
 
         data = response.json()
         if data.get("ret") != 0:
             return {"success": False, "error": data.get("msg", "未知错误")}
 
-        is_exists = data.get("data", {}).get("is_exists", 0)
-        return {"success": True, "is_exists": is_exists}
+        payload = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+        is_exists = payload.get("is_exists", 0)
+        return {
+            "success": True,
+            "is_exists": is_exists,
+            "torrent_meta": _extract_torrent_meta(payload),
+        }
+
+    async def _fetch_torrent_meta(
+        self, ctx: PluginContext, site_url: str, cookie: str, torrent_id: str,
+    ) -> dict[str, str]:
+        """从详情页尽量补齐标题/副标题；失败时不阻断置顶流程。"""
+        headers = {
+            "Cookie": cookie,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        try:
+            response = await ctx.http.get(_details_url(site_url, torrent_id), headers=headers)
+        except Exception:
+            return {}
+        if response.status_code != 200:
+            return {}
+        return _extract_torrent_meta_from_html(response.text)
 
     async def _calculate_cost(
         self, ctx: PluginContext, site_url: str, cookie: str,
@@ -333,6 +653,8 @@ class PTPromotePlugin(Plugin):
         response = await ctx.http.post(url, params=request_params, headers=headers)
 
         if response.status_code != 200:
+            if response.status_code in {301, 302, 303, 307, 308}:
+                return {"success": False, "error": _redirect_error(response.status_code)}
             return {"success": False, "error": f"HTTP {response.status_code}"}
 
         data = response.json()
@@ -369,6 +691,8 @@ class PTPromotePlugin(Plugin):
         response = await ctx.http.post(url, params=request_params, headers=headers)
 
         if response.status_code != 200:
+            if response.status_code in {301, 302, 303, 307, 308}:
+                return {"success": False, "error": _redirect_error(response.status_code)}
             return {"success": False, "error": f"HTTP {response.status_code}"}
 
         data = response.json()
@@ -376,6 +700,60 @@ class PTPromotePlugin(Plugin):
             return {"success": False, "error": data.get("msg", "未知错误")}
 
         return {"success": True}
+
+    def _torrent_guard_keys(self, ctx: PluginContext, torrent_id: str) -> tuple[str, str]:
+        base = f"pt_promote:{ctx.account_id}:{torrent_id}"
+        return f"{base}:lock", f"{base}:cooldown"
+
+    async def _claim_torrent_guard(self, ctx: PluginContext, torrent_id: str) -> dict[str, Any]:
+        redis = ctx.redis
+        if redis is None:
+            return {"allowed": True, "lock_key": ""}
+        lock_key, cooldown_key = self._torrent_guard_keys(ctx, torrent_id)
+        ttl = getattr(redis, "ttl", None)
+        remaining = 0
+        try:
+            value = await redis.get(cooldown_key)
+            if value:
+                if callable(ttl):
+                    remaining = int(await ttl(cooldown_key) or 0)
+                message = (
+                    f"ℹ️ 种子 ID {torrent_id} 已处于置顶状态或 12 小时内已置顶过，"
+                    f"剩余约 {_format_duration(remaining)}，本次不再处理。"
+                )
+                return {"allowed": False, "message": message, "lock_key": ""}
+            claimed = await redis.set(lock_key, "1", ex=300, nx=True)
+            if not claimed:
+                return {
+                    "allowed": False,
+                    "message": f"⏳ 种子 ID {torrent_id} 正在处理，请不要重复触发。",
+                    "lock_key": "",
+                }
+        except Exception:
+            return {"allowed": True, "lock_key": ""}
+        return {"allowed": True, "lock_key": lock_key}
+
+    async def _mark_torrent_promoted(self, ctx: PluginContext, torrent_id: str) -> None:
+        redis = ctx.redis
+        if redis is None:
+            return
+        _, cooldown_key = self._torrent_guard_keys(ctx, torrent_id)
+        cooldown = _duration_seconds(ctx.config.get("torrent_cooldown_seconds"), 12 * 3600)
+        if cooldown <= 0:
+            return
+        try:
+            await redis.set(cooldown_key, "1", ex=cooldown)
+        except Exception:
+            return
+
+    async def _release_torrent_guard(self, ctx: PluginContext, lock_key: str) -> None:
+        redis = ctx.redis
+        if redis is None or not lock_key:
+            return
+        try:
+            await redis.delete(lock_key)
+        except Exception:
+            return
 
 
 __all__ = ["PTPromotePlugin"]
