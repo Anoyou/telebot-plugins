@@ -176,13 +176,21 @@ def _compact_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _clean_meta_text(value: Any) -> str:
+    text = str(value or "")
+    if "<" in text and ">" in text:
+        text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
+        text = re.sub(r"<[^>]+>", " ", text)
+    return _compact_text(html_unescape(text))
+
+
 def _first_meta_value(payload: Any, keys: tuple[str, ...]) -> str:
     if isinstance(payload, dict):
         lowered = {str(key).lower(): value for key, value in payload.items()}
         for key in keys:
             value = lowered.get(key)
             if value not in (None, ""):
-                return _compact_text(value)
+                return _clean_meta_text(value)
         for value in payload.values():
             found = _first_meta_value(value, keys)
             if found:
@@ -213,9 +221,17 @@ def _extract_torrent_meta(payload: Any) -> dict[str, str]:
             (
                 "subtitle",
                 "sub_title",
+                "subheading",
                 "small_descr",
+                "small_descr_html",
+                "small_descr_plain",
+                "small_desc",
+                "small_desc_html",
+                "small_desc_plain",
                 "small_description",
+                "secondary_title",
                 "description",
+                "descr_html",
                 "descr",
                 "intro",
             ),
@@ -229,8 +245,11 @@ class _TorrentDetailsHTMLParser(HTMLParser):
         self.text_chunks: list[str] = []
         self.title_chunks: list[str] = []
         self.h1_chunks: list[str] = []
+        self.rows: list[list[str]] = []
         self._in_title = False
         self._h1_depth = 0
+        self._current_row: list[str] | None = None
+        self._current_cell: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         del attrs
@@ -239,6 +258,15 @@ class _TorrentDetailsHTMLParser(HTMLParser):
             self._in_title = True
         elif tag == "h1":
             self._h1_depth += 1
+        elif tag == "tr":
+            self._finish_cell()
+            self._finish_row()
+            self._current_row = []
+        elif tag in {"td", "th"}:
+            self._finish_cell()
+            if self._current_row is None:
+                self._current_row = []
+            self._current_cell = []
         if tag in {"br", "div", "p", "tr", "td", "th", "li", "h1", "h2", "h3"}:
             self.text_chunks.append("\n")
 
@@ -248,6 +276,11 @@ class _TorrentDetailsHTMLParser(HTMLParser):
             self._in_title = False
         elif tag == "h1" and self._h1_depth > 0:
             self._h1_depth -= 1
+        elif tag in {"td", "th"}:
+            self._finish_cell()
+        elif tag == "tr":
+            self._finish_cell()
+            self._finish_row()
         if tag in {"div", "p", "tr", "td", "th", "li", "h1", "h2", "h3"}:
             self.text_chunks.append("\n")
 
@@ -260,51 +293,148 @@ class _TorrentDetailsHTMLParser(HTMLParser):
             self.title_chunks.append(text)
         if self._h1_depth > 0:
             self.h1_chunks.append(text)
+        if self._current_cell is not None:
+            self._current_cell.append(text)
+
+    def finish(self) -> None:
+        self._finish_cell()
+        self._finish_row()
+
+    def _finish_cell(self) -> None:
+        if self._current_cell is None:
+            return
+        cell = _compact_text(" ".join(self._current_cell))
+        if cell and self._current_row is not None:
+            self._current_row.append(cell)
+        self._current_cell = None
+
+    def _finish_row(self) -> None:
+        if self._current_row is None:
+            return
+        row = [_compact_text(cell) for cell in self._current_row if _compact_text(cell)]
+        if row:
+            self.rows.append(row)
+        self._current_row = None
 
 
 def _clean_html_title(value: str) -> str:
     title = _compact_text(value)
     if not title:
         return ""
+    title = re.sub(r"\s*\[\s*免费\s*\].*$", "", title, flags=re.IGNORECASE)
+    title = re.sub(r"\s*剩余时间[:：].*$", "", title)
     for separator in (" - ", " – ", " | ", "::"):
         if separator in title:
             title = title.split(separator, 1)[0].strip()
     return title
 
 
+_SUBTITLE_LABELS = (
+    "副标题",
+    "小标题",
+    "简介",
+    "描述",
+    "subtitle",
+    "sub title",
+    "small descr",
+    "small description",
+    "small_desc",
+    "secondary title",
+)
+
+
+def _split_subtitle_label(value: str) -> tuple[bool, str]:
+    text = _compact_text(value)
+    if not text:
+        return False, ""
+    for label in _SUBTITLE_LABELS:
+        if re.fullmatch(rf"{re.escape(label)}\s*[:：]?", text, flags=re.IGNORECASE):
+            return True, ""
+        match = re.match(rf"^{re.escape(label)}\s*[:：]\s*(.+)$", text, flags=re.IGNORECASE)
+        if match:
+            return True, _compact_text(match.group(1))
+    return False, ""
+
+
+def _clean_subtitle_candidate(value: str, title: str) -> str:
+    candidate = _clean_meta_text(value)
+    if not candidate:
+        return ""
+    if _compact_text(candidate) == _compact_text(title):
+        return ""
+    if any(re.fullmatch(rf"{re.escape(label)}\s*[:：]?", candidate, flags=re.IGNORECASE) for label in _SUBTITLE_LABELS):
+        return ""
+    return candidate[:500]
+
+
+def _extract_subtitle_from_rows(rows: list[list[str]], title: str) -> str:
+    for row in rows:
+        for index, cell in enumerate(row):
+            is_label, inline_value = _split_subtitle_label(cell)
+            if not is_label:
+                continue
+            candidate = _clean_subtitle_candidate(inline_value, title)
+            if candidate:
+                return candidate
+            for next_cell in row[index + 1:]:
+                candidate = _clean_subtitle_candidate(next_cell, title)
+                if candidate:
+                    return candidate
+    return ""
+
+
+def _extract_subtitle_from_plain_text(plain: str, title: str) -> str:
+    lines = [_compact_text(line) for line in html_unescape(plain).splitlines()]
+    lines = [line for line in lines if line]
+    for index, line in enumerate(lines):
+        is_label, inline_value = _split_subtitle_label(line)
+        if not is_label:
+            continue
+        candidate = _clean_subtitle_candidate(inline_value, title)
+        if candidate:
+            return candidate
+        if index + 1 < len(lines):
+            candidate = _clean_subtitle_candidate(lines[index + 1], title)
+            if candidate:
+                return candidate
+    return ""
+
+
 def _extract_torrent_meta_from_html(html: str) -> dict[str, str]:
     parser = _TorrentDetailsHTMLParser()
     parser.feed(html or "")
+    parser.finish()
     plain = "\n".join(parser.text_chunks)
     title = _clean_html_title(" ".join(parser.h1_chunks))
     if not title:
         title = _clean_html_title(" ".join(parser.title_chunks))
 
-    subtitle = ""
-    plain_unescaped = html_unescape(plain)
-    for label in ("副标题", "小标题", "简介", "描述"):
-        match = re.search(rf"{label}\s*[:：]\s*([^\n]+)", plain_unescaped)
-        if match:
-            subtitle = _compact_text(match.group(1))
-            break
+    subtitle = _extract_subtitle_from_rows(parser.rows, title)
+    if not subtitle:
+        subtitle = _extract_subtitle_from_plain_text(plain, title)
 
     return {"title": title, "subtitle": subtitle}
 
 
-def _format_torrent_lines(site_url: str, torrent_id: str, meta: dict[str, str]) -> str:
+def _format_torrent_header(site_url: str, torrent_id: str, meta: dict[str, str]) -> str:
     url = html_escape(urljoin(f"{site_url.rstrip('/')}/", f"details.php?id={torrent_id}"), quote=True)
     title = _compact_text(meta.get("title")) or f"ID {torrent_id}"
-    subtitle = _compact_text(meta.get("subtitle"))
 
-    lines = [
-        (
-            f"种子：<a href=\"{url}\">{html_escape(title, quote=False)}</a>"
-            f"（ID：<code>{html_escape(torrent_id, quote=False)}</code>）"
-        )
-    ]
+    return (
+        f"种子：<a href=\"{url}\">{html_escape(title, quote=False)}</a>"
+        f"（ID：<code>{html_escape(torrent_id, quote=False)}</code>）"
+    )
+
+
+def _format_promotion_details(meta: dict[str, str], params_desc: str, cost: str) -> str:
+    subtitle = _compact_text(meta.get("subtitle"))
+    lines = ["副标题与促销明细" if subtitle else "促销明细"]
     if subtitle:
-        lines.append(f"副标题：{html_escape(subtitle, quote=False)}")
-    return "\n".join(lines)
+        lines.append(f"副标题：{subtitle}")
+    lines.extend(line for line in str(params_desc or "").splitlines() if _compact_text(line))
+    lines.append(f"消耗：{cost} 蝌蚪")
+    body = "\n".join(html_escape(line, quote=False) for line in lines)
+    return f"<blockquote expandable>{body}</blockquote>"
 
 
 def _int_value(value: Any) -> int | None:
@@ -523,9 +653,8 @@ class PTPromotePlugin(Plugin):
                     event.success = True
                 await event.edit(
                     f"✅ 种子置顶促销成功！\n\n"
-                    f"{_format_torrent_lines(site_url, torrent_id, torrent_meta)}\n"
-                    f"{params_desc}\n"
-                    f"消耗：{cost} 蝌蚪",
+                    f"{_format_torrent_header(site_url, torrent_id, torrent_meta)}\n\n"
+                    f"{_format_promotion_details(torrent_meta, params_desc, cost)}",
                     parse_mode="html",
                 )
             else:

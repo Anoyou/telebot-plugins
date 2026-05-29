@@ -3,7 +3,7 @@
   "display_name": "PT 种子促销",
   "description": "在青娃PT置顶促销某个种子（消耗蝌蚪）",
   "author": "xiaoyou",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "entry": "plugin.py",
   "min_telepilot_version": "0.24.0",
   "commands": ["pt", "促销", "ptinfo"],
