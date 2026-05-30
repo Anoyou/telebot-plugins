@@ -59,6 +59,81 @@ DURATION_MAP = {
 }
 
 
+class _SafeTemplateDict(dict[str, Any]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+PROMOTE_USAGE_TEMPLATE_DEFAULT = (
+    "用法：{prefix}{command} <种子ID> [选项]\n\n"
+    "选项：\n"
+    "  free/2x — 促销类型（默认 free）\n"
+    "  1d/2d/3d/7d — 时长（默认 1天）\n"
+    "  bid=100 — 竞价蝌蚪\n"
+    "  reward=50 — 奖励蝌蚪\n"
+    "  users=10 — 奖励人数\n\n"
+    "示例：{prefix}{command} 12345 free 7d bid=100"
+)
+PROMOTE_STATUS_TEMPLATE_DEFAULT = "{icon} {message}"
+PROMOTE_READY_TEMPLATE_DEFAULT = (
+    "📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
+    "{params}\n\n"
+    "⏳ 正在计算预计消耗..."
+)
+PROMOTE_CONFIRMING_TEMPLATE_DEFAULT = (
+    "📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
+    "{params}\n"
+    "预计消耗：{cost} 蝌蚪\n"
+    "计算方式：{expression}\n\n"
+    "⏳ 正在确认置顶..."
+)
+PROMOTE_SUCCESS_TEMPLATE_DEFAULT = (
+    "✅ 种子置顶促销成功！\n\n"
+    "{torrent_header}\n\n"
+    "{promotion_details}"
+)
+INFO_OK_TEMPLATE_DEFAULT = (
+    "📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n"
+    "{details_url}"
+)
+
+
+def _command_prefix() -> str:
+    try:
+        from app.worker.command import current_command_prefix
+
+        return current_command_prefix(fallback=",")
+    except Exception:
+        return ","
+
+
+def _render_template(template: Any, payload: dict[str, Any]) -> str:
+    text = str(template or "")
+    try:
+        return text.format_map(_SafeTemplateDict(payload))
+    except Exception:
+        return text
+
+
+def _cfg_template(ctx: PluginContext, key: str, default: str, payload: dict[str, Any]) -> str:
+    configured = None
+    try:
+        configured = (ctx.config or {}).get(key)
+    except Exception:
+        configured = None
+    return _render_template(configured or default, payload)
+
+
+def _status_template(
+    ctx: PluginContext,
+    icon: str,
+    message: str,
+    payload: dict[str, Any] | None = None,
+) -> str:
+    values = {"icon": icon, "message": message, **(payload or {})}
+    return _cfg_template(ctx, "promote_status_template", PROMOTE_STATUS_TEMPLATE_DEFAULT, values)
+
+
 def _parse_args(args: list[str]) -> dict[str, str]:
     """解析命令参数。"""
     result = {
@@ -514,10 +589,19 @@ class PTPromotePlugin(Plugin):
     display_name = "PT 种子促销"
     message_channels = {"outgoing"}
     owner_only = True
+    command_config_keys = {"command"}
 
     def __init__(self) -> None:
         self.commands = {
             "pt": self._handle_promote,
+            "促销": self._handle_promote,
+            "ptinfo": self._handle_info,
+        }
+
+    async def on_startup(self, ctx: PluginContext) -> None:
+        command = str((ctx.config or {}).get("command") or "pt").strip() or "pt"
+        self.commands = {
+            command: self._handle_promote,
             "促销": self._handle_promote,
             "ptinfo": self._handle_info,
         }
@@ -540,7 +624,7 @@ class PTPromotePlugin(Plugin):
             return [
                 {
                     "type": "send_message",
-                    "text": "没有种子 ID，请使用：置顶 id=12345",
+                    "text": _status_template(ctx, "❌", "没有种子 ID，请使用：置顶 id=12345"),
                     "reply_to_message_id": _payload_message_id(payload),
                 },
                 {"type": "no_session"},
@@ -548,7 +632,7 @@ class PTPromotePlugin(Plugin):
 
         event = _InteractionReplyEvent()
         await self._handle_promote(ctx.client, event, args, ctx.account_id, ctx)
-        text = event.final_text or "置顶流程没有返回结果，请稍后再试。"
+        text = event.final_text or _status_template(ctx, "❌", "置顶流程没有返回结果，请稍后再试。")
         return [
             {
                 "type": "send_message",
@@ -568,17 +652,16 @@ class PTPromotePlugin(Plugin):
         ctx: PluginContext,
     ) -> None:
         """处理置顶促销命令。"""
+        prefix = _command_prefix()
+        command = str((ctx.config or {}).get("command") or "pt").strip() or "pt"
         if not args:
-            prefix = ctx.config.get("command", "pt")
             await event.edit(
-                f"用法：{prefix} <种子ID> [选项]\n\n"
-                f"选项：\n"
-                f"  free/2x — 促销类型（默认 free）\n"
-                f"  1d/2d/3d/7d — 时长（默认 1天）\n"
-                f"  bid=100 — 竞价蝌蚪\n"
-                f"  reward=50 — 奖励蝌蚪\n"
-                f"  users=10 — 奖励人数\n\n"
-                f"示例：{prefix} 12345 free 7d bid=100"
+                _cfg_template(
+                    ctx,
+                    "promote_usage_template",
+                    PROMOTE_USAGE_TEMPLATE_DEFAULT,
+                    {"prefix": prefix, "command": command},
+                )
             )
             return
 
@@ -587,11 +670,11 @@ class PTPromotePlugin(Plugin):
         cookie = ctx.config.get("cookie", "")
 
         if not cookie:
-            await event.edit("❌ 请先配置 Cookie")
+            await event.edit(_status_template(ctx, "❌", "请先配置 Cookie"))
             return
 
         if ctx.http is None:
-            await event.edit("❌ 缺少 external_http 权限")
+            await event.edit(_status_template(ctx, "❌", "缺少 external_http 权限"))
             return
 
         guard = await self._claim_torrent_guard(ctx, torrent_id)
@@ -603,13 +686,27 @@ class PTPromotePlugin(Plugin):
         params = _parse_args(args[1:])
         params_desc = _format_params(params)
 
-        await event.edit(f"⏳ 正在获取 ID 为 {torrent_id} 的种子的促销信息...")
+        await event.edit(
+            _status_template(
+                ctx,
+                "⏳",
+                "正在获取 ID 为 {torrent_id} 的种子的促销信息...",
+                {"torrent_id": torrent_id},
+            )
+        )
 
         try:
             # Step 1: 获取促销信息
             info_result = await self._get_promotion_info(ctx, site_url, cookie, torrent_id)
             if not info_result["success"]:
-                await event.edit(f"❌ ID 为 {torrent_id} 的种子当前不符合促销条件：{info_result['error']}")
+                await event.edit(
+                    _status_template(
+                        ctx,
+                        "❌",
+                        "ID 为 {torrent_id} 的种子当前不符合促销条件：{error}",
+                        {"torrent_id": torrent_id, "error": info_result["error"]},
+                    )
+                )
                 return
 
             is_exists = info_result["is_exists"]
@@ -620,20 +717,34 @@ class PTPromotePlugin(Plugin):
             if str(is_exists) == "1":
                 await self._mark_torrent_promoted(ctx, torrent_id)
                 await event.edit(
-                    f"ℹ️ ID 为 {torrent_id} 的种子已处于置顶状态或 12 小时内已置顶过，"
-                    "本次不再处理。"
+                    _status_template(
+                        ctx,
+                        "ℹ️",
+                        "ID 为 {torrent_id} 的种子已处于置顶状态或 12 小时内已置顶过，本次不再处理。",
+                        {"torrent_id": torrent_id},
+                    )
                 )
                 return
 
             # Step 2: 预计算消耗
             await event.edit(
-                f"📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
-                f"{params_desc}\n\n"
-                f"⏳ 正在计算预计消耗..."
+                _cfg_template(
+                    ctx,
+                    "promote_ready_template",
+                    PROMOTE_READY_TEMPLATE_DEFAULT,
+                    {"torrent_id": torrent_id, "params": params_desc},
+                )
             )
             calc_result = await self._calculate_cost(ctx, site_url, cookie, torrent_id, params, is_exists)
             if not calc_result["success"]:
-                await event.edit(f"❌ 计算消耗失败：{calc_result['error']}")
+                await event.edit(
+                    _status_template(
+                        ctx,
+                        "❌",
+                        "计算消耗失败：{error}",
+                        {"torrent_id": torrent_id, "error": calc_result["error"]},
+                    )
+                )
                 return
 
             cost = _format_bonus_amount(calc_result["cost_bonus"])
@@ -641,11 +752,17 @@ class PTPromotePlugin(Plugin):
 
             # Step 3: 确认促销
             await event.edit(
-                f"📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
-                f"{params_desc}\n"
-                f"预计消耗：{cost} 蝌蚪\n"
-                f"计算方式：{expression}\n\n"
-                f"⏳ 正在确认置顶..."
+                _cfg_template(
+                    ctx,
+                    "promote_confirming_template",
+                    PROMOTE_CONFIRMING_TEMPLATE_DEFAULT,
+                    {
+                        "torrent_id": torrent_id,
+                        "params": params_desc,
+                        "cost": cost,
+                        "expression": expression,
+                    },
+                )
             )
             confirm_result = await self._confirm_promotion(ctx, site_url, cookie, torrent_id, params, is_exists)
 
@@ -654,16 +771,43 @@ class PTPromotePlugin(Plugin):
                 if isinstance(event, _InteractionReplyEvent):
                     event.success = True
                 await event.edit(
-                    f"✅ 种子置顶促销成功！\n\n"
-                    f"{_format_torrent_header(site_url, torrent_id, torrent_meta)}\n\n"
-                    f"{_format_promotion_details(torrent_meta, params_desc, cost)}",
+                    _cfg_template(
+                        ctx,
+                        "promote_success_template",
+                        PROMOTE_SUCCESS_TEMPLATE_DEFAULT,
+                        {
+                            "torrent_id": torrent_id,
+                            "details_url": _details_url(site_url, torrent_id),
+                            "torrent_header": _format_torrent_header(site_url, torrent_id, torrent_meta),
+                            "promotion_details": _format_promotion_details(torrent_meta, params_desc, cost),
+                            "title": _compact_text(torrent_meta.get("title")) or f"ID {torrent_id}",
+                            "subtitle": _compact_text(torrent_meta.get("subtitle")),
+                            "params": params_desc,
+                            "cost": cost,
+                            "expression": expression,
+                        },
+                    ),
                     parse_mode="html",
                 )
             else:
-                await event.edit(f"❌ 置顶失败：{confirm_result['error']}")
+                await event.edit(
+                    _status_template(
+                        ctx,
+                        "❌",
+                        "置顶失败：{error}",
+                        {"torrent_id": torrent_id, "error": confirm_result["error"]},
+                    )
+                )
 
         except Exception as e:
-            await event.edit(f"❌ 发生错误：{str(e)[:200]}")
+            await event.edit(
+                _status_template(
+                    ctx,
+                    "❌",
+                    "发生错误：{error}",
+                    {"torrent_id": torrent_id, "error": str(e)[:200]},
+                )
+            )
         finally:
             await self._release_torrent_guard(ctx, str(guard.get("lock_key") or ""))
 
@@ -677,7 +821,14 @@ class PTPromotePlugin(Plugin):
     ) -> None:
         """查询种子促销历史。"""
         if not args:
-            await event.edit("用法：ptinfo <种子ID>")
+            await event.edit(
+                _cfg_template(
+                    ctx,
+                    "info_usage_template",
+                    "用法：{prefix}ptinfo <种子ID>",
+                    {"prefix": _command_prefix(), "command": "ptinfo"},
+                )
+            )
             return
 
         torrent_id = args[0]
@@ -685,14 +836,21 @@ class PTPromotePlugin(Plugin):
         cookie = ctx.config.get("cookie", "")
 
         if not cookie:
-            await event.edit("❌ 请先配置 Cookie")
+            await event.edit(_status_template(ctx, "❌", "请先配置 Cookie"))
             return
 
         if ctx.http is None:
-            await event.edit("❌ 缺少 external_http 权限")
+            await event.edit(_status_template(ctx, "❌", "缺少 external_http 权限"))
             return
 
-        await event.edit(f"⏳ 正在查询 ID 为 {torrent_id} 的种子是否符合促销条件...")
+        await event.edit(
+            _status_template(
+                ctx,
+                "⏳",
+                "正在查询 ID 为 {torrent_id} 的种子是否符合促销条件...",
+                {"torrent_id": torrent_id},
+            )
+        )
 
         try:
             url = f"{site_url}/plugin/sticky-promotion-history?torrent_id={torrent_id}"
@@ -705,14 +863,35 @@ class PTPromotePlugin(Plugin):
 
             if response.status_code == 200:
                 await event.edit(
-                    f"📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n"
-                    f"{_details_url(site_url, torrent_id)}"
+                    _cfg_template(
+                        ctx,
+                        "info_ok_template",
+                        INFO_OK_TEMPLATE_DEFAULT,
+                        {
+                            "torrent_id": torrent_id,
+                            "details_url": _details_url(site_url, torrent_id),
+                        },
+                    )
                 )
             else:
-                await event.edit(f"❌ 查询失败：HTTP {response.status_code}")
+                await event.edit(
+                    _status_template(
+                        ctx,
+                        "❌",
+                        "查询失败：HTTP {status_code}",
+                        {"torrent_id": torrent_id, "status_code": response.status_code},
+                    )
+                )
 
         except Exception as e:
-            await event.edit(f"❌ 查询失败：{str(e)[:200]}")
+            await event.edit(
+                _status_template(
+                    ctx,
+                    "❌",
+                    "查询失败：{error}",
+                    {"torrent_id": torrent_id, "error": str(e)[:200]},
+                )
+            )
 
     async def _get_promotion_info(
         self, ctx: PluginContext, site_url: str, cookie: str, torrent_id: str,
@@ -848,16 +1027,23 @@ class PTPromotePlugin(Plugin):
             if value:
                 if callable(ttl):
                     remaining = int(await ttl(cooldown_key) or 0)
-                message = (
-                    f"ℹ️ 种子 ID {torrent_id} 已处于置顶状态或 12 小时内已置顶过，"
-                    f"剩余约 {_format_duration(remaining)}，本次不再处理。"
+                message = _status_template(
+                    ctx,
+                    "ℹ️",
+                    "种子 ID {torrent_id} 已处于置顶状态或 12 小时内已置顶过，剩余约 {remaining}，本次不再处理。",
+                    {"torrent_id": torrent_id, "remaining": _format_duration(remaining)},
                 )
                 return {"allowed": False, "message": message, "lock_key": ""}
             claimed = await redis.set(lock_key, "1", ex=300, nx=True)
             if not claimed:
                 return {
                     "allowed": False,
-                    "message": f"⏳ 种子 ID {torrent_id} 正在处理，请不要重复触发。",
+                    "message": _status_template(
+                        ctx,
+                        "⏳",
+                        "种子 ID {torrent_id} 正在处理，请不要重复触发。",
+                        {"torrent_id": torrent_id},
+                    ),
                     "lock_key": "",
                 }
         except Exception:

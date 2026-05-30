@@ -92,6 +92,14 @@ class PTPromoteMetaTest(unittest.TestCase):
             "A Record Of Mortal's Journey",
         )
 
+    def test_renders_message_template_and_preserves_unknown_placeholders(self) -> None:
+        text = plugin._render_template(
+            "{icon} 种子 {torrent_id}：{missing}",
+            {"icon": "✅", "torrent_id": "12345"},
+        )
+
+        self.assertEqual(text, "✅ 种子 12345：{missing}")
+
     def test_formats_details_as_expandable_blockquote(self) -> None:
         details = plugin._format_promotion_details(
             {"subtitle": "凡人修仙传 | S01E001-017"},

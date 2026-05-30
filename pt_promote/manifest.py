@@ -4,10 +4,44 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
+
+PROMOTE_USAGE_TEMPLATE_DEFAULT = (
+    "用法：{prefix}{command} <种子ID> [选项]\n\n"
+    "选项：\n"
+    "  free/2x — 促销类型（默认 free）\n"
+    "  1d/2d/3d/7d — 时长（默认 1天）\n"
+    "  bid=100 — 竞价蝌蚪\n"
+    "  reward=50 — 奖励蝌蚪\n"
+    "  users=10 — 奖励人数\n\n"
+    "示例：{prefix}{command} 12345 free 7d bid=100"
+)
+PROMOTE_STATUS_TEMPLATE_DEFAULT = "{icon} {message}"
+PROMOTE_READY_TEMPLATE_DEFAULT = (
+    "📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
+    "{params}\n\n"
+    "⏳ 正在计算预计消耗..."
+)
+PROMOTE_CONFIRMING_TEMPLATE_DEFAULT = (
+    "📋 ID 为 {torrent_id} 的种子符合促销条件\n\n"
+    "{params}\n"
+    "预计消耗：{cost} 蝌蚪\n"
+    "计算方式：{expression}\n\n"
+    "⏳ 正在确认置顶..."
+)
+PROMOTE_SUCCESS_TEMPLATE_DEFAULT = (
+    "✅ 种子置顶促销成功！\n\n"
+    "{torrent_header}\n\n"
+    "{promotion_details}"
+)
+INFO_OK_TEMPLATE_DEFAULT = (
+    "📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n"
+    "{details_url}"
+)
+
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.9",
+    version="1.0.10",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",
@@ -101,6 +135,98 @@ MANIFEST = Manifest(
                 "description": "成功置顶后，同一种子再次触发前需要等待的时间。支持 2s、2m、2h、2d，默认 12h。",
                 "default": "12h",
                 "level": "account",
+            },
+            "template_placeholders": {
+                "type": "string",
+                "title": "消息模板占位符（只读）",
+                "readOnly": True,
+                "default": (
+                    "通用：{prefix} 全局指令前缀，{command} 指令名，{torrent_id} 种子 ID，{details_url} 种子详情页，{error} 错误信息。\n"
+                    "促销：{params} 促销参数明细，{cost} 消耗蝌蚪，{expression} 计算方式，{title} 标题，{subtitle} 副标题。\n"
+                    "HTML：{torrent_header} 带链接的种子标题，{promotion_details} 可展开促销明细。成功模板会以 HTML 模式发送。\n"
+                    "状态模板：{icon} 状态图标，{message} 状态正文。"
+                ),
+            },
+            "promote_usage_template": {
+                "type": "string",
+                "title": "促销用法模板",
+                "description": "支持占位符：{prefix}、{command}",
+                "default": PROMOTE_USAGE_TEMPLATE_DEFAULT,
+                "x-ui-widget": "textarea",
+                "minLength": 1,
+                "maxLength": 1500,
+                "level": "account",
+            },
+            "promote_status_template": {
+                "type": "string",
+                "title": "通用状态消息模板",
+                "description": "用于错误、等待、冷却、重复触发等短消息。支持占位符：{icon}、{message} 以及当前场景变量。",
+                "default": PROMOTE_STATUS_TEMPLATE_DEFAULT,
+                "x-ui-widget": "textarea",
+                "minLength": 1,
+                "maxLength": 800,
+                "level": "account",
+            },
+            "promote_ready_template": {
+                "type": "string",
+                "title": "符合条件/计算消耗模板",
+                "description": "支持占位符：{torrent_id}、{params}",
+                "default": PROMOTE_READY_TEMPLATE_DEFAULT,
+                "x-ui-widget": "textarea",
+                "minLength": 1,
+                "maxLength": 1500,
+                "level": "account",
+            },
+            "promote_confirming_template": {
+                "type": "string",
+                "title": "确认置顶中模板",
+                "description": "支持占位符：{torrent_id}、{params}、{cost}、{expression}",
+                "default": PROMOTE_CONFIRMING_TEMPLATE_DEFAULT,
+                "x-ui-widget": "textarea",
+                "minLength": 1,
+                "maxLength": 1800,
+                "level": "account",
+            },
+            "promote_success_template": {
+                "type": "string",
+                "title": "置顶成功模板",
+                "description": "支持占位符：{torrent_id}、{details_url}、{torrent_header}、{promotion_details}、{title}、{subtitle}、{params}、{cost}、{expression}。按 HTML 模式发送。",
+                "default": PROMOTE_SUCCESS_TEMPLATE_DEFAULT,
+                "x-ui-widget": "textarea",
+                "minLength": 1,
+                "maxLength": 3000,
+                "level": "account",
+            },
+            "info_usage_template": {
+                "type": "string",
+                "title": "查询用法模板",
+                "description": "支持占位符：{prefix}、{command}",
+                "default": "用法：{prefix}ptinfo <种子ID>",
+                "x-ui-widget": "textarea",
+                "minLength": 1,
+                "maxLength": 500,
+                "level": "account",
+            },
+            "info_ok_template": {
+                "type": "string",
+                "title": "查询符合条件模板",
+                "description": "支持占位符：{torrent_id}、{details_url}",
+                "default": INFO_OK_TEMPLATE_DEFAULT,
+                "x-ui-widget": "textarea",
+                "minLength": 1,
+                "maxLength": 1000,
+                "level": "account",
+            },
+            "promote_success_preview": {
+                "type": "string",
+                "title": "置顶成功模板预览（只读）",
+                "description": "使用固定示例值渲染，仅用于配置预览。",
+                "readOnly": True,
+                "default": (
+                    "✅ 种子置顶促销成功！\n\n"
+                    "种子：测试种子标题（ID：12345）\n\n"
+                    "副标题与促销明细\n测试副标题\n促销类型：Free\n促销时长：1 天\n消耗：1,234 蝌蚪"
+                ),
             },
         },
         "required": ["command", "cookie", "torrent_cooldown_seconds"],
