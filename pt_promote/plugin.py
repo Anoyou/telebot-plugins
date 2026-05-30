@@ -429,18 +429,14 @@ def _format_torrent_header(site_url: str, torrent_id: str, meta: dict[str, str])
 def _format_promotion_details(meta: dict[str, str], params_desc: str, cost: str) -> str:
     subtitle = _compact_text(meta.get("subtitle"))
     heading = "副标题与促销明细" if subtitle else "促销明细"
-    heading_html = (
-        f"<pre><code class=\"language-转账成功\">"
-        f"{html_escape(heading, quote=True)}"
-        f"</code></pre>"
-    )
     lines: list[str] = []
     if subtitle:
         lines.append(subtitle)
     lines.extend(line for line in str(params_desc or "").splitlines() if _compact_text(line))
     lines.append(f"消耗：{cost} 蝌蚪")
-    body = "\n".join([heading_html, *(html_escape(line, quote=False) for line in lines)])
-    return f"<blockquote expandable>{body}</blockquote>"
+    code = html_escape("\n".join(lines), quote=False)
+    language = html_escape(heading, quote=True)
+    return f"<blockquote expandable><pre><code class=\"language-{language}\">{code}</code></pre></blockquote>"
 
 
 def _int_value(value: Any) -> int | None:

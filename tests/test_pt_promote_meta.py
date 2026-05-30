@@ -102,11 +102,12 @@ class PTPromoteMetaTest(unittest.TestCase):
         self.assertTrue(details.startswith("<blockquote expandable>"))
         self.assertTrue(details.endswith("</blockquote>"))
         self.assertIn(
-            '<pre><code class="language-转账成功">副标题与促销明细</code></pre>',
+            '<pre><code class="language-副标题与促销明细">凡人修仙传 | S01E001-017\n',
             details,
         )
         self.assertIn("凡人修仙传 | S01E001-017", details)
         self.assertNotIn("副标题：", details)
+        self.assertNotIn("language-转账成功", details)
         self.assertIn("促销类型：Free", details)
         self.assertIn("消耗：1,234 蝌蚪", details)
 
