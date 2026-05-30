@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.8] - 2026-05-30
+
+### Changed
+- 折叠块标题“副标题与促销明细”改为带 `language-转账成功` 标识的 HTML code/pre 结构，方便交互 Bot 按 Telegram code language 标识识别。
+- 折叠块里的副标题正文去掉 `副标题：` 前缀，减少长文本噪音。
+
 ## [1.0.7] - 2026-05-30
 
 ### Fixed
