@@ -30,12 +30,12 @@ PROMOTE_CONFIRMING_TEMPLATE_DEFAULT = (
 )
 PROMOTE_SUCCESS_TEMPLATE_DEFAULT = (
     "✅ 种子置顶促销成功！\n\n"
-    "{torrent_header}\n\n"
-    "<blockquote expandable><pre><code class=\"language-副标题与促销明细\">"
+    "<b>{torrent_header}</b>\n"
+    "<pre><code class=\"language-副标题与促销明细\">"
     "{subtitle}\n"
     "{params}\n"
     "消耗：{cost} 蝌蚪"
-    "</code></pre></blockquote>"
+    "</code></pre>"
 )
 INFO_OK_TEMPLATE_DEFAULT = (
     "📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n"
@@ -45,7 +45,7 @@ INFO_OK_TEMPLATE_DEFAULT = (
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.11",
+    version="1.0.12",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",

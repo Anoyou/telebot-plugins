@@ -111,9 +111,10 @@ class PTPromoteMetaTest(unittest.TestCase):
             },
         )
 
-        self.assertIn('<code class="language-副标题与促销明细">测试副标题\n', text)
+        self.assertIn("<b>种子：测试标题（ID：32728）</b>\n", text)
+        self.assertIn('<pre><code class="language-副标题与促销明细">测试副标题\n', text)
         self.assertIn("促销类型：Free", text)
-        self.assertIn("消耗：8,000 蝌蚪</code>", text)
+        self.assertIn("消耗：8,000 蝌蚪</code></pre>", text)
 
     def test_formats_details_as_expandable_blockquote(self) -> None:
         details = plugin._format_promotion_details(
