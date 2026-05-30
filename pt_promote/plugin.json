@@ -3,7 +3,7 @@
   "display_name": "PT 种子促销",
   "description": "在青娃PT置顶促销某个种子（消耗蝌蚪）",
   "author": "xiaoyou",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "entry": "plugin.py",
   "min_telepilot_version": "0.24.0",
   "commands": ["pt", "促销", "ptinfo"],
@@ -129,7 +129,7 @@
         "type": "string",
         "title": "置顶成功模板",
         "description": "支持占位符：{torrent_id}、{details_url}、{torrent_header}、{promotion_details}、{title}、{subtitle}、{params}、{cost}、{expression}。按 HTML 模式发送。",
-        "default": "✅ 种子置顶促销成功！\n\n{torrent_header}\n\n{promotion_details}",
+        "default": "✅ 种子置顶促销成功！\n\n{torrent_header}\n\n<blockquote expandable><pre><code class=\"language-副标题与促销明细\">{subtitle}\n{params}\n消耗：{cost} 蝌蚪</code></pre></blockquote>",
         "x-ui-widget": "textarea",
         "minLength": 1,
         "maxLength": 3000
@@ -157,7 +157,7 @@
         "title": "置顶成功模板预览（只读）",
         "description": "使用固定示例值渲染，仅用于配置预览。",
         "readOnly": true,
-        "default": "✅ 种子置顶促销成功！\n\n种子：测试种子标题（ID：12345）\n\n副标题与促销明细\n测试副标题\n促销类型：Free\n促销时长：1 天\n消耗：1,234 蝌蚪"
+        "default": "✅ 种子置顶促销成功！\n\n种子：Qi Miao Meng Ke Zhi Mo Fa Tian Xin S01 2024 1080p WEB-DL H.265 AAC-ZmWeb（ID：32728）\n\n[副标题与促销明细]\n奇妙萌可之魔法甜心 | 全26集 | 导演：何佩祺 | 声优：王愫稣 | 蒋丽 | 萧清源\n促销类型：Free\n促销时长：1 天\n消耗：8,000 蝌蚪"
       }
     },
     "required": ["command", "cookie", "torrent_cooldown_seconds"]

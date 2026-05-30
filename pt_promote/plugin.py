@@ -90,7 +90,11 @@ PROMOTE_CONFIRMING_TEMPLATE_DEFAULT = (
 PROMOTE_SUCCESS_TEMPLATE_DEFAULT = (
     "✅ 种子置顶促销成功！\n\n"
     "{torrent_header}\n\n"
-    "{promotion_details}"
+    "<blockquote expandable><pre><code class=\"language-副标题与促销明细\">"
+    "{subtitle}\n"
+    "{params}\n"
+    "消耗：{cost} 蝌蚪"
+    "</code></pre></blockquote>"
 )
 INFO_OK_TEMPLATE_DEFAULT = (
     "📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n"
@@ -780,11 +784,11 @@ class PTPromotePlugin(Plugin):
                             "details_url": _details_url(site_url, torrent_id),
                             "torrent_header": _format_torrent_header(site_url, torrent_id, torrent_meta),
                             "promotion_details": _format_promotion_details(torrent_meta, params_desc, cost),
-                            "title": _compact_text(torrent_meta.get("title")) or f"ID {torrent_id}",
-                            "subtitle": _compact_text(torrent_meta.get("subtitle")),
-                            "params": params_desc,
-                            "cost": cost,
-                            "expression": expression,
+                            "title": html_escape(_compact_text(torrent_meta.get("title")) or f"ID {torrent_id}", quote=False),
+                            "subtitle": html_escape(_compact_text(torrent_meta.get("subtitle")), quote=False),
+                            "params": html_escape(params_desc, quote=False),
+                            "cost": html_escape(cost, quote=False),
+                            "expression": html_escape(str(expression or ""), quote=False),
                         },
                     ),
                     parse_mode="html",

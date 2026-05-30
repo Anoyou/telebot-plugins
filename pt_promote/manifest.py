@@ -31,7 +31,11 @@ PROMOTE_CONFIRMING_TEMPLATE_DEFAULT = (
 PROMOTE_SUCCESS_TEMPLATE_DEFAULT = (
     "✅ 种子置顶促销成功！\n\n"
     "{torrent_header}\n\n"
-    "{promotion_details}"
+    "<blockquote expandable><pre><code class=\"language-副标题与促销明细\">"
+    "{subtitle}\n"
+    "{params}\n"
+    "消耗：{cost} 蝌蚪"
+    "</code></pre></blockquote>"
 )
 INFO_OK_TEMPLATE_DEFAULT = (
     "📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n"
@@ -41,7 +45,7 @@ INFO_OK_TEMPLATE_DEFAULT = (
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.10",
+    version="1.0.11",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",
@@ -224,8 +228,12 @@ MANIFEST = Manifest(
                 "readOnly": True,
                 "default": (
                     "✅ 种子置顶促销成功！\n\n"
-                    "种子：测试种子标题（ID：12345）\n\n"
-                    "副标题与促销明细\n测试副标题\n促销类型：Free\n促销时长：1 天\n消耗：1,234 蝌蚪"
+                    "种子：Qi Miao Meng Ke Zhi Mo Fa Tian Xin S01 2024 1080p WEB-DL H.265 AAC-ZmWeb（ID：32728）\n\n"
+                    "[副标题与促销明细]\n"
+                    "奇妙萌可之魔法甜心 | 全26集 | 导演：何佩祺 | 声优：王愫稣 | 蒋丽 | 萧清源\n"
+                    "促销类型：Free\n"
+                    "促销时长：1 天\n"
+                    "消耗：8,000 蝌蚪"
                 ),
             },
         },

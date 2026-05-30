@@ -100,6 +100,21 @@ class PTPromoteMetaTest(unittest.TestCase):
 
         self.assertEqual(text, "✅ 种子 12345：{missing}")
 
+    def test_default_success_template_exposes_code_language_block(self) -> None:
+        text = plugin._render_template(
+            plugin.PROMOTE_SUCCESS_TEMPLATE_DEFAULT,
+            {
+                "torrent_header": "种子：测试标题（ID：32728）",
+                "subtitle": "测试副标题",
+                "params": "促销类型：Free\n促销时长：1 天",
+                "cost": "8,000",
+            },
+        )
+
+        self.assertIn('<code class="language-副标题与促销明细">测试副标题\n', text)
+        self.assertIn("促销类型：Free", text)
+        self.assertIn("消耗：8,000 蝌蚪</code>", text)
+
     def test_formats_details_as_expandable_blockquote(self) -> None:
         details = plugin._format_promotion_details(
             {"subtitle": "凡人修仙传 | S01E001-017"},
