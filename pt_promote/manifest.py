@@ -45,7 +45,7 @@ INFO_OK_TEMPLATE_DEFAULT = (
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.12",
+    version="1.0.13",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",
@@ -228,7 +228,7 @@ MANIFEST = Manifest(
                 "readOnly": True,
                 "default": (
                     "✅ 种子置顶促销成功！\n\n"
-                    "种子：Qi Miao Meng Ke Zhi Mo Fa Tian Xin S01 2024 1080p WEB-DL H.265 AAC-ZmWeb（ID：32728）\n\n"
+                    "Qi Miao Meng Ke Zhi Mo Fa Tian Xin S01 2024 1080p WEB-DL H.265 AAC-ZmWeb\n\n"
                     "[副标题与促销明细]\n"
                     "奇妙萌可之魔法甜心 | 全26集 | 导演：何佩祺 | 声优：王愫稣 | 蒋丽 | 萧清源\n"
                     "促销类型：Free\n"

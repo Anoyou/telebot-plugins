@@ -100,18 +100,32 @@ class PTPromoteMetaTest(unittest.TestCase):
 
         self.assertEqual(text, "✅ 种子 12345：{missing}")
 
+    def test_formats_torrent_header_as_plain_linked_title(self) -> None:
+        header = plugin._format_torrent_header(
+            "https://www.qingwapt.com",
+            "32728",
+            {"title": "Qi Miao Meng Ke"},
+        )
+
+        self.assertEqual(
+            header,
+            '<a href="https://www.qingwapt.com/details.php?id=32728">Qi Miao Meng Ke</a>',
+        )
+        self.assertNotIn("种子：", header)
+        self.assertNotIn("ID：", header)
+
     def test_default_success_template_exposes_code_language_block(self) -> None:
         text = plugin._render_template(
             plugin.PROMOTE_SUCCESS_TEMPLATE_DEFAULT,
             {
-                "torrent_header": "种子：测试标题（ID：32728）",
+                "torrent_header": "测试标题",
                 "subtitle": "测试副标题",
                 "params": "促销类型：Free\n促销时长：1 天",
                 "cost": "8,000",
             },
         )
 
-        self.assertIn("<b>种子：测试标题（ID：32728）</b>\n", text)
+        self.assertIn("<b>测试标题</b>\n", text)
         self.assertIn('<pre><code class="language-副标题与促销明细">测试副标题\n', text)
         self.assertIn("促销类型：Free", text)
         self.assertIn("消耗：8,000 蝌蚪</code></pre>", text)

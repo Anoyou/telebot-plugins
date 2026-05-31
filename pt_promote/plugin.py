@@ -499,10 +499,7 @@ def _format_torrent_header(site_url: str, torrent_id: str, meta: dict[str, str])
     url = html_escape(urljoin(f"{site_url.rstrip('/')}/", f"details.php?id={torrent_id}"), quote=True)
     title = _compact_text(meta.get("title")) or f"ID {torrent_id}"
 
-    return (
-        f"种子：<a href=\"{url}\">{html_escape(title, quote=False)}</a>"
-        f"（ID：<code>{html_escape(torrent_id, quote=False)}</code>）"
-    )
+    return f"<a href=\"{url}\">{html_escape(title, quote=False)}</a>"
 
 
 def _format_promotion_details(meta: dict[str, str], params_desc: str, cost: str) -> str:
