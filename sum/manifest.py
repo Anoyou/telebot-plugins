@@ -1,4 +1,4 @@
-"""群消息总结远程模块 Manifest。"""
+"""群消息总结远程插件 Manifest。"""
 
 from __future__ import annotations
 
@@ -159,8 +159,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.27",
-    min_telepilot_version="0.24.2",
+    version="1.1.28",
+    min_telepilot_version="0.30.4",
     author="Anoyou",
     description="调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
     permissions=["send_message", "edit_message", "read_chat", "resolve_entity", "ai_text", "send_file", "delete_message"],

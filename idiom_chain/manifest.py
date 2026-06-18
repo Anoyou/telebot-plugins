@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 
 CONFIG_SCHEMA = {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -43,34 +43,45 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.5",
+    version="1.0.6",
+    min_telepilot_version="0.30.4",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内成语接龙，第一个答对的获奖，支持禁词规则",
     permissions=["send_message", "edit_message", "read_chat"],
 
     category="interactive",
-    interaction_entries=[
-        {
-            "key": "start_idiom_chain",
-            "title": "开始成语接龙",
-            "description": "由交互 Bot 在群内开启一局成语接龙。",
-            "session_scope": "chat",
-            "input_schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "timeout": {
-                        "type": "integer",
-                        "title": "接龙限时（秒）",
-                        "default": 120,
-                        "minimum": 10,
-                        "maximum": 86400
-                    }
-                },
-            },
-        }
-    ],
+    interaction_profile="session_game",
+    interaction_entries=[{'key': 'start_idiom_chain',
+  'title': '开始成语接龙',
+  'description': '由交互 Bot 在群内开启一局成语接龙。',
+  'interaction_profile': 'session_game',
+  'launch_mode': 'hybrid',
+  'session_scope': 'chat',
+  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'preserve_command_trigger': True,
+  'command_fallback': {'enabled': True, 'command': 'cy', 'mode': 'hint_only'},
+  'session_policy': {'ttl_seconds': 120,
+                     'duplicate_start': 'reject',
+                     'close_on': ['winner', 'timeout', 'session_close']},
+  'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
+                       'required_event_fields': ['type', 'chat_id']},
+  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
+                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+  'input_schema': {'type': 'object',
+                   'additionalProperties': False,
+                   'properties': {'prize': {'type': 'integer',
+                                            'title': '每轮奖励',
+                                            'default': 100,
+                                            'minimum': 1},
+                                  'timeout': {'type': 'integer',
+                                              'title': '接龙限时（秒）',
+                                              'default': 120,
+                                              'minimum': 10,
+                                              'maximum': 86400}}},
+  'settlement': {'mode': 'announce_only',
+                 'winner_field': 'actor.user_id',
+                 'amount_field': 'prize'}}],
     config_schema=CONFIG_SCHEMA,
 )
 

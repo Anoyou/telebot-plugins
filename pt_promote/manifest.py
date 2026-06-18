@@ -1,4 +1,4 @@
-"""青娃PT (qingwapt.com) 置顶促销模块 Manifest。"""
+"""青娃PT (qingwapt.com) 置顶促销插件 Manifest。"""
 
 from __future__ import annotations
 
@@ -45,43 +45,32 @@ INFO_OK_TEMPLATE_DEFAULT = (
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.13",
+    version="1.0.14",
+    min_telepilot_version="0.30.4",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",
-    interaction_entries=[
-        {
-            "key": "promote_torrent",
-            "title": "置顶促销种子",
-            "description": "交互 Bot 关键词触发后，调用 pt_promote 执行种子置顶促销。",
-            "session_scope": "user",
-            "events": ["keyword"],
-            "input_schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "title": "种子 ID",
-                        "description": "可由群友消息里的 id=12345 自动提取。",
-                    },
-                    "default_options": {
-                        "type": "string",
-                        "title": "默认促销参数",
-                        "description": "可选，例如：free 1d 或 free 7d bid=100。",
-                        "default": "",
-                    },
-                    "valid_seconds": {
-                        "type": "integer",
-                        "title": "平台会话有效期（秒）",
-                        "default": 600,
-                        "minimum": 30,
-                        "maximum": 86400,
-                    },
-                },
-            },
-        }
-    ],
+    interaction_profile="utility_trigger",
+    interaction_entries=[{'key': 'promote_torrent',
+  'title': '触发种子促销',
+  'description': '由交互 Bot 收到关键词或回复消息后触发 PT 种子促销流程。',
+  'interaction_profile': 'utility_trigger',
+  'launch_mode': 'hybrid',
+  'session_scope': 'user',
+  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'preserve_command_trigger': True,
+  'command_fallback': {'enabled': True, 'command': 'pt', 'mode': 'hint_only'},
+  'session_policy': {'ttl_seconds': 600,
+                     'duplicate_start': 'reject',
+                     'close_on': ['completed', 'failed', 'session_close']},
+  'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
+                       'required_event_fields': ['type', 'chat_id']},
+  'result_contract': {'actions': ['send_message', 'end_session', 'result'],
+                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+  'input_schema': {'type': 'object',
+                   'additionalProperties': False,
+                   'properties': {'torrent_id': {'type': 'string', 'title': '种子 ID', 'default': ''},
+                                  'options': {'type': 'string', 'title': '促销参数', 'default': ''}}}}],
     permissions=["send_message", "edit_message", "external_http"],
     allowed_hosts=["www.qingwapt.com"],
     config_schema={

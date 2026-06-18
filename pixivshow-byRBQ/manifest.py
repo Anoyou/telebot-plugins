@@ -2,7 +2,7 @@ from app.worker.plugins.manifest import Manifest
 
 CONFIG_SCHEMA = {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -25,7 +25,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="pixivshow-byRBQ",
     display_name="pixivshow-byRBQ",
-    version="1.0.2",
+    version="1.0.3",
+    min_telepilot_version="0.30.4",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="Pixiv 美少女推图插件，支持普通图与 R18 图推送，R18 自动添加 Telegram 遮罩，可指定单次推送数量",

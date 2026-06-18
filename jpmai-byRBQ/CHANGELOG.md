@@ -1,4 +1,7 @@
 # 更新日志
+## 1.0.3 (2026-06-19)
+- 按最新插件开发指南补充 `min_telepilot_version`，并将配置页模式从旧兼容别名 `schema` 更新为推荐的 `single`。
+
 ## 1.0.2 (2026-05-20)
 - 新增模块分类声明：`category = "utility"`（工具能力）。
 - 未声明交互 Bot 启动入口（interaction_entries 为空）。

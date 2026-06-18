@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 
 CONFIG_SCHEMA = {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -26,7 +26,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="chatter_challenge",
     display_name="话痨挑战",
-    version="1.0.3",
+    version="1.0.4",
+    min_telepilot_version="0.30.4",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="设定聊天规则，违反者自动扣分，全程被动监听",

@@ -10,7 +10,7 @@ CONFIG_SCHEMA = {
             "title": "玩法说明",
             "readOnly": True,
             "default": (
-                "当前页面上方的“功能总开关”控制模块是否在当前账号运行。\n"
+                "当前页面上方的“功能总开关”控制插件是否在当前账号运行。\n"
                 "触发指令名只填写命令本体，不要带系统前缀；示例会自动使用当前系统前缀。\n\n"
                 "基础用法：\n"
                 "{prefix}{command} help                         查看完整帮助\n"
@@ -29,7 +29,7 @@ CONFIG_SCHEMA = {
                 "{prefix}{command} name auto                     切回自动展示名称\n"
                 "{prefix}{command} reset                         恢复默认金额、个数和展示名称\n\n"
                 "安全规则：只有当前账号本人发出的指令会创建红包；群成员只能发送口令领取。\n"
-                "领取方式：别人直接发送正确口令即可领取；模块会回复 +金额，领完后自动发送结算榜单。\n"
+                "领取方式：别人直接发送正确口令即可领取；插件会回复 +金额，领完后自动发送结算榜单。\n"
                 "配置页可调整默认金额、默认个数、最低单包、展示名、发出后删原指令、领取提示删除、高额确认和子命令别名。"
             ),
             "description": "只读预览；展示内容会跟随当前系统前缀与触发指令名实时渲染。",
@@ -127,40 +127,48 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.18",
-    min_telepilot_version="0.15.0",
+    version="1.1.19",
+    min_telepilot_version="0.30.4",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="口令红包模块，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
+    description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
     permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message"],
 
     category="interactive",
-    interaction_entries=[
-        {
-            "key": "start_redpack",
-            "title": "发起口令红包",
-            "description": "由交互 Bot 在群内发起一轮口令红包。",
-            "session_scope": "chat",
-            "input_schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "total_amount": {
-                        "type": "integer",
-                        "title": "总额",
-                        "default": 88888,
-                        "minimum": 100
-                    },
-                    "count": {
-                        "type": "integer",
-                        "title": "个数",
-                        "default": 10,
-                        "minimum": 1,
-                        "maximum": 500
-                    }
-                },
-            },
-        }
-    ],
+    interaction_profile="reward_pool",
+    interaction_entries=[{'key': 'start_redpack',
+  'title': '发起口令红包',
+  'description': '由交互 Bot 在群内发起一轮口令红包。',
+  'interaction_profile': 'reward_pool',
+  'launch_mode': 'hybrid',
+  'session_scope': 'chat',
+  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'preserve_command_trigger': True,
+  'command_fallback': {'enabled': True, 'command': 'redpack', 'mode': 'hint_only'},
+  'session_policy': {'ttl_seconds': 3600,
+                     'duplicate_start': 'reject',
+                     'close_on': ['completed', 'timeout', 'session_close']},
+  'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
+                       'required_event_fields': ['type', 'chat_id']},
+  'result_contract': {'actions': ['send_message',
+                                  'send_file',
+                                  'end_session',
+                                  'result',
+                                  'settlement'],
+                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+  'input_schema': {'type': 'object',
+                   'additionalProperties': False,
+                   'properties': {'total_amount': {'type': 'integer',
+                                                   'title': '总额',
+                                                   'default': 88888,
+                                                   'minimum': 100},
+                                  'count': {'type': 'integer',
+                                            'title': '个数',
+                                            'default': 10,
+                                            'minimum': 1,
+                                            'maximum': 500}}},
+  'settlement': {'mode': 'announce_only',
+                 'winner_field': 'actor.user_id',
+                 'amount_field': 'total_amount'}}],
     config_schema=CONFIG_SCHEMA,
 )
 

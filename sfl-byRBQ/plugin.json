@@ -3,7 +3,7 @@
   "display_name": "sfl-byRBQ",
   "description": "贴纸跟随插件，在特定群组中自动跟随发送特定贴纸",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -22,7 +22,7 @@
   ],
   "config_schema": {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": false,
     "properties": {
       "command": {
@@ -45,5 +45,6 @@
     ]
   },
   "category": "automation",
-  "interaction_entries": []
+  "interaction_entries": [],
+  "min_telepilot_version": "0.30.4"
 }

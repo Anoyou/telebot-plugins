@@ -119,6 +119,77 @@ class GameState:
     finished: bool = False
 
 
+def _payload_event(payload: dict[str, Any]) -> dict[str, Any]:
+    event = payload.get("event")
+    return event if isinstance(event, dict) else {}
+
+
+def _payload_source(payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload.get("source")
+    return source if isinstance(source, dict) else {}
+
+
+def _payload_actor(payload: dict[str, Any]) -> dict[str, Any]:
+    actor = payload.get("actor")
+    return actor if isinstance(actor, dict) else {}
+
+
+def _payload_reply_to(payload: dict[str, Any]) -> dict[str, Any]:
+    reply_to = payload.get("reply_to")
+    return reply_to if isinstance(reply_to, dict) else {}
+
+
+def _positive_int(value: Any, default: int, *, minimum: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= minimum else default
+
+
+def _interaction_event_type(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+    source = _payload_source(payload)
+    return str(event.get("type") or trigger.get("event") or trigger.get("type") or source.get("event_type") or payload.get("event_type") or "").strip()
+
+
+def _interaction_chat_id(payload: dict[str, Any]) -> int:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+    return _positive_int(payload.get("chat_id") or event.get("chat_id") or source.get("chat_id") or session.get("chat_id"), 0, minimum=-10**20)
+
+
+def _interaction_message_id(payload: dict[str, Any]) -> int | None:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    reply_to = _payload_reply_to(payload)
+    value = _positive_int(payload.get("message_id") or payload.get("source_message_id") or reply_to.get("message_id") or event.get("message_id") or source.get("message_id"), 0)
+    return value or None
+
+
+def _interaction_message_text(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    return str(payload.get("message_text") or payload.get("text") or event.get("text") or source.get("text") or "").strip()
+
+
+def _interaction_amount(payload: dict[str, Any]) -> int:
+    event = _payload_event(payload)
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    return _positive_int(payload.get("amount") or data.get("amount"), 0, minimum=1)
+
+
+def _interaction_actor(payload: dict[str, Any]) -> tuple[int, str]:
+    actor = _payload_actor(payload)
+    event = _payload_event(payload)
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    raw_id = actor.get("user_id") or actor.get("id") or payload.get("sender_user_id") or payload.get("payer_user_id") or event.get("user_id") or data.get("payer_user_id")
+    raw_name = actor.get("display_name") or actor.get("name") or payload.get("sender_name") or payload.get("payer_name") or event.get("display_name") or data.get("payer_name") or "玩家"
+    return _positive_int(raw_id, 0, minimum=0), str(raw_name).strip() or "玩家"
+
+
 # ─────────────────────────────────────────────────────
 # 插件
 # ─────────────────────────────────────────────────────
@@ -174,8 +245,150 @@ class BlackjackPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_blackjack":
             return None
-        timeout = int(payload.get("timeout") or self._timeout or 120)
-        return [{"type": "send_message", "text": f"🃏 21点已开启，限时 {timeout} 秒。发送 ,{self._command} 开始游戏。"}]
+        event_type = _interaction_event_type(payload)
+        chat_id = _interaction_chat_id(payload)
+        if not chat_id:
+            return [{"type": "send_message", "text": "❌ 21 点需要在群聊里使用。"}]
+        if event_type in {"payment_confirmed", "keyword"}:
+            return await self._interaction_start(ctx, payload, chat_id)
+        if event_type == "message":
+            return await self._interaction_action(payload, chat_id)
+        if event_type == "session_close":
+            async with self._get_lock(chat_id):
+                self._games.pop(chat_id, None)
+            return [{"type": "end_session"}]
+        return []
+
+    async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+        player_id, player_name = _interaction_actor(payload)
+        bet = _positive_int(payload.get("prize") or payload.get("bet") or _interaction_amount(payload), 10, minimum=1)
+        timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
+        async with self._get_lock(chat_id):
+            if chat_id in self._games and not self._games[chat_id].finished:
+                return [{"type": "send_message", "text": "🃏 当前聊天已有进行中的 21 点牌局。", "reply_to_message_id": _interaction_message_id(payload)}]
+            player_cards = [_deal_card(), _deal_card()]
+            dealer_cards = [_deal_card(), _deal_card()]
+            gs = GameState(
+                player_cards=player_cards,
+                dealer_cards=dealer_cards,
+                bet=bet,
+                player_id=player_id,
+                player_name=player_name,
+                started_at=time.monotonic(),
+            )
+            p_val, _ = _hand_value(player_cards)
+            if p_val == 21:
+                gs.finished = True
+                return self._interaction_settle_actions(gs, "blackjack", _interaction_message_id(payload))
+            self._games[chat_id] = gs
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, gs.started_at, timeout)))
+        p_val, _ = _hand_value(player_cards)
+        return [
+            {
+                "type": "send_message",
+                "text": (
+                    f"<b>🃏 21点</b> · {player_name} 下注 {bet} 筹码\n\n"
+                    f"庄家：{_format_hand(dealer_cards, hide_first=True)}\n"
+                    f"你的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
+                    "直接发送：要牌 / 停牌 / 加倍"
+                ),
+                "parse_mode": "html",
+                "reply_to_message_id": _interaction_message_id(payload),
+            }
+        ]
+
+    async def _interaction_action(self, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+        action_text = _interaction_message_text(payload).lower()
+        action = ""
+        if action_text in {"h", "hit", "要牌"}:
+            action = "hit"
+        elif action_text in {"s", "stand", "停牌"}:
+            action = "stand"
+        elif action_text in {"d", "double", "加倍"}:
+            action = "double"
+        if not action:
+            return []
+        actor_id, _ = _interaction_actor(payload)
+        async with self._get_lock(chat_id):
+            gs = self._games.get(chat_id)
+            if not gs or gs.finished:
+                return [{"type": "no_session"}]
+            if actor_id != gs.player_id:
+                return [{"type": "send_message", "text": "这不是你的牌局哦。", "reply_to_message_id": _interaction_message_id(payload)}]
+            if action == "hit":
+                gs.player_cards.append(_deal_card())
+                p_val, _ = _hand_value(gs.player_cards)
+                if p_val > 21:
+                    gs.finished = True
+                    self._games.pop(chat_id, None)
+                    return self._interaction_settle_actions(gs, "bust", _interaction_message_id(payload))
+                if p_val == 21:
+                    self._dealer_finish(gs)
+                    self._games.pop(chat_id, None)
+                    return self._interaction_settle_actions(gs, self._result_for_finished(gs), _interaction_message_id(payload))
+                return [
+                    {
+                        "type": "send_message",
+                        "text": f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n继续发送：要牌 / 停牌",
+                        "parse_mode": "html",
+                        "reply_to_message_id": _interaction_message_id(payload),
+                    }
+                ]
+            if action == "double":
+                if len(gs.player_cards) != 2:
+                    return [{"type": "send_message", "text": "只能在前两张牌时加倍。", "reply_to_message_id": _interaction_message_id(payload)}]
+                gs.bet *= 2
+                gs.doubled = True
+                gs.player_cards.append(_deal_card())
+                p_val, _ = _hand_value(gs.player_cards)
+                if p_val > 21:
+                    gs.finished = True
+                    self._games.pop(chat_id, None)
+                    return self._interaction_settle_actions(gs, "bust", _interaction_message_id(payload))
+            self._dealer_finish(gs)
+            result = self._result_for_finished(gs)
+            self._games.pop(chat_id, None)
+            return self._interaction_settle_actions(gs, result, _interaction_message_id(payload))
+
+    def _dealer_finish(self, gs: GameState) -> None:
+        while True:
+            d_val, d_soft = _hand_value(gs.dealer_cards)
+            if d_val < 17 or (d_val == 17 and d_soft):
+                gs.dealer_cards.append(_deal_card())
+            else:
+                break
+        gs.finished = True
+
+    def _result_for_finished(self, gs: GameState) -> str:
+        p_val, _ = _hand_value(gs.player_cards)
+        d_val, _ = _hand_value(gs.dealer_cards)
+        if p_val > 21:
+            return "bust"
+        if d_val > 21 or p_val > d_val:
+            if p_val == 21 and len(gs.player_cards) == 2:
+                return "blackjack"
+            return "win"
+        if p_val < d_val:
+            return "lose"
+        return "push"
+
+    def _interaction_settle_actions(self, gs: GameState, result: str, reply_to: int | None) -> list[dict[str, Any]]:
+        actions: list[dict[str, Any]] = [
+            {"type": "send_message", "text": _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet), "parse_mode": "html", "reply_to_message_id": reply_to}
+        ]
+        if result in {"win", "blackjack"}:
+            amount = int(gs.bet * 1.5) if result == "blackjack" else gs.bet
+            actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": reply_to})
+            actions.append(
+                {
+                    "type": "result",
+                    "success": True,
+                    "result": {"winner_user_id": gs.player_id, "winner_name": gs.player_name, "amount": amount, "result": result},
+                    "settlement": {"mode": "announce_only", "winner_user_id": gs.player_id, "winner_name": gs.player_name, "amount": amount, "amount_field": "prize"},
+                }
+            )
+        actions.append({"type": "end_session"})
+        return actions
 
     # ── 命令入口 ─────────────────────────────────────
     async def _cmd_handler(
@@ -351,8 +564,8 @@ class BlackjackPlugin(Plugin):
         self._games.pop(chat_id, None)
 
     # ── 超时 ─────────────────────────────────────────
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
-        await asyncio.sleep(self._timeout)
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float, timeout: int | None = None) -> None:
+        await asyncio.sleep(timeout or self._timeout)
         async with self._get_lock(chat_id):
             gs = self._games.get(chat_id)
             if not gs or gs.finished or gs.started_at != started_at:

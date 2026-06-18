@@ -2,7 +2,7 @@ from app.worker.plugins.manifest import Manifest
 
 CONFIG_SCHEMA = {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -25,7 +25,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="ais-byRBQ",
     display_name="ais-byRBQ",
-    version="1.0.2",
+    version="1.0.3",
+    min_telepilot_version="0.30.4",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="AI 查询插件，支持联网搜索增强、参考网址追加、实体查询图片预览、API URL/base url 快速切换与备用模型重试",

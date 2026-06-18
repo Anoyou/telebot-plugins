@@ -1,6 +1,6 @@
-# Telebot Plugins
+# TelePilot Plugins
 
-Telebot 远程插件仓库。
+TelePilot 远程插件仓库。
 
 ## 插件列表
 
@@ -16,9 +16,9 @@ Telebot 远程插件仓库。
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
 | [sum](./sum/) | `,sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
 
-## byRBQ 迁移插件（Pagermaid → Telebot）
+## byRBQ 迁移插件（Pagermaid → TelePilot）
 
-以下插件已按最新 Telebot 远程插件结构迁移并重命名为 `原名-byRBQ`：
+以下插件已按最新 TelePilot 远程插件结构迁移并重命名为 `原名-byRBQ`：
 
 - [ais-byRBQ](./ais-byRBQ/)
 - [cai-byRBQ](./cai-byRBQ/)
@@ -36,7 +36,7 @@ Telebot 远程插件仓库。
 每个迁移插件目录都包含：
 - `plugin.json`（安装阶段元数据）
 - `manifest.py`（运行期 Manifest）
-- `plugin.py`（Telebot 插件入口）
+- `plugin.py`（TelePilot 插件入口）
 - `__init__.py`（导出 `PLUGIN_CLASS` / `MANIFEST`）
 - `legacy_main.py`（保留原 Pagermaid 实现供后续功能深度迁移）
 
@@ -46,7 +46,7 @@ Telebot 远程插件仓库。
 
 ## 安装方式
 
-1. 在 Telebot 前端 → 插件中心 → 插件仓库
+1. 在 TelePilot 前端 → 插件中心 → 插件仓库
 2. 添加仓库地址：`https://github.com/Anoyou/telebot-plugins.git`
 3. 浏览插件列表，点击安装
 
@@ -58,4 +58,4 @@ Telebot 远程插件仓库。
 - `plugin.py` — 入口文件
 - `__init__.py` — 导出 `PLUGIN_CLASS` 和 `MANIFEST`（必填）
 
-参考 [插件开发指南](https://github.com/Anoyou/telebot/blob/main/docs/PLUGIN-DEV-GUIDE.md)
+参考 [插件开发指南](https://github.com/Anoyou/TelePilot/blob/main/docs/PLUGIN-DEV-GUIDE.md)

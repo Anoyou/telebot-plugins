@@ -2,7 +2,7 @@ from app.worker.plugins.manifest import Manifest
 
 CONFIG_SCHEMA = {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -25,7 +25,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sfl-byRBQ",
     display_name="sfl-byRBQ",
-    version="1.0.2",
+    version="1.0.3",
+    min_telepilot_version="0.30.4",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="贴纸跟随插件，在特定群组中自动跟随发送特定贴纸",

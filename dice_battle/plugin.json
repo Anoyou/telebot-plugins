@@ -3,7 +3,7 @@
   "display_name": "骰子比大小",
   "description": "群内骰子对战，两人各掷骰子比点数，支持下注",
   "author": "Anoyou",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -24,7 +24,7 @@
   ],
   "config_schema": {
     "type": "object",
-    "x-ui-mode": "schema",
+    "x-ui-mode": "single",
     "additionalProperties": false,
     "properties": {
       "command": {
@@ -54,21 +54,90 @@
     {
       "key": "start_dice_battle",
       "title": "开始骰子对战",
-      "description": "由交互 Bot 在群内发起一局骰子比大小。",
+      "description": "由交互 Bot 在群内发起一局骰子比大小挑战。",
+      "interaction_profile": "challenge_game",
+      "launch_mode": "hybrid",
       "session_scope": "chat",
+      "events": [
+        "payment_confirmed",
+        "keyword",
+        "message",
+        "session_close"
+      ],
+      "preserve_command_trigger": true,
+      "command_fallback": {
+        "enabled": true,
+        "command": "dice",
+        "mode": "hint_only"
+      },
+      "session_policy": {
+        "ttl_seconds": 60,
+        "duplicate_start": "reject",
+        "close_on": [
+          "winner",
+          "draw",
+          "timeout",
+          "session_close"
+        ]
+      },
+      "payload_contract": {
+        "required_envelope": [
+          "source",
+          "actor",
+          "trigger",
+          "session"
+        ],
+        "required_event_fields": [
+          "type",
+          "chat_id"
+        ]
+      },
+      "result_contract": {
+        "actions": [
+          "send_message",
+          "end_session",
+          "result",
+          "settlement"
+        ],
+        "send_via": [
+          "interaction_bot",
+          "userbot_reply",
+          "bbot_notice"
+        ]
+      },
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "prize": {
+            "type": "integer",
+            "title": "奖励",
+            "default": 0,
+            "minimum": 0
+          },
           "timeout": {
             "type": "integer",
             "title": "邀请限时（秒）",
             "default": 60,
             "minimum": 10,
             "maximum": 86400
+          },
+          "dice_count": {
+            "type": "integer",
+            "title": "骰子数量",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 6
           }
         }
+      },
+      "settlement": {
+        "mode": "announce_only",
+        "winner_field": "actor.user_id",
+        "amount_field": "prize"
       }
     }
-  ]
+  ],
+  "min_telepilot_version": "0.30.4",
+  "interaction_profile": "challenge_game"
 }

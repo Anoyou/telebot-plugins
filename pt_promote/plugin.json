@@ -3,48 +3,101 @@
   "display_name": "PT 种子促销",
   "description": "在青娃PT置顶促销某个种子（消耗蝌蚪）",
   "author": "xiaoyou",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "entry": "plugin.py",
-  "min_telepilot_version": "0.24.0",
-  "commands": ["pt", "促销", "ptinfo"],
-  "tags": ["pt", "torrent", "promote", "utility"],
+  "min_telepilot_version": "0.30.4",
+  "commands": [
+    "pt",
+    "促销",
+    "ptinfo"
+  ],
+  "tags": [
+    "pt",
+    "torrent",
+    "promote",
+    "utility"
+  ],
   "category": "utility",
   "cleanup_mode": "no-op",
   "interaction_entries": [
     {
       "key": "promote_torrent",
-      "title": "置顶促销种子",
-      "description": "交互 Bot 关键词触发后，调用 pt_promote 执行种子置顶促销。",
+      "title": "触发种子促销",
+      "description": "由交互 Bot 收到关键词或回复消息后触发 PT 种子促销流程。",
+      "interaction_profile": "utility_trigger",
+      "launch_mode": "hybrid",
       "session_scope": "user",
-      "events": ["keyword"],
+      "events": [
+        "payment_confirmed",
+        "keyword",
+        "message",
+        "session_close"
+      ],
+      "preserve_command_trigger": true,
+      "command_fallback": {
+        "enabled": true,
+        "command": "pt",
+        "mode": "hint_only"
+      },
+      "session_policy": {
+        "ttl_seconds": 600,
+        "duplicate_start": "reject",
+        "close_on": [
+          "completed",
+          "failed",
+          "session_close"
+        ]
+      },
+      "payload_contract": {
+        "required_envelope": [
+          "source",
+          "actor",
+          "trigger",
+          "session"
+        ],
+        "required_event_fields": [
+          "type",
+          "chat_id"
+        ]
+      },
+      "result_contract": {
+        "actions": [
+          "send_message",
+          "end_session",
+          "result"
+        ],
+        "send_via": [
+          "interaction_bot",
+          "userbot_reply",
+          "bbot_notice"
+        ]
+      },
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "id": {
+          "torrent_id": {
             "type": "string",
             "title": "种子 ID",
-            "description": "可由群友消息里的 id=12345 自动提取。"
-          },
-          "default_options": {
-            "type": "string",
-            "title": "默认促销参数",
-            "description": "可选，例如：free 1d 或 free 7d bid=100。",
             "default": ""
           },
-          "valid_seconds": {
-            "type": "integer",
-            "title": "平台会话有效期（秒）",
-            "default": 600,
-            "minimum": 30,
-            "maximum": 86400
+          "options": {
+            "type": "string",
+            "title": "促销参数",
+            "default": ""
           }
         }
       }
     }
   ],
-  "permissions": ["send_message", "edit_message", "external_http"],
-  "allowed_hosts": ["www.qingwapt.com"],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "external_http"
+  ],
+  "allowed_hosts": [
+    "www.qingwapt.com"
+  ],
   "config_schema": {
     "type": "object",
     "x-ui-mode": "single",
@@ -57,7 +110,8 @@
         "default": "pt",
         "minLength": 1,
         "maxLength": 32,
-        "pattern": "^\\S+$"
+        "pattern": "^\\S+$",
+        "level": "account"
       },
       "usage_preview": {
         "type": "string",
@@ -69,19 +123,22 @@
         "type": "string",
         "title": "PT 站点地址",
         "description": "站点根 URL，默认 https://www.qingwapt.com",
-        "default": "https://www.qingwapt.com"
+        "default": "https://www.qingwapt.com",
+        "level": "global"
       },
       "cookie": {
         "type": "string",
         "title": "Cookie",
         "description": "登录后浏览器复制的完整 Cookie 字符串",
-        "default": ""
+        "default": "",
+        "level": "global"
       },
       "torrent_cooldown_seconds": {
         "type": "string",
         "title": "同一种子促销冷却",
         "description": "成功置顶后，同一种子再次触发前需要等待的时间。支持 2s、2m、2h、2d，默认 12h。",
-        "default": "12h"
+        "default": "12h",
+        "level": "account"
       },
       "template_placeholders": {
         "type": "string",
@@ -96,7 +153,8 @@
         "default": "用法：{prefix}{command} <种子ID> [选项]\n\n选项：\n  free/2x — 促销类型（默认 free）\n  1d/2d/3d/7d — 时长（默认 1天）\n  bid=100 — 竞价蝌蚪\n  reward=50 — 奖励蝌蚪\n  users=10 — 奖励人数\n\n示例：{prefix}{command} 12345 free 7d bid=100",
         "x-ui-widget": "textarea",
         "minLength": 1,
-        "maxLength": 1500
+        "maxLength": 1500,
+        "level": "account"
       },
       "promote_status_template": {
         "type": "string",
@@ -105,7 +163,8 @@
         "default": "{icon} {message}",
         "x-ui-widget": "textarea",
         "minLength": 1,
-        "maxLength": 800
+        "maxLength": 800,
+        "level": "account"
       },
       "promote_ready_template": {
         "type": "string",
@@ -114,7 +173,8 @@
         "default": "📋 ID 为 {torrent_id} 的种子符合促销条件\n\n{params}\n\n⏳ 正在计算预计消耗...",
         "x-ui-widget": "textarea",
         "minLength": 1,
-        "maxLength": 1500
+        "maxLength": 1500,
+        "level": "account"
       },
       "promote_confirming_template": {
         "type": "string",
@@ -123,7 +183,8 @@
         "default": "📋 ID 为 {torrent_id} 的种子符合促销条件\n\n{params}\n预计消耗：{cost} 蝌蚪\n计算方式：{expression}\n\n⏳ 正在确认置顶...",
         "x-ui-widget": "textarea",
         "minLength": 1,
-        "maxLength": 1800
+        "maxLength": 1800,
+        "level": "account"
       },
       "promote_success_template": {
         "type": "string",
@@ -132,7 +193,8 @@
         "default": "✅ 种子置顶促销成功！\n\n<b>{torrent_header}</b>\n<pre><code class=\"language-副标题与促销明细\">{subtitle}\n{params}\n消耗：{cost} 蝌蚪</code></pre>",
         "x-ui-widget": "textarea",
         "minLength": 1,
-        "maxLength": 3000
+        "maxLength": 3000,
+        "level": "account"
       },
       "info_usage_template": {
         "type": "string",
@@ -141,7 +203,8 @@
         "default": "用法：{prefix}ptinfo <种子ID>",
         "x-ui-widget": "textarea",
         "minLength": 1,
-        "maxLength": 500
+        "maxLength": 500,
+        "level": "account"
       },
       "info_ok_template": {
         "type": "string",
@@ -150,7 +213,8 @@
         "default": "📋 ID 为 {torrent_id} 的种子当前符合促销条件。\n{details_url}",
         "x-ui-widget": "textarea",
         "minLength": 1,
-        "maxLength": 1000
+        "maxLength": 1000,
+        "level": "account"
       },
       "promote_success_preview": {
         "type": "string",
@@ -160,6 +224,11 @@
         "default": "✅ 种子置顶促销成功！\n\nQi Miao Meng Ke Zhi Mo Fa Tian Xin S01 2024 1080p WEB-DL H.265 AAC-ZmWeb\n\n[副标题与促销明细]\n奇妙萌可之魔法甜心 | 全26集 | 导演：何佩祺 | 声优：王愫稣 | 蒋丽 | 萧清源\n促销类型：Free\n促销时长：1 天\n消耗：8,000 蝌蚪"
       }
     },
-    "required": ["command", "cookie", "torrent_cooldown_seconds"]
-  }
+    "required": [
+      "command",
+      "cookie",
+      "torrent_cooldown_seconds"
+    ]
+  },
+  "interaction_profile": "utility_trigger"
 }

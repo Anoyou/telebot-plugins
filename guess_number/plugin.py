@@ -47,6 +47,7 @@ class GuessGame:
     low: int = 1
     high: int = 100
     prize: int = 0
+    timeout: int = 300
     attempts: int = 0
     max_attempts: int = 0
     started_at: float = 0.0
@@ -55,6 +56,106 @@ class GuessGame:
     winner_name: str = ""
     winner_id: int = 0
     history: list[str] = field(default_factory=list)  # "玩家名: 猜测值 → 大/小/中"
+
+
+def _payload_event(payload: dict[str, Any]) -> dict[str, Any]:
+    event = payload.get("event")
+    return event if isinstance(event, dict) else {}
+
+
+def _payload_source(payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload.get("source")
+    return source if isinstance(source, dict) else {}
+
+
+def _payload_actor(payload: dict[str, Any]) -> dict[str, Any]:
+    actor = payload.get("actor")
+    return actor if isinstance(actor, dict) else {}
+
+
+def _payload_reply_to(payload: dict[str, Any]) -> dict[str, Any]:
+    reply_to = payload.get("reply_to")
+    return reply_to if isinstance(reply_to, dict) else {}
+
+
+def _positive_int(value: Any, default: int, *, minimum: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= minimum else default
+
+
+def _interaction_event_type(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+    source = _payload_source(payload)
+    return str(
+        event.get("type")
+        or trigger.get("event")
+        or trigger.get("type")
+        or source.get("event_type")
+        or payload.get("event_type")
+        or ""
+    ).strip()
+
+
+def _interaction_chat_id(payload: dict[str, Any]) -> int:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+    return _positive_int(payload.get("chat_id") or event.get("chat_id") or source.get("chat_id") or session.get("chat_id"), 0, minimum=-10**20)
+
+
+def _interaction_message_id(payload: dict[str, Any]) -> int | None:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    reply_to = _payload_reply_to(payload)
+    value = _positive_int(
+        payload.get("message_id")
+        or payload.get("source_message_id")
+        or reply_to.get("message_id")
+        or event.get("message_id")
+        or source.get("message_id"),
+        0,
+    )
+    return value or None
+
+
+def _interaction_message_text(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    return str(payload.get("message_text") or payload.get("text") or event.get("text") or source.get("text") or "").strip()
+
+
+def _interaction_amount(payload: dict[str, Any]) -> int:
+    event = _payload_event(payload)
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    return _positive_int(payload.get("amount") or data.get("amount"), 0, minimum=1)
+
+
+def _interaction_actor(payload: dict[str, Any]) -> tuple[int, str]:
+    actor = _payload_actor(payload)
+    event = _payload_event(payload)
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    raw_id = (
+        actor.get("user_id")
+        or actor.get("id")
+        or payload.get("sender_user_id")
+        or payload.get("payer_user_id")
+        or event.get("user_id")
+        or data.get("payer_user_id")
+    )
+    raw_name = (
+        actor.get("display_name")
+        or actor.get("name")
+        or payload.get("sender_name")
+        or payload.get("payer_name")
+        or event.get("display_name")
+        or data.get("payer_name")
+        or "玩家"
+    )
+    return _positive_int(raw_id, 0, minimum=0), str(raw_name).strip() or "玩家"
 
 
 # ─────────────────────────────────────────────────────
@@ -112,8 +213,147 @@ class GuessNumberPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_guess_number":
             return None
-        timeout = int(payload.get("timeout") or self._timeout or 300)
-        return [{"type": "send_message", "text": f"🎯 猜数字入口已触发，限时 {timeout} 秒。发送 ,{self._command} 开始游戏。"}]
+        event_type = _interaction_event_type(payload)
+        chat_id = _interaction_chat_id(payload)
+        if not chat_id:
+            return [{"type": "send_message", "text": "❌ 猜数字需要在群聊里使用。"}]
+        if event_type in {"payment_confirmed", "keyword"}:
+            return await self._interaction_start(ctx, payload, chat_id)
+        if event_type == "message":
+            return await self._interaction_guess(ctx, payload, chat_id)
+        if event_type == "session_close":
+            async with self._get_lock(chat_id):
+                self._games.pop(chat_id, None)
+            return [{"type": "end_session"}]
+        return []
+
+    async def _interaction_start(
+        self,
+        ctx: PluginContext,
+        payload: dict[str, Any],
+        chat_id: int,
+    ) -> list[dict[str, Any]]:
+        prize = _positive_int(payload.get("prize") or _interaction_amount(payload), 0, minimum=1)
+        if prize <= 0:
+            return [
+                {
+                    "type": "send_message",
+                    "text": f"请指定奖励金额。例：{{prefix}}{self._command} 100",
+                    "reply_to_message_id": _interaction_message_id(payload),
+                },
+                {"type": "end_session"},
+            ]
+        timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
+        low = _positive_int(payload.get("low"), 1, minimum=1)
+        high = _positive_int(payload.get("high"), 100, minimum=2)
+        if low >= high:
+            low, high = 1, 100
+        max_attempts = _positive_int(payload.get("max_attempts"), 0, minimum=0)
+        target = random.randint(low, high)
+        game = GuessGame(
+            target=target,
+            low=low,
+            high=high,
+            prize=prize,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            started_at=time.monotonic(),
+        )
+        async with self._get_lock(chat_id):
+            current = self._games.get(chat_id)
+            if current and not current.finished:
+                return [
+                    {
+                        "type": "send_message",
+                        "text": "🎯 当前聊天已有进行中的猜数字。",
+                        "reply_to_message_id": _interaction_message_id(payload),
+                    }
+                ]
+            self._games[chat_id] = game
+
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, game.started_at, timeout)))
+        limit_hint = f"（最多 {max_attempts} 次）" if max_attempts else ""
+        return [
+            {
+                "type": "send_message",
+                "text": (
+                    f"<b>🔢 猜数字</b>\n\n"
+                    f"奖励：<b>+{prize}</b>\n"
+                    f"范围：{low} ~ {high}{limit_hint}\n"
+                    f"限时 {timeout} 秒，直接发送数字即可。"
+                ),
+                "parse_mode": "html",
+                "reply_to_message_id": _interaction_message_id(payload),
+            }
+        ]
+
+    async def _interaction_guess(
+        self,
+        ctx: PluginContext,
+        payload: dict[str, Any],
+        chat_id: int,
+    ) -> list[dict[str, Any]]:
+        text = _interaction_message_text(payload)
+        if not text.lstrip("-").isdigit():
+            return []
+        guess = int(text)
+        reply_to = _interaction_message_id(payload)
+        async with self._get_lock(chat_id):
+            game = self._games.get(chat_id)
+            if not game or game.finished:
+                return [{"type": "no_session"}]
+            actor_id, actor_name = _interaction_actor(payload)
+            game.attempts += 1
+            if guess == game.target:
+                game.finished = True
+                game.winner_id = actor_id
+                game.winner_name = actor_name
+                game.history.append(f"{actor_name}: {guess} → ✅ 中！")
+                self._games.pop(chat_id, None)
+                return [
+                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": reply_to},
+                    {
+                        "type": "send_message",
+                        "text": (
+                            f"🏆 {actor_name} 猜中了！答案 <b>{game.target}</b>\n"
+                            f"奖励 <b>+{game.prize}</b> · 共 {game.attempts} 次猜测"
+                        ),
+                        "parse_mode": "html",
+                    },
+                    {
+                        "type": "result",
+                        "success": True,
+                        "result": {
+                            "winner_user_id": actor_id,
+                            "winner_name": actor_name,
+                            "amount": game.prize,
+                            "answer": game.target,
+                        },
+                        "settlement": {
+                            "mode": "announce_only",
+                            "winner_user_id": actor_id,
+                            "winner_name": actor_name,
+                            "amount": game.prize,
+                            "amount_field": "prize",
+                        },
+                    },
+                    {"type": "end_session"},
+                ]
+            hint = "📈 大一点" if guess < game.target else "📉 小一点"
+            game.history.append(f"{actor_name}: {guess} → {'小了' if guess < game.target else '大了'}")
+            if game.max_attempts and game.attempts >= game.max_attempts:
+                game.finished = True
+                self._games.pop(chat_id, None)
+                return [
+                    {
+                        "type": "send_message",
+                        "text": f"<b>💀 次数用完了！</b>\n答案是 <b>{game.target}</b>",
+                        "parse_mode": "html",
+                    },
+                    {"type": "end_session"},
+                ]
+            limit_hint = f"（{game.attempts}/{game.max_attempts}）" if game.max_attempts else f"（第 {game.attempts} 次）"
+            return [{"type": "send_message", "text": f"{hint} {limit_hint}", "reply_to_message_id": reply_to}]
 
     # ── 命令入口 ─────────────────────────────────────
     async def _cmd_handler(
@@ -319,8 +559,8 @@ class GuessNumberPlugin(Plugin):
             await self._handle_guess(chat_id, text, event, ctx)
 
     # ── 超时 ─────────────────────────────────────────
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
-        await asyncio.sleep(self._timeout)
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float, timeout: int | None = None) -> None:
+        await asyncio.sleep(timeout or self._timeout)
         async with self._get_lock(chat_id):
             gs = self._games.get(chat_id)
             if not gs or gs.finished or gs.started_at != started_at:

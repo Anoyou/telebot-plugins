@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 TEMPLATE_SAMPLE_VARS = {
-    "version": "1.1.12",
+    "version": "1.1.13",
     "prefix": "{prefix}",
     "command": "dicegrid",
     "force_stop_command": "stop",
@@ -250,7 +250,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.12",
+    version="1.1.13",
+    min_telepilot_version="0.30.4",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
@@ -258,62 +259,40 @@ MANIFEST = Manifest(
 
     category="interactive",
     interaction_profile="session_game",
-    interaction_entries=[
-        {
-            "key": "start_dice_grid_hunt",
-            "title": "开始九宫格竞猜",
-            "description": "由交互 Bot 在群内开启一局九宫格骰子竞猜。",
-            "interaction_profile": "session_game",
-            "launch_mode": "hybrid",
-            "session_scope": "chat",
-            "events": ["payment_confirmed", "keyword", "message", "session_close"],
-            "preserve_command_trigger": True,
-            "command_fallback": {
-                "enabled": True,
-                "command": "dicegrid",
-                "mode": "hint_only",
-            },
-            "payload_contract": {
-                "required_envelope": ["source", "actor", "trigger", "session"],
-                "required_event_fields": ["type", "chat_id"],
-            },
-            "result_contract": {
-                "actions": ["send_message", "send_photo", "end_session", "result", "settlement"],
-                "send_via": ["interaction_bot", "userbot_reply", "bbot_notice"],
-            },
-            "settlement": {
-                "mode": "announce_only",
-                "winner_field": "actor.user_id",
-                "amount_field": "prize",
-            },
-            "input_schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "prize": {
-                        "type": "integer",
-                        "title": "奖励",
-                        "default": 100,
-                        "minimum": 1
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "title": "答题限时（秒）",
-                        "default": 90,
-                        "minimum": 10,
-                        "maximum": 86400
-                    },
-                    "valid_seconds": {
-                        "type": "integer",
-                        "title": "平台会话有效期（秒）",
-                        "default": 90,
-                        "minimum": 30,
-                        "maximum": 86400
-                    }
-                },
-            },
-        }
-    ],
+    interaction_entries=[{'key': 'start_dice_grid_hunt',
+  'title': '开始九宫格竞猜',
+  'description': '由交互 Bot 在群内开启一局九宫格骰子竞猜。',
+  'interaction_profile': 'session_game',
+  'launch_mode': 'hybrid',
+  'session_scope': 'chat',
+  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'preserve_command_trigger': True,
+  'command_fallback': {'enabled': True, 'command': 'dicegrid', 'mode': 'hint_only'},
+  'session_policy': {'ttl_seconds': 90,
+                     'duplicate_start': 'reject',
+                     'close_on': ['winner', 'timeout', 'session_close']},
+  'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
+                       'required_event_fields': ['type', 'chat_id']},
+  'result_contract': {'actions': ['send_message',
+                                  'send_photo',
+                                  'end_session',
+                                  'result',
+                                  'settlement'],
+                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+  'input_schema': {'type': 'object',
+                   'additionalProperties': False,
+                   'properties': {'prize': {'type': 'integer',
+                                            'title': '奖励',
+                                            'default': 100,
+                                            'minimum': 1},
+                                  'timeout': {'type': 'integer',
+                                              'title': '答题限时（秒）',
+                                              'default': 90,
+                                              'minimum': 10,
+                                              'maximum': 86400}}},
+  'settlement': {'mode': 'announce_only',
+                 'winner_field': 'actor.user_id',
+                 'amount_field': 'prize'}}],
     config_schema=CONFIG_SCHEMA,
 )
 

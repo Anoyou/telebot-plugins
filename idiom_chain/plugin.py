@@ -861,6 +861,7 @@ class ChainGame:
     used_forbidden: set[str] = field(default_factory=set)
     round_num: int = 0
     prize: int = 0
+    timeout: int = 120
     winner_id: int = 0
     winner_name: str = ""
     started_at: float = 0.0
@@ -891,6 +892,77 @@ def _validate_answer(answer: str, last_char: str, used: set[str], forbidden_word
         if fw in answer and fw in used_forbidden:
             return False, f"禁词「{fw}」本轮已经出现过了"
     return True, ""
+
+
+def _payload_event(payload: dict[str, Any]) -> dict[str, Any]:
+    event = payload.get("event")
+    return event if isinstance(event, dict) else {}
+
+
+def _payload_source(payload: dict[str, Any]) -> dict[str, Any]:
+    source = payload.get("source")
+    return source if isinstance(source, dict) else {}
+
+
+def _payload_actor(payload: dict[str, Any]) -> dict[str, Any]:
+    actor = payload.get("actor")
+    return actor if isinstance(actor, dict) else {}
+
+
+def _payload_reply_to(payload: dict[str, Any]) -> dict[str, Any]:
+    reply_to = payload.get("reply_to")
+    return reply_to if isinstance(reply_to, dict) else {}
+
+
+def _positive_int(value: Any, default: int, *, minimum: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= minimum else default
+
+
+def _interaction_event_type(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+    source = _payload_source(payload)
+    return str(event.get("type") or trigger.get("event") or trigger.get("type") or source.get("event_type") or payload.get("event_type") or "").strip()
+
+
+def _interaction_chat_id(payload: dict[str, Any]) -> int:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+    return _positive_int(payload.get("chat_id") or event.get("chat_id") or source.get("chat_id") or session.get("chat_id"), 0, minimum=-10**20)
+
+
+def _interaction_message_id(payload: dict[str, Any]) -> int | None:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    reply_to = _payload_reply_to(payload)
+    value = _positive_int(payload.get("message_id") or payload.get("source_message_id") or reply_to.get("message_id") or event.get("message_id") or source.get("message_id"), 0)
+    return value or None
+
+
+def _interaction_message_text(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    return str(payload.get("message_text") or payload.get("text") or event.get("text") or source.get("text") or "").strip()
+
+
+def _interaction_amount(payload: dict[str, Any]) -> int:
+    event = _payload_event(payload)
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    return _positive_int(payload.get("amount") or data.get("amount"), 0, minimum=1)
+
+
+def _interaction_actor(payload: dict[str, Any]) -> tuple[int, str]:
+    actor = _payload_actor(payload)
+    event = _payload_event(payload)
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    raw_id = actor.get("user_id") or actor.get("id") or payload.get("sender_user_id") or payload.get("payer_user_id") or event.get("user_id") or data.get("payer_user_id")
+    raw_name = actor.get("display_name") or actor.get("name") or payload.get("sender_name") or payload.get("payer_name") or event.get("display_name") or data.get("payer_name") or "玩家"
+    return _positive_int(raw_id, 0, minimum=0), str(raw_name).strip() or "玩家"
 
 
 # ─────────────────────────────────────────────────────
@@ -950,8 +1022,121 @@ class IdiomChainPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_idiom_chain":
             return None
-        timeout = int(payload.get("timeout") or self._timeout or 120)
-        return [{"type": "send_message", "text": f"📚 成语接龙入口已触发，限时 {timeout} 秒。发送 ,{self._command} 100 开局。"}]
+        event_type = _interaction_event_type(payload)
+        chat_id = _interaction_chat_id(payload)
+        if not chat_id:
+            return [{"type": "send_message", "text": "❌ 成语接龙需要在群聊里使用。"}]
+        if event_type in {"payment_confirmed", "keyword"}:
+            return await self._interaction_start(ctx, payload, chat_id)
+        if event_type == "message":
+            return await self._interaction_answer(ctx, payload, chat_id)
+        if event_type == "session_close":
+            async with self._get_lock(chat_id):
+                self._games.pop(chat_id, None)
+            return [{"type": "end_session"}]
+        return []
+
+    async def _interaction_start(
+        self,
+        ctx: PluginContext,
+        payload: dict[str, Any],
+        chat_id: int,
+    ) -> list[dict[str, Any]]:
+        prize = _positive_int(payload.get("prize") or _interaction_amount(payload), 0, minimum=1)
+        if prize <= 0:
+            return [
+                {"type": "send_message", "text": f"请指定奖励金额。例：{{prefix}}{self._command} 100", "reply_to_message_id": _interaction_message_id(payload)},
+                {"type": "end_session"},
+            ]
+        timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
+        async with self._get_lock(chat_id):
+            if chat_id in self._games and self._games[chat_id].waiting:
+                return [{"type": "send_message", "text": "📜 当前聊天已有进行中的成语接龙。", "reply_to_message_id": _interaction_message_id(payload)}]
+            starter = random.choice(random.choice(list(IDIOM_DB.values())))
+            game = ChainGame(
+                current_idiom=starter,
+                used_idioms={starter},
+                round_num=1,
+                prize=prize,
+                timeout=timeout,
+                started_at=time.monotonic(),
+            )
+            self._games[chat_id] = game
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, game.started_at, timeout)))
+        return [
+            {
+                "type": "send_message",
+                "text": self._format_game_prompt(game),
+                "parse_mode": "html",
+                "reply_to_message_id": _interaction_message_id(payload),
+            }
+        ]
+
+    async def _interaction_answer(
+        self,
+        ctx: PluginContext,
+        payload: dict[str, Any],
+        chat_id: int,
+    ) -> list[dict[str, Any]]:
+        text = _interaction_message_text(payload)
+        if len(text) != 4:
+            return []
+        async with self._get_lock(chat_id):
+            game = self._games.get(chat_id)
+            if not game or not game.waiting:
+                return [{"type": "no_session"}]
+            last_char = game.current_idiom[-1]
+            ok, reason = _validate_answer(text, last_char, game.used_idioms, self._forbidden_words, game.used_forbidden)
+            if not ok:
+                return [{"type": "send_message", "text": f"❌ {reason}", "reply_to_message_id": _interaction_message_id(payload)}]
+            actor_id, actor_name = _interaction_actor(payload)
+            game.used_idioms.add(text)
+            for forbidden in self._forbidden_words:
+                if forbidden in text:
+                    game.used_forbidden.add(forbidden)
+            game.round_num += 1
+            game.winner_id = actor_id
+            game.winner_name = actor_name
+            next_char = text[-1]
+            next_idiom = _pick_next_idiom(next_char, game.used_idioms)
+            if next_idiom:
+                game.current_idiom = next_idiom
+                game.used_idioms.add(next_idiom)
+                game.started_at = time.monotonic()
+                started_at = game.started_at
+                prompt = self._format_game_prompt(game)
+                self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, started_at, game.timeout)))
+                return [
+                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload)},
+                    {
+                        "type": "send_message",
+                        "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n\n{prompt}",
+                        "parse_mode": "html",
+                    },
+                    {
+                        "type": "result",
+                        "success": True,
+                        "result": {"winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "answer": text},
+                        "settlement": {"mode": "announce_only", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize"},
+                    },
+                ]
+            game.waiting = False
+            self._games.pop(chat_id, None)
+            return [
+                {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload)},
+                {
+                    "type": "send_message",
+                    "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n🏆 接龙结束！以「{text[-1]}」开头的成语都用完了，共 {game.round_num} 轮",
+                    "parse_mode": "html",
+                },
+                {
+                    "type": "result",
+                    "success": True,
+                    "result": {"winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "answer": text},
+                    "settlement": {"mode": "announce_only", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize"},
+                },
+                {"type": "end_session"},
+            ]
 
     def _format_game_prompt(self, game: ChainGame) -> str:
         lines = [
@@ -965,7 +1150,7 @@ class IdiomChainPlugin(Plugin):
             remaining = [fw for fw in self._forbidden_words if fw not in game.used_forbidden]
             if remaining:
                 lines.append(f"禁词：{'、'.join(remaining)}（每个只能用一次）")
-        lines.append(f"限时 {self._timeout} 秒，直接发成语即可")
+        lines.append(f"限时 {game.timeout} 秒，直接发成语即可")
         return "\n".join(lines)
 
     async def _cmd_handler(
@@ -1111,8 +1296,8 @@ class IdiomChainPlugin(Plugin):
             if ctx.log:
                 await ctx.log("warn", f"[idiom_chain] 题目消息更新失败：{type(exc).__name__}: {exc}")
 
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float) -> None:
-        await asyncio.sleep(self._timeout)
+    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float, timeout: int | None = None) -> None:
+        await asyncio.sleep(timeout or self._timeout)
         async with self._get_lock(chat_id):
             game = self._games.get(chat_id)
             if not game or not game.waiting or game.started_at != started_at:

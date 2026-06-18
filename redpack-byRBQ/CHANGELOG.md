@@ -1,4 +1,9 @@
 # 更新日志
+## 1.1.19 (2026-06-19)
+- 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。
+- 保留原有 UserBot 命令触发，交互 Bot 入口只负责触发和高频互动承接，不改变插件本体配置。
+- 按最新插件开发指南补充 `min_telepilot_version`，并将配置页模式从旧兼容别名 `schema` 更新为推荐的 `single`。
+
 ## 1.1.18 (2026-05-26)
 - 按最新模块开发文档调整插件说明文案，避免被“硬编码命令前缀”规则误判。
 - 同步更新 `plugin.json` 与 `manifest.py` 的描述字段，保持远程元数据一致。

@@ -3,7 +3,7 @@
   "display_name": "彩票系统 Plus",
   "description": "群内彩票玩法：下注、开奖、奖池滚存、历史与统计，支持高可配置模板与预览",
   "author": "Anoyou",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -11,7 +11,7 @@
     "read_chat",
     "delete_message"
   ],
-  "min_telepilot_version": "0.15.0",
+  "min_telepilot_version": "0.30.4",
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
   "commands": [
@@ -28,8 +28,55 @@
     {
       "key": "start_lottery_plus",
       "title": "发起彩票下注",
-      "description": "由交互 Bot 接收转账通知后按金额自动下注；查询仍使用彩票模块自己的命令入口。",
+      "description": "由交互 Bot 接收转账通知后按金额自动下注；查询仍使用彩票插件自己的命令入口。",
+      "interaction_profile": "reward_pool",
+      "launch_mode": "hybrid",
       "session_scope": "chat",
+      "events": [
+        "payment_confirmed",
+        "keyword",
+        "message",
+        "session_close"
+      ],
+      "preserve_command_trigger": true,
+      "command_fallback": {
+        "enabled": true,
+        "command": "lotto",
+        "mode": "hint_only"
+      },
+      "session_policy": {
+        "ttl_seconds": 3600,
+        "duplicate_start": "reject",
+        "close_on": [
+          "settled",
+          "session_close"
+        ]
+      },
+      "payload_contract": {
+        "required_envelope": [
+          "source",
+          "actor",
+          "trigger",
+          "session"
+        ],
+        "required_event_fields": [
+          "type",
+          "chat_id"
+        ]
+      },
+      "result_contract": {
+        "actions": [
+          "send_message",
+          "end_session",
+          "result",
+          "settlement"
+        ],
+        "send_via": [
+          "interaction_bot",
+          "userbot_reply",
+          "bbot_notice"
+        ]
+      },
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -40,6 +87,11 @@
             "default": "开始下注，祝你好运。"
           }
         }
+      },
+      "settlement": {
+        "mode": "announce_only",
+        "winner_field": "actor.user_id",
+        "amount_field": "prize"
       }
     }
   ],
@@ -62,31 +114,156 @@
         "maxLength": 32,
         "pattern": "^\\S+$"
       },
-      "buy_aliases": {"type": "string", "title": "下注别名", "default": "买 buy bet"},
-      "my_aliases": {"type": "string", "title": "我的注单别名", "default": "我的 my"},
-      "pool_aliases": {"type": "string", "title": "盘口别名", "default": "盘口 pool"},
-      "history_aliases": {"type": "string", "title": "历史别名", "default": "历史 history"},
-      "stats_aliases": {"type": "string", "title": "统计别名", "default": "统计 stats"},
-      "hot_aliases": {"type": "string", "title": "热度别名", "default": "热度 hot trend"},
-      "help_aliases": {"type": "string", "title": "帮助别名", "default": "帮助 help"},
-      "draw_aliases": {"type": "string", "title": "开奖别名（管理员）", "default": "开奖 draw"},
-      "reset_aliases": {"type": "string", "title": "清盘别名（管理员）", "default": "清盘 reset"},
-      "sponsor_aliases": {"type": "string", "title": "赞助别名（管理员）", "default": "赞助 sponsor"},
-      "unsponsor_aliases": {"type": "string", "title": "取消赞助别名（管理员）", "default": "取消赞助 unsponsor"},
-      "refund_aliases": {"type": "string", "title": "退款别名（管理员）", "default": "退款 refund"},
-      "price_base": {"type": "integer", "title": "基础下注金额", "default": 10000, "minimum": 1, "maximum": 100000000},
-      "service_fee_rate": {"type": "number", "title": "中奖服务费比例", "default": 0.05, "minimum": 0, "maximum": 0.9},
-      "refund_per_action": {"type": "integer", "title": "中奖额外返还（每注）", "default": 66, "minimum": 0, "maximum": 100000},
-      "max_numbers_per_user": {"type": "integer", "title": "每人每期可买号码数", "default": 1, "minimum": 1, "maximum": 20},
-      "max_bets_per_num": {"type": "integer", "title": "单号码最大注数", "default": 1000, "minimum": 1, "maximum": 1000000},
-      "max_payout_per_user": {"type": "integer", "title": "单人单期最大派发上限", "default": 5000000, "minimum": 1, "maximum": 1000000000},
-      "draw_numbers": {"type": "string", "title": "可开奖号码（逗号分隔）", "default": "1,2,3,4,5,6", "minLength": 1, "maxLength": 120},
-      "draw_hour": {"type": "integer", "title": "每日开奖小时", "default": 21, "minimum": 0, "maximum": 23},
-      "draw_minute": {"type": "integer", "title": "每日开奖分钟", "default": 0, "minimum": 0, "maximum": 59},
-      "close_minutes_before_draw": {"type": "integer", "title": "开奖前封盘分钟数", "default": 1, "minimum": 0, "maximum": 1440},
-      "auto_draw_interval_sec": {"type": "integer", "title": "旧版开奖间隔（兼容保留，当前使用每日开奖时间）", "default": 86400, "minimum": 30, "maximum": 86400},
-      "history_show_limit": {"type": "integer", "title": "历史默认展示期数", "default": 5, "minimum": 1, "maximum": 50},
-      "admin_ids": {"type": "string", "title": "管理员用户ID列表", "default": "", "description": "逗号分隔；为空时仅允许当前账号触发管理动作。"},
+      "buy_aliases": {
+        "type": "string",
+        "title": "下注别名",
+        "default": "买 buy bet"
+      },
+      "my_aliases": {
+        "type": "string",
+        "title": "我的注单别名",
+        "default": "我的 my"
+      },
+      "pool_aliases": {
+        "type": "string",
+        "title": "盘口别名",
+        "default": "盘口 pool"
+      },
+      "history_aliases": {
+        "type": "string",
+        "title": "历史别名",
+        "default": "历史 history"
+      },
+      "stats_aliases": {
+        "type": "string",
+        "title": "统计别名",
+        "default": "统计 stats"
+      },
+      "hot_aliases": {
+        "type": "string",
+        "title": "热度别名",
+        "default": "热度 hot trend"
+      },
+      "help_aliases": {
+        "type": "string",
+        "title": "帮助别名",
+        "default": "帮助 help"
+      },
+      "draw_aliases": {
+        "type": "string",
+        "title": "开奖别名（管理员）",
+        "default": "开奖 draw"
+      },
+      "reset_aliases": {
+        "type": "string",
+        "title": "清盘别名（管理员）",
+        "default": "清盘 reset"
+      },
+      "sponsor_aliases": {
+        "type": "string",
+        "title": "赞助别名（管理员）",
+        "default": "赞助 sponsor"
+      },
+      "unsponsor_aliases": {
+        "type": "string",
+        "title": "取消赞助别名（管理员）",
+        "default": "取消赞助 unsponsor"
+      },
+      "refund_aliases": {
+        "type": "string",
+        "title": "退款别名（管理员）",
+        "default": "退款 refund"
+      },
+      "price_base": {
+        "type": "integer",
+        "title": "基础下注金额",
+        "default": 10000,
+        "minimum": 1,
+        "maximum": 100000000
+      },
+      "service_fee_rate": {
+        "type": "number",
+        "title": "中奖服务费比例",
+        "default": 0.05,
+        "minimum": 0,
+        "maximum": 0.9
+      },
+      "refund_per_action": {
+        "type": "integer",
+        "title": "中奖额外返还（每注）",
+        "default": 66,
+        "minimum": 0,
+        "maximum": 100000
+      },
+      "max_numbers_per_user": {
+        "type": "integer",
+        "title": "每人每期可买号码数",
+        "default": 1,
+        "minimum": 1,
+        "maximum": 20
+      },
+      "max_bets_per_num": {
+        "type": "integer",
+        "title": "单号码最大注数",
+        "default": 1000,
+        "minimum": 1,
+        "maximum": 1000000
+      },
+      "max_payout_per_user": {
+        "type": "integer",
+        "title": "单人单期最大派发上限",
+        "default": 5000000,
+        "minimum": 1,
+        "maximum": 1000000000
+      },
+      "draw_numbers": {
+        "type": "string",
+        "title": "可开奖号码（逗号分隔）",
+        "default": "1,2,3,4,5,6",
+        "minLength": 1,
+        "maxLength": 120
+      },
+      "draw_hour": {
+        "type": "integer",
+        "title": "每日开奖小时",
+        "default": 21,
+        "minimum": 0,
+        "maximum": 23
+      },
+      "draw_minute": {
+        "type": "integer",
+        "title": "每日开奖分钟",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 59
+      },
+      "close_minutes_before_draw": {
+        "type": "integer",
+        "title": "开奖前封盘分钟数",
+        "default": 1,
+        "minimum": 0,
+        "maximum": 1440
+      },
+      "auto_draw_interval_sec": {
+        "type": "integer",
+        "title": "旧版开奖间隔（兼容保留，当前使用每日开奖时间）",
+        "default": 86400,
+        "minimum": 30,
+        "maximum": 86400
+      },
+      "history_show_limit": {
+        "type": "integer",
+        "title": "历史默认展示期数",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 50
+      },
+      "admin_ids": {
+        "type": "string",
+        "title": "管理员用户ID列表",
+        "default": "",
+        "description": "逗号分隔；为空时仅允许当前账号触发管理动作。"
+      },
       "help_template": {
         "type": "string",
         "title": "帮助消息模板",
@@ -133,6 +310,14 @@
         "default": "🎲 第 12 期开奖结果：<b>3</b>\n奖池：<b>188888</b> · 中奖人数：<b>2</b>\n总派发：<b>53888</b>"
       }
     },
-    "required": ["command", "price_base", "service_fee_rate", "draw_numbers", "draw_hour", "draw_minute"]
-  }
+    "required": [
+      "command",
+      "price_base",
+      "service_fee_rate",
+      "draw_numbers",
+      "draw_hour",
+      "draw_minute"
+    ]
+  },
+  "interaction_profile": "reward_pool"
 }

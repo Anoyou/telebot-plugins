@@ -1,4 +1,4 @@
-"""Bot 防广告守卫远程模块 Manifest。"""
+"""Bot 防广告守卫远程插件 Manifest。"""
 
 from __future__ import annotations
 
@@ -48,13 +48,13 @@ CONFIG_SCHEMA = {
         "delete_join_messages_for_known_bots": {
             "type": "boolean",
             "title": "删除可识别 Bot 入群服务消息",
-            "description": "仅在入群事件对象直接包含 Bot 用户信息时生效；远程模块不会调用 get_entity 额外解析成员。",
+            "description": "仅在入群事件对象直接包含 Bot 用户信息时生效；远程插件不会调用 get_entity 额外解析成员。",
             "default": True,
         },
         "announce": {
             "type": "boolean",
             "title": "群内提示",
-            "description": "删除成功后是否在群内发送提示。广告群建议关闭。建议仅查看模块日志。",
+            "description": "删除成功后是否在群内发送提示。广告群建议关闭。建议仅查看插件日志。",
             "default": False,
         },
         "violation_action": {
@@ -103,8 +103,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.3",
-    min_telepilot_version="0.21.0",
+    version="1.1.4",
+    min_telepilot_version="0.30.4",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
     permissions=["send_message", "delete_message", "read_chat", "moderate_chat"],

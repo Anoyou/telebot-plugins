@@ -1,4 +1,9 @@
 # 更新日志
+## 1.0.7 (2026-06-19)
+- 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。
+- 保留原有 UserBot 命令触发，交互 Bot 入口只负责触发和高频互动承接，不改变插件本体配置。
+- 按最新插件开发指南补充 `min_telepilot_version`，并将配置页模式从旧兼容别名 `schema` 更新为推荐的 `single`。
+
 ## 1.0.6 (2026-06-19)
 - 修复购买彩票时记录的玩家展示名可能读取账号本地联系人备注的问题；保存为联系人时优先展示公开 username（不带 @），没有 username 时回退用户 ID。
 - 兼容新版 TelePilot 的统一公开展示名 helper，并保留旧环境兜底逻辑。
