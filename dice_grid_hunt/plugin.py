@@ -9,12 +9,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import random
+import re
 import struct
 import time
 import zlib
 from dataclasses import dataclass
+from html import escape
 from typing import Any
 
 from app.worker.command import current_command_prefix
@@ -50,6 +53,7 @@ class RoundState:
     target_sum: int
     prize: int
     started_at: float
+    timeout: int = 90
     message_id: int | None = None
     answered: bool = False
     winner_id: int = 0
@@ -395,12 +399,145 @@ class DiceGridHuntPlugin(Plugin):
         entry_key: str,
         payload: dict[str, Any],
     ) -> list[dict[str, Any]] | None:
-        if entry_key != "start_dice_grid_hunt":
+        if entry_key not in {"start_dice_grid_hunt", "answer_dice_grid_hunt"}:
             return None
-        prize = int(payload.get("prize") or 100)
-        timeout = int(payload.get("timeout") or self._timeout or 90)
-        prefix = current_command_prefix()
-        return [{"type": "send_message", "text": f"🎯 九宫格竞猜入口已触发；奖励 +{prize}；限时 {timeout} 秒。发送 {prefix}{self._command} {prize} 开始本轮。"}]
+        event_type = self._interaction_event_type(payload)
+        if event_type in {"payment_confirmed", "keyword"}:
+            return await self._interaction_start(ctx, payload)
+        if event_type == "message":
+            return await self._interaction_answer(ctx, payload)
+        if event_type == "session_close":
+            return await self._interaction_close(payload)
+        return []
+
+    async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        chat_id = self._payload_chat_id(payload)
+        if not chat_id:
+            return [{"type": "no_session"}]
+        prize = self._positive_int(payload.get("prize"), 100, minimum=1)
+        timeout = self._positive_int(
+            payload.get("timeout") or payload.get("valid_seconds"),
+            self._timeout,
+            minimum=10,
+            maximum=86400,
+        )
+        async with self._get_lock(chat_id):
+            rd = self._rounds.get(chat_id)
+            if rd and not rd.answered and not self._round_expired(rd):
+                return [
+                    {
+                        "type": "send_message",
+                        "text": self._render_text(
+                            self._in_progress_message_template,
+                            {
+                                "prefix": current_command_prefix(),
+                                "command": self._command,
+                                "force_stop_command": self._force_stop_command,
+                            },
+                        ),
+                    }
+                ]
+            rd = self._new_round(prize, timeout=timeout)
+            self._rounds[chat_id] = rd
+
+        if ctx.log:
+            await ctx.log("info", f"[dice_grid_hunt] 交互 Bot 已开局 chat={chat_id} prize={prize} timeout={timeout}")
+        return [
+            {
+                "type": "send_photo",
+                "photo_base64": base64.b64encode(_render_grid_png(rd)).decode("ascii"),
+                "filename": "dice_grid_hunt.png",
+                "caption": self._render_round_text(rd, include_guide=True),
+                "reply_to_message_id": self._payload_message_id(payload),
+            }
+        ]
+
+    async def _interaction_answer(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        chat_id = self._payload_chat_id(payload)
+        if not chat_id:
+            return []
+        text = self._interaction_message_text(payload)
+        pick = self._parse_grid_pick(text)
+        if pick is None:
+            return []
+
+        async with self._get_lock(chat_id):
+            rd = self._rounds.get(chat_id)
+            if not rd or rd.answered:
+                return []
+            if self._round_expired(rd):
+                rd.answered = True
+                self._rounds.pop(chat_id, None)
+                return [
+                    {
+                        "type": "send_message",
+                        "text": self._render_timeout_announcement(rd),
+                    },
+                    {"type": "end_session"},
+                ]
+
+            user_id = self._positive_int(payload.get("sender_user_id"), 0, minimum=0)
+            now = time.monotonic()
+            last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
+            last_at = last_guess_at.get(user_id, 0.0)
+            if now - last_at < self._guess_cooldown:
+                return []
+            last_guess_at[user_id] = now
+            rd.last_guess_at = last_guess_at
+
+            if pick != rd.answer_index:
+                return []
+
+            rd.answered = True
+            rd.winner_id = user_id
+            rd.winner_name = self._interaction_actor_name(payload)
+            rd.winner_message_id = self._payload_message_id(payload)
+            self._rounds.pop(chat_id, None)
+            payout_account, payout_mode = self._interaction_payout_info(payload)
+
+        if ctx.log:
+            await ctx.log(
+                "info",
+                f"[dice_grid_hunt] 交互 Bot 答对 chat={chat_id} winner={rd.winner_name!r} answer={rd.answer_index} prize={rd.prize}",
+            )
+        return [
+            {
+                "type": "send_message",
+                "text": self._render_interaction_success(rd, payout_account, payout_mode),
+                "reply_to_message_id": rd.winner_message_id,
+            },
+            {
+                "type": "result",
+                "success": True,
+                "result": {
+                    "status": "winner",
+                    "winner_user_id": rd.winner_id or None,
+                    "winner_name": rd.winner_name,
+                    "winner_message_id": rd.winner_message_id,
+                    "target_sum": rd.target_sum,
+                    "answer_index": rd.answer_index,
+                    "prize": rd.prize,
+                    "payout_mode": payout_mode,
+                    "payout_account_label": payout_account,
+                },
+                "settlement": {
+                    "mode": "announce_only" if payout_mode != "auto" else "auto",
+                    "amount": rd.prize,
+                    "winner_user_id": rd.winner_id or None,
+                    "winner_name": rd.winner_name,
+                    "payout_account_label": payout_account,
+                    "status": "announced",
+                },
+            },
+            {"type": "end_session"},
+        ]
+
+    async def _interaction_close(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        chat_id = self._payload_chat_id(payload)
+        if chat_id:
+            async with self._get_lock(chat_id):
+                self._rounds.pop(chat_id, None)
+        return []
 
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
@@ -481,7 +618,7 @@ class DiceGridHuntPlugin(Plugin):
                 pass
         await event.reply(text, parse_mode="html")
 
-    def _new_round(self, prize: int) -> RoundState:
+    def _new_round(self, prize: int, *, timeout: int | None = None) -> RoundState:
         while True:
             rolls = [_roll_dice(6) for _ in range(9)]
             sums = [_sum(r) for r in rolls]
@@ -500,6 +637,7 @@ class DiceGridHuntPlugin(Plugin):
                 target_sum=sums[answer_zero_based],
                 prize=prize,
                 started_at=time.monotonic(),
+                timeout=timeout or self._timeout,
                 last_guess_at={},
             )
 
@@ -512,7 +650,7 @@ class DiceGridHuntPlugin(Plugin):
             "target_sum": rd.target_sum,
             "answer_index": rd.answer_index,
             "prize": rd.prize,
-            "timeout": self._timeout,
+            "timeout": rd.timeout,
             "guess_cooldown": self._guess_cooldown,
             "winner": rd.winner_name,
             "elapsed": "0.0",
@@ -537,11 +675,109 @@ class DiceGridHuntPlugin(Plugin):
 
         return self._render_text(template, template_vars)
 
+    def _render_interaction_success(self, rd: RoundState, payout_account: str, payout_mode: str) -> str:
+        winner = escape(rd.winner_name or "玩家")
+        account_holder = escape(payout_account)
+        payout_line = (
+            f"奖金将由 {account_holder} 账号自动发放。"
+            if payout_mode == "auto"
+            else f"请由 {account_holder} 人工回复赢家发放奖金。"
+        )
+        elapsed = max(0.0, time.monotonic() - rd.started_at)
+        return (
+            f"答对了：{winner}\n"
+            f"题目：九宫格竞猜，目标点数 {rd.target_sum}，答案第 {rd.answer_index} 格\n"
+            f"用时：{elapsed:.1f}s\n"
+            f"奖金：{rd.prize}\n"
+            f"{payout_line}"
+        )
+
+    def _interaction_event_type(self, payload: dict[str, Any]) -> str:
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        return str(
+            source.get("type")
+            or trigger.get("type")
+            or event.get("type")
+            or payload.get("event_type")
+            or ""
+        ).strip()
+
+    def _interaction_message_text(self, payload: dict[str, Any]) -> str:
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        return str(payload.get("message_text") or source.get("text") or event.get("text") or "").strip()
+
+    def _interaction_actor_name(self, payload: dict[str, Any]) -> str:
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        return str(
+            payload.get("sender_name")
+            or actor.get("display_name")
+            or event.get("display_name")
+            or payload.get("payer_name")
+            or "玩家"
+        ).strip() or "玩家"
+
+    def _interaction_payout_info(self, payload: dict[str, Any]) -> tuple[str, str]:
+        settlement = payload.get("settlement") if isinstance(payload.get("settlement"), dict) else {}
+        payout_account = str(payload.get("payout_account_label") or settlement.get("payout_account_label") or "账号持有者").strip()
+        payout_mode = str(payload.get("payout_mode") or settlement.get("mode") or "manual").strip().lower()
+        return payout_account or "账号持有者", payout_mode
+
+    def _render_timeout_announcement(self, rd: RoundState) -> str:
+        return self._render_text(
+            self._timeout_message_template,
+            {
+                "answer_index": rd.answer_index,
+                "target_sum": rd.target_sum,
+            },
+        )
+
     def _render_text(self, template: str, vars_map: dict[str, Any]) -> str:
         try:
             return template.format_map(vars_map)
         except Exception:
             return template
+
+    def _round_expired(self, rd: RoundState) -> bool:
+        return time.monotonic() >= rd.started_at + max(1, int(rd.timeout or self._timeout or 90))
+
+    def _parse_grid_pick(self, text: str) -> int | None:
+        if text.isdigit():
+            pick = int(text)
+            return pick if 1 <= pick <= 9 else None
+        match = re.search(r"(?<!\d)([1-9])(?!\d)", text)
+        return int(match.group(1)) if match else None
+
+    def _payload_chat_id(self, payload: dict[str, Any]) -> int:
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        return self._int_value(payload.get("chat_id") or source.get("chat_id") or event.get("chat_id")) or 0
+
+    def _payload_message_id(self, payload: dict[str, Any]) -> int | None:
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        value = payload.get("message_id") or source.get("message_id") or payload.get("source_message_id") or event.get("message_id")
+        parsed = self._positive_int(value, 0, minimum=0)
+        return parsed or None
+
+    def _positive_int(self, value: Any, default: int, *, minimum: int, maximum: int | None = None) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = default
+        parsed = max(minimum, parsed)
+        if maximum is not None:
+            parsed = min(maximum, parsed)
+        return parsed
+
+    def _int_value(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         text = (getattr(event, "raw_text", "") or "").strip()
