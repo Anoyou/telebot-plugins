@@ -13,6 +13,30 @@ from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
+try:
+    from app.worker.plugins.base import public_entity_display_name
+except ImportError:  # pragma: no cover - older TelePilot compatibility
+    def public_entity_display_name(entity: Any, *, fallback_id: int | str | None = None, default: str = "玩家") -> str:
+        if entity is not None:
+            username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
+            if username:
+                return username
+            entity_id = getattr(entity, "id", None)
+            if not bool(getattr(entity, "contact", False)):
+                name = " ".join(
+                    part
+                    for part in (
+                        str(getattr(entity, "first_name", "") or "").strip(),
+                        str(getattr(entity, "last_name", "") or "").strip(),
+                    )
+                    if part
+                )
+                if name:
+                    return name
+            if entity_id not in (None, ""):
+                return str(entity_id)
+        return str(fallback_id) if fallback_id not in (None, "") else default
+
 # ─────────────────────────────────────────────────────
 # 诗词库：(完整诗句, 作者, 诗题提示)
 # ─────────────────────────────────────────────────────
@@ -403,7 +427,7 @@ class PoetryBlankPlugin(Plugin):
             rd.finished = True
 
             sender = await event.get_sender()
-            name = getattr(sender, "first_name", "") or "玩家"
+            name = public_entity_display_name(sender, default="玩家")
             message_id = int(getattr(event, "id", 0) or 0) or None
 
             await self._send_prize_reply(ctx, event, chat_id, message_id, rd.prize)

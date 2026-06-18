@@ -3,7 +3,7 @@
   "display_name": "话痨挑战",
   "description": "设定聊天规则，违反者自动扣分，全程被动监听",
   "author": "Anoyou",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "entry": "plugin.py",
   "permissions": [
     "send_message",

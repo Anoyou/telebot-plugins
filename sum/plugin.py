@@ -23,8 +23,32 @@ from typing import Any
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
+try:
+    from app.worker.plugins.base import public_entity_display_name
+except ImportError:  # pragma: no cover - older TelePilot compatibility
+    def public_entity_display_name(entity: Any, *, fallback_id: int | str | None = None, default: str = "未知用户") -> str:
+        if entity is not None:
+            username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
+            if username:
+                return username
+            entity_id = getattr(entity, "id", None)
+            if not bool(getattr(entity, "contact", False)):
+                name = " ".join(
+                    part
+                    for part in (
+                        str(getattr(entity, "first_name", "") or "").strip(),
+                        str(getattr(entity, "last_name", "") or "").strip(),
+                    )
+                    if part
+                )
+                if name:
+                    return name
+            if entity_id not in (None, ""):
+                return str(entity_id)
+        return str(fallback_id) if fallback_id not in (None, "") else default
 
-VERSION = "1.1.26"
+
+VERSION = "1.1.27"
 DB_PATH = Path(__file__).with_name("summary_config.json")
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
@@ -1033,13 +1057,7 @@ class SummaryPlugin(Plugin):
             if not msg_text and not file_name:
                 continue
             sender = getattr(message, "sender", None)
-            sender_name = (
-                getattr(sender, "first_name", None)
-                or getattr(sender, "firstName", None)
-                or getattr(sender, "username", None)
-                or getattr(message, "sender_id", None)
-                or "未知用户"
-            )
+            sender_name = public_entity_display_name(sender, fallback_id=getattr(message, "sender_id", None), default="未知用户")
             text_content = msg_text
             if file_name:
                 text_content = f"{text_content} [文件: {file_name}]" if text_content else f"[文件: {file_name}]"

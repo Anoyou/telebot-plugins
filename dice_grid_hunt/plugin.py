@@ -32,6 +32,30 @@ from .manifest import (
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
 
+try:
+    from app.worker.plugins.base import public_entity_display_name
+except ImportError:  # pragma: no cover - older TelePilot compatibility
+    def public_entity_display_name(entity: Any, *, fallback_id: int | str | None = None, default: str = "玩家") -> str:
+        if entity is not None:
+            username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
+            if username:
+                return username
+            entity_id = getattr(entity, "id", None)
+            if not bool(getattr(entity, "contact", False)):
+                name = " ".join(
+                    part
+                    for part in (
+                        str(getattr(entity, "first_name", "") or "").strip(),
+                        str(getattr(entity, "last_name", "") or "").strip(),
+                    )
+                    if part
+                )
+                if name:
+                    return name
+            if entity_id not in (None, ""):
+                return str(entity_id)
+        return str(fallback_id) if fallback_id not in (None, "") else default
+
 
 def _roll_dice(count: int = 6) -> list[int]:
     return [random.randint(1, 6) for _ in range(count)]
@@ -819,7 +843,7 @@ class DiceGridHuntPlugin(Plugin):
                 return
 
             rd.answered = True
-            name = getattr(sender, "first_name", "") or "玩家"
+            name = public_entity_display_name(sender, default="玩家")
             rd.winner_name = name
             rd.winner_id = int(getattr(sender, "id", 0) or 0)
             rd.winner_message_id = int(getattr(event, "id", 0) or 0) or None

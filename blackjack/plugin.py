@@ -14,6 +14,30 @@ from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
+try:
+    from app.worker.plugins.base import public_entity_display_name
+except ImportError:  # pragma: no cover - older TelePilot compatibility
+    def public_entity_display_name(entity: Any, *, fallback_id: int | str | None = None, default: str = "玩家") -> str:
+        if entity is not None:
+            username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
+            if username:
+                return username
+            entity_id = getattr(entity, "id", None)
+            if not bool(getattr(entity, "contact", False)):
+                name = " ".join(
+                    part
+                    for part in (
+                        str(getattr(entity, "first_name", "") or "").strip(),
+                        str(getattr(entity, "last_name", "") or "").strip(),
+                    )
+                    if part
+                )
+                if name:
+                    return name
+            if entity_id not in (None, ""):
+                return str(entity_id)
+        return str(fallback_id) if fallback_id not in (None, "") else default
+
 # ─────────────────────────────────────────────────────
 # 牌组
 # ─────────────────────────────────────────────────────
@@ -198,7 +222,7 @@ class BlackjackPlugin(Plugin):
             player_cards = [_deal_card(), _deal_card()]
             dealer_cards = [_deal_card(), _deal_card()]
             sender = await event.get_sender()
-            player_name = getattr(sender, "first_name", "") or "玩家"
+            player_name = public_entity_display_name(sender, default="玩家")
 
             gs = GameState(
                 player_cards=player_cards,

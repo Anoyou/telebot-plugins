@@ -12,6 +12,30 @@ from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
+try:
+    from app.worker.plugins.base import public_entity_display_name
+except ImportError:  # pragma: no cover - older TelePilot compatibility
+    def public_entity_display_name(entity: Any, *, fallback_id: int | str | None = None, default: str = "玩家") -> str:
+        if entity is not None:
+            username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
+            if username:
+                return username
+            entity_id = getattr(entity, "id", None)
+            if not bool(getattr(entity, "contact", False)):
+                name = " ".join(
+                    part
+                    for part in (
+                        str(getattr(entity, "first_name", "") or "").strip(),
+                        str(getattr(entity, "last_name", "") or "").strip(),
+                    )
+                    if part
+                )
+                if name:
+                    return name
+            if entity_id not in (None, ""):
+                return str(entity_id)
+        return str(fallback_id) if fallback_id not in (None, "") else default
+
 
 def _has_emoji(text: str) -> bool:
     """检测文本中是否含有 emoji。"""
@@ -120,7 +144,7 @@ class ChatterChallengePlugin(Plugin):
 
         sender = await event.get_sender()
         sender_id = int(getattr(sender, "id", 0) or 0)
-        sender_name = getattr(sender, "first_name", "") or "玩家"
+        sender_name = public_entity_display_name(sender, default="玩家")
 
         arg_str = " ".join(args).strip()
 
@@ -294,7 +318,7 @@ class ChatterChallengePlugin(Plugin):
         if not sender:
             return
         sender_id = int(getattr(sender, "id", 0) or 0)
-        sender_name = getattr(sender, "first_name", "") or "玩家"
+        sender_name = public_entity_display_name(sender, default="玩家")
 
         # 跳过 bot 自己
         me = await event.client.get_me() if event.client else None
