@@ -1,0 +1,162 @@
+{
+  "name": "mindreader_survival",
+  "key": "mindreader_survival",
+  "version": "1.0.0",
+  "author": "Anoyou",
+  "display_name": "读心生存赛",
+  "description": "多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
+  "category": "interactive",
+  "keywords": [
+    "mindreader",
+    "读心",
+    "生存赛",
+    "猜心"
+  ],
+  "tags": [
+    "game",
+    "survival",
+    "multiplayer",
+    "pool"
+  ],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "single",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "触发指令名",
+        "default": "mind",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$"
+      },
+      "ticket_price": {
+        "type": "integer",
+        "title": "门票价格（金币）",
+        "default": 100,
+        "minimum": 1,
+        "maximum": 100000
+      },
+      "total_rounds": {
+        "type": "integer",
+        "title": "总轮数",
+        "default": 5,
+        "minimum": 2,
+        "maximum": 10
+      },
+      "round_timeout": {
+        "type": "integer",
+        "title": "每轮选择限时（秒）",
+        "default": 30,
+        "minimum": 10,
+        "maximum": 120
+      },
+      "option_word_pool": {
+        "type": "string",
+        "title": "选项词库（逗号分隔）",
+        "default": "🍎苹果,🍊橘子,🍋柠檬,🍇葡萄,🍓草莓,🍒樱桃,🍑桃子,🥝猕猴桃,🍍菠萝,🥭芒果,🍉西瓜,🍈哈密瓜,🫐蓝莓,🥑牛油果,🍌香蕉",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "required": [
+      "command",
+      "ticket_price",
+      "total_rounds",
+      "round_timeout",
+      "option_word_pool"
+    ]
+  },
+  "interaction_entries": [
+    {
+      "key": "start_mindreader",
+      "title": "读心生存赛",
+      "description": "玩家通过转账加入，管理员通过关键词管理游戏。",
+      "interaction_profile": "reward_pool",
+      "launch_mode": "hybrid",
+      "session_scope": "chat",
+      "events": [
+        "payment_confirmed",
+        "keyword",
+        "message",
+        "session_close"
+      ],
+      "preserve_command_trigger": true,
+      "command_fallback": {
+        "enabled": true,
+        "command": "mind",
+        "mode": "hint_only"
+      },
+      "session_policy": {
+        "ttl_seconds": 1800,
+        "duplicate_start": "reject",
+        "close_on": [
+          "game_over",
+          "timeout",
+          "session_close"
+        ]
+      },
+      "payload_contract": {
+        "required_envelope": [
+          "source",
+          "actor",
+          "trigger",
+          "session"
+        ],
+        "required_event_fields": [
+          "type",
+          "chat_id"
+        ]
+      },
+      "result_contract": {
+        "actions": [
+          "send_message",
+          "end_session",
+          "result",
+          "settlement"
+        ],
+        "send_via": [
+          "interaction_bot",
+          "userbot_reply",
+          "bbot_notice"
+        ]
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ticket_price": {
+            "type": "integer",
+            "title": "门票价格",
+            "default": 100,
+            "minimum": 1
+          },
+          "total_rounds": {
+            "type": "integer",
+            "title": "总轮数",
+            "default": 5,
+            "minimum": 2,
+            "maximum": 10
+          },
+          "round_timeout": {
+            "type": "integer",
+            "title": "每轮限时（秒）",
+            "default": 30,
+            "minimum": 10,
+            "maximum": 120
+          }
+        },
+        "required": [
+          "ticket_price"
+        ]
+      },
+      "settlement": {
+        "mode": "announce_only",
+        "winner_field": "actor.user_id",
+        "amount_field": "prize"
+      }
+    }
+  ],
+  "min_telepilot_version": "0.30.4"
+}
