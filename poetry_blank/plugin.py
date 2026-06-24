@@ -278,6 +278,7 @@ class RoundState:
     timeout: int = 120
     message_id: int | None = None
     finished: bool = False
+    via_interaction: bool = False
 
 
 def _payload_event(payload: dict[str, Any]) -> dict[str, Any]:
@@ -449,6 +450,7 @@ class PoetryBlankPlugin(Plugin):
                 prize=prize,
                 started_at=time.monotonic(),
                 timeout=timeout,
+                via_interaction=True,
             )
             self._rounds[chat_id] = rd
 
@@ -481,7 +483,7 @@ class PoetryBlankPlugin(Plugin):
             actor_id, actor_name = _interaction_actor(payload)
             self._rounds.pop(chat_id, None)
         return [
-            {"type": "send_message", "text": f"+{rd.prize}", "reply_to_message_id": _interaction_message_id(payload)},
+            {"type": "send_message", "text": f"+{rd.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
             {
                 "type": "send_message",
                 "text": f"🏆 {actor_name} 答对！\n✅ {rd.full_line}\n📖 {rd.author} · 《{rd.title}》\n奖励 <b>+{rd.prize}</b>",
@@ -582,6 +584,10 @@ class PoetryBlankPlugin(Plugin):
 
         rd = self._rounds.get(chat_id)
         if not rd or rd.finished:
+            return
+
+        # 交互bot发起的游戏由interaction处理，不走on_message
+        if rd.via_interaction:
             return
 
         # 检查答案

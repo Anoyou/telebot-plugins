@@ -3,7 +3,7 @@
   "display_name": "诗词填空",
   "description": "古诗词填空抢答，答对获奖",
   "author": "Anoyou",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "entry": "plugin.py",
   "permissions": [
     "send_message",

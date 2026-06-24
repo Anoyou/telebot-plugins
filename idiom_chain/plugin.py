@@ -867,6 +867,7 @@ class ChainGame:
     started_at: float = 0.0
     message_id: int | None = None
     waiting: bool = True
+    via_interaction: bool = False
 
 
 # ─────────────────────────────────────────────────────
@@ -1060,6 +1061,7 @@ class IdiomChainPlugin(Plugin):
                 prize=prize,
                 timeout=timeout,
                 started_at=time.monotonic(),
+                via_interaction=True,
             )
             self._games[chat_id] = game
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, game.started_at, timeout)))
@@ -1107,7 +1109,7 @@ class IdiomChainPlugin(Plugin):
                 prompt = self._format_game_prompt(game)
                 self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, started_at, game.timeout)))
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload)},
+                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
                     {
                         "type": "send_message",
                         "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n\n{prompt}",
@@ -1123,7 +1125,7 @@ class IdiomChainPlugin(Plugin):
             game.waiting = False
             self._games.pop(chat_id, None)
             return [
-                {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload)},
+                {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
                 {
                     "type": "send_message",
                     "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n🏆 接龙结束！以「{text[-1]}」开头的成语都用完了，共 {game.round_num} 轮",
@@ -1206,6 +1208,10 @@ class IdiomChainPlugin(Plugin):
 
         game = self._games.get(chat_id)
         if not game or not game.waiting:
+            return
+
+        # 交互bot发起的游戏由interaction处理，不走on_message
+        if game.via_interaction:
             return
 
         lock = self._get_lock(chat_id)

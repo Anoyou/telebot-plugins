@@ -73,6 +73,7 @@ class DiceBattle:
     bet: int = 0
     dice_count: int = 2
     started_at: float = 0.0
+    via_interaction: bool = False
     phase: str = "waiting"  # waiting / rolling / finished
     message_id: int | None = None
 
@@ -232,6 +233,7 @@ class DiceBattlePlugin(Plugin):
                 bet=bet,
                 dice_count=dice_count,
                 started_at=time.monotonic(),
+                via_interaction=True,
                 phase="waiting",
             )
             self._battles[chat_id] = battle
@@ -299,7 +301,7 @@ class DiceBattlePlugin(Plugin):
         if battle.bet > 0 and winner_id:
             actions.extend(
                 [
-                    {"type": "send_message", "text": f"+{battle.bet}", "reply_to_message_id": _interaction_message_id(payload)},
+                    {"type": "send_message", "text": f"+{battle.bet}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
                     {
                         "type": "result",
                         "success": True,
