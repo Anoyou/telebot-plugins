@@ -378,7 +378,7 @@ class BlackjackPlugin(Plugin):
         ]
         if result in {"win", "blackjack"}:
             amount = int(gs.bet * 1.5) if result == "blackjack" else gs.bet
-            actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": reply_to})
+            actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": reply_to, "send_via": "userbot_reply"})
             actions.append(
                 {
                     "type": "result",

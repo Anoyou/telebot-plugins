@@ -1,4 +1,7 @@
 # 更新日志
+## 1.0.7 (2026-06-25)
+- 修复交互 Bot 模式下奖励由 Bot 发放的问题，奖励消息改用 `send_via: userbot_reply` 由管理员账号发放。
+
 ## 1.0.5 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。
 - 保留原有 UserBot 命令触发，交互 Bot 入口只负责触发和高频互动承接，不改变插件本体配置。

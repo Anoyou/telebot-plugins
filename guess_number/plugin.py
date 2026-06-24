@@ -55,6 +55,7 @@ class GuessGame:
     finished: bool = False
     winner_name: str = ""
     winner_id: int = 0
+    via_interaction: bool = False  # 是否通过交互bot发起
     history: list[str] = field(default_factory=list)  # "玩家名: 猜测值 → 大/小/中"
 
 
@@ -258,6 +259,7 @@ class GuessNumberPlugin(Plugin):
             timeout=timeout,
             max_attempts=max_attempts,
             started_at=time.monotonic(),
+            via_interaction=True,
         )
         async with self._get_lock(chat_id):
             current = self._games.get(chat_id)
@@ -311,7 +313,7 @@ class GuessNumberPlugin(Plugin):
                 game.history.append(f"{actor_name}: {guess} → ✅ 中！")
                 self._games.pop(chat_id, None)
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": reply_to},
+                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": reply_to, "send_via": "userbot_reply"},
                     {
                         "type": "send_message",
                         "text": (
@@ -550,6 +552,10 @@ class GuessNumberPlugin(Plugin):
 
         gs = self._games.get(chat_id)
         if not gs or gs.finished:
+            return
+
+        # 交互bot发起的游戏由interaction处理，不走on_message
+        if gs.via_interaction:
             return
 
         lock = self._get_lock(chat_id)
