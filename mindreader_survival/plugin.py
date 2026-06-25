@@ -104,7 +104,7 @@ class MindreaderSurvivalPlugin(Plugin):
         self._command = "mind"
         self._ticket_price = 100
         self._total_rounds = 5
-        self._round_timeout = 30
+        self._round_timeout_seconds = 30
         self._option_word_pool: list[str] = []
         self._sessions: dict[int, GameSession] = {}
         self._locks: dict[int, asyncio.Lock] = {}
@@ -129,7 +129,7 @@ class MindreaderSurvivalPlugin(Plugin):
         self._command = cfg.get("command", "mind")
         self._ticket_price = max(1, int(cfg.get("ticket_price", 100)))
         self._total_rounds = max(2, min(10, int(cfg.get("total_rounds", 5))))
-        self._round_timeout = max(10, min(120, int(cfg.get("round_timeout", 30))))
+        self._round_timeout_seconds = max(10, min(120, int(cfg.get("round_timeout", 30))))
 
         pool_str = str(cfg.get("option_word_pool", ""))
         if pool_str:
@@ -146,7 +146,7 @@ class MindreaderSurvivalPlugin(Plugin):
             await ctx.log("info",
                 f"[mindreader_survival] 已启动 v{MANIFEST.version}；"
                 f"指令：{self._command}；门票：{self._ticket_price}；"
-                f"轮数：{self._total_rounds}；超时：{self._round_timeout}s")
+                f"轮数：{self._total_rounds}；超时：{self._round_timeout_seconds}s")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for t in list(self._tasks):
@@ -206,7 +206,7 @@ class MindreaderSurvivalPlugin(Plugin):
                 chat_id=chat_id,
                 ticket_price=self._ticket_price,
                 total_rounds=self._total_rounds,
-                round_timeout=self._round_timeout,
+                round_timeout=self._round_timeout_seconds,
                 option_word_pool=list(self._option_word_pool),
                 phase="waiting",
                 mode="admin",
@@ -249,7 +249,7 @@ class MindreaderSurvivalPlugin(Plugin):
                 chat_id=chat_id,
                 ticket_price=self._ticket_price,
                 total_rounds=self._total_rounds,
-                round_timeout=self._round_timeout,
+                round_timeout=self._round_timeout_seconds,
                 option_word_pool=list(self._option_word_pool),
                 phase="waiting",
                 mode="bot",
@@ -281,7 +281,7 @@ class MindreaderSurvivalPlugin(Plugin):
             chat_id=chat_id,
             ticket_price=self._ticket_price,
             total_rounds=self._total_rounds,
-            round_timeout=self._round_timeout,
+            round_timeout=self._round_timeout_seconds,
             option_word_pool=list(self._option_word_pool),
             phase="waiting",
             mode="bot",
@@ -345,7 +345,7 @@ class MindreaderSurvivalPlugin(Plugin):
                 chat_id=chat_id,
                 ticket_price=amount,
                 total_rounds=self._total_rounds,
-                round_timeout=self._round_timeout,
+                round_timeout=self._round_timeout_seconds,
                 option_word_pool=list(self._option_word_pool),
                 phase="waiting",
                 mode="bot",  # 兜底默认 bot 模式
@@ -478,6 +478,43 @@ class MindreaderSurvivalPlugin(Plugin):
         return [{"type": "send_message",
                  "text": f"✅ 已记录你的选择：{choice}",
                  "reply_to_message_id": self._mid(payload)}]
+
+    async def _handle_choice(
+        self,
+        ctx: PluginContext,
+        event: Any,
+        chat_id: int,
+        uid: int,
+        choice: int,
+    ) -> None:
+        sender = await event.get_sender()
+        payload = {
+            "source": {
+                "type": "message",
+                "chat_id": chat_id,
+                "message_id": getattr(event, "id", None),
+                "text": str(getattr(event, "raw_text", "") or "").strip(),
+            },
+            "actor": {
+                "user_id": uid,
+                "display_name": self._ename(sender),
+                "username": str(getattr(sender, "username", "") or "").strip(),
+            },
+            "event": {
+                "type": "message",
+                "chat_id": chat_id,
+                "message_id": getattr(event, "id", None),
+                "text": str(choice),
+            },
+            "sender_user_id": uid,
+            "sender_name": self._ename(sender),
+            "sender_username": str(getattr(sender, "username", "") or "").strip(),
+            "message_id": getattr(event, "id", None),
+            "message_text": str(choice),
+        }
+        actions = await self._on_game_message(ctx, payload, chat_id)
+        for action in actions:
+            await self._send_action(ctx, event, action)
 
     def _on_session_close(self, chat_id: int) -> list[dict[str, Any]]:
         if chat_id:
