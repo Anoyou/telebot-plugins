@@ -270,6 +270,33 @@ class MindreaderSurvivalPlugin(Plugin):
                 f"[mindreader_survival] 玩家触发开局 chat={chat_id} "
                 f"ticket={session.ticket_price}")
 
+    # ── 玩家关键词触发（交互 Bot 返回 actions）────────────────
+
+    def _player_keyword_trigger(self, chat_id: int) -> list[dict[str, Any]]:
+        session = self._sessions.get(chat_id)
+        if session and session.phase != "finished":
+            return []  # 已有游戏，忽略
+
+        session = GameSession(
+            chat_id=chat_id,
+            ticket_price=self._ticket_price,
+            total_rounds=self._total_rounds,
+            round_timeout=self._round_timeout,
+            option_word_pool=list(self._option_word_pool),
+            phase="waiting",
+            mode="bot",
+            created_at=time.monotonic(),
+        )
+        self._sessions[chat_id] = session
+
+        return [{"type": "send_message",
+                 "text": self._r(JOIN_MESSAGE_BOT_TEMPLATE, {
+                     "ticket_price": session.ticket_price,
+                     "total_rounds": session.total_rounds,
+                     "prefix": current_command_prefix() or "/",
+                     "command": self._command,
+                 })}]
+
     # ══════════════════════════════════════════════════════════
     #  on_interaction — 交互 Bot 路由
     # ══════════════════════════════════════════════════════════
@@ -357,11 +384,19 @@ class MindreaderSurvivalPlugin(Plugin):
         if not chat_id:
             return []
         text = self._evt_text(payload)
+        uid = self._uid(payload)
+        name = self._aname(payload)
 
+        # 管理员命令
         if text in {"play", "启动", "开始游戏", "开始"}:
             return self._start_game(chat_id)
         if text in {COMMAND_STOP, "stop", "结束", "取消"}:
             return self._stop_game(chat_id)
+
+        # 玩家关键词 → 创建游戏（bot 模式）
+        if any(kw in text for kw in PLAYER_KEYWORDS):
+            return self._player_keyword_trigger(chat_id)
+
         return []
 
     def _start_game(self, chat_id: int) -> list[dict[str, Any]]:
