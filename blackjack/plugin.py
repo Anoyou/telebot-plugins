@@ -1,7 +1,7 @@
 """21点（Blackjack）远程插件。
 
 群内庄家模式：发牌 → 玩家要牌/停牌/加倍 → 庄家自动补牌 → 比大小。
-每个群同时只能有一局进行中。
+同一群内允许多名玩家同时开局，各自独立。
 """
 
 from __future__ import annotations
@@ -205,7 +205,7 @@ class BlackjackPlugin(Plugin):
         super().__init__()
         self._command = "bj"
         self._timeout = 120
-        self._games: dict[int, GameState] = {}  # chat_id -> game
+        self._games: dict[tuple[int, int], GameState] = {}  # (chat_id, player_id) -> game
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
 
@@ -254,8 +254,10 @@ class BlackjackPlugin(Plugin):
         if event_type == "message":
             return await self._interaction_action(payload, chat_id)
         if event_type == "session_close":
-            async with self._get_lock(chat_id):
-                self._games.pop(chat_id, None)
+            player_id, _ = _interaction_actor(payload)
+            if player_id:
+                async with self._get_lock(chat_id):
+                    self._games.pop((chat_id, player_id), None)
             return [{"type": "end_session"}]
         return []
 
@@ -263,9 +265,10 @@ class BlackjackPlugin(Plugin):
         player_id, player_name = _interaction_actor(payload)
         bet = _positive_int(payload.get("prize") or payload.get("bet") or _interaction_amount(payload), 10, minimum=1)
         timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
+        game_key = (chat_id, player_id)
         async with self._get_lock(chat_id):
-            if chat_id in self._games and not self._games[chat_id].finished:
-                return [{"type": "send_message", "text": "🃏 当前聊天已有进行中的 21 点牌局。", "reply_to_message_id": _interaction_message_id(payload)}]
+            if game_key in self._games and not self._games[game_key].finished:
+                return [{"type": "send_message", "text": "🃏 你已经有一局进行中的 21 点牌局。", "reply_to_message_id": _interaction_message_id(payload)}]
             player_cards = [_deal_card(), _deal_card()]
             dealer_cards = [_deal_card(), _deal_card()]
             gs = GameState(
@@ -280,8 +283,8 @@ class BlackjackPlugin(Plugin):
             if p_val == 21:
                 gs.finished = True
                 return self._interaction_settle_actions(gs, "blackjack", _interaction_message_id(payload))
-            self._games[chat_id] = gs
-        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, gs.started_at, timeout)))
+            self._games[game_key] = gs
+        self._track_task(asyncio.create_task(self._auto_timeout(chat_id, player_id, ctx, gs.started_at, timeout)))
         p_val, _ = _hand_value(player_cards)
         return [
             {
@@ -309,22 +312,21 @@ class BlackjackPlugin(Plugin):
         if not action:
             return []
         actor_id, _ = _interaction_actor(payload)
+        game_key = (chat_id, actor_id)
         async with self._get_lock(chat_id):
-            gs = self._games.get(chat_id)
+            gs = self._games.get(game_key)
             if not gs or gs.finished:
                 return [{"type": "no_session"}]
-            if actor_id != gs.player_id:
-                return [{"type": "send_message", "text": "这不是你的牌局哦。", "reply_to_message_id": _interaction_message_id(payload)}]
             if action == "hit":
                 gs.player_cards.append(_deal_card())
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
                     gs.finished = True
-                    self._games.pop(chat_id, None)
+                    self._games.pop(game_key, None)
                     return self._interaction_settle_actions(gs, "bust", _interaction_message_id(payload))
                 if p_val == 21:
                     self._dealer_finish(gs)
-                    self._games.pop(chat_id, None)
+                    self._games.pop(game_key, None)
                     return self._interaction_settle_actions(gs, self._result_for_finished(gs), _interaction_message_id(payload))
                 return [
                     {
@@ -343,11 +345,11 @@ class BlackjackPlugin(Plugin):
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
                     gs.finished = True
-                    self._games.pop(chat_id, None)
+                    self._games.pop(game_key, None)
                     return self._interaction_settle_actions(gs, "bust", _interaction_message_id(payload))
             self._dealer_finish(gs)
             result = self._result_for_finished(gs)
-            self._games.pop(chat_id, None)
+            self._games.pop(game_key, None)
             return self._interaction_settle_actions(gs, result, _interaction_message_id(payload))
 
     def _dealer_finish(self, gs: GameState) -> None:
@@ -398,24 +400,27 @@ class BlackjackPlugin(Plugin):
         if not chat_id:
             return
 
+        sender = await event.get_sender()
+        sender_id = int(getattr(sender, "id", 0) or 0)
+        game_key = (chat_id, sender_id)
+
         arg_str = " ".join(args).strip()
 
         # 子命令：要牌/停牌/加倍
         if arg_str in ("h", "hit", "要牌"):
-            return await self._player_action(chat_id, "hit", event, ctx)
+            return await self._player_action(chat_id, sender_id, "hit", event, ctx)
         if arg_str in ("s", "stand", "停牌"):
-            return await self._player_action(chat_id, "stand", event, ctx)
+            return await self._player_action(chat_id, sender_id, "stand", event, ctx)
         if arg_str in ("d", "double", "加倍"):
-            return await self._player_action(chat_id, "double", event, ctx)
+            return await self._player_action(chat_id, sender_id, "double", event, ctx)
 
         lock = self._get_lock(chat_id)
         async with lock:
-            if chat_id in self._games and not self._games[chat_id].finished:
-                gs = self._games[chat_id]
+            if game_key in self._games and not self._games[game_key].finished:
+                gs = self._games[game_key]
                 p_val, _ = _hand_value(gs.player_cards)
-                d_val, _ = _hand_value(gs.dealer_cards)
                 await event.reply(
-                    f"🃏 已有进行中的牌局！\n"
+                    f"🃏 你已有一局进行中的牌局！\n"
                     f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n"
                     f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n\n"
                     f"操作：,{self._command} 要牌 / ,{self._command} 停牌 / ,{self._command} 加倍",
@@ -434,14 +439,13 @@ class BlackjackPlugin(Plugin):
             # 发牌
             player_cards = [_deal_card(), _deal_card()]
             dealer_cards = [_deal_card(), _deal_card()]
-            sender = await event.get_sender()
             player_name = public_entity_display_name(sender, default="玩家")
 
             gs = GameState(
                 player_cards=player_cards,
                 dealer_cards=dealer_cards,
                 bet=bet,
-                player_id=int(getattr(sender, "id", 0) or 0),
+                player_id=sender_id,
                 player_name=player_name,
                 started_at=time.monotonic(),
             )
@@ -453,10 +457,9 @@ class BlackjackPlugin(Plugin):
                 result = "blackjack"
                 reply = _format_result(player_cards, dealer_cards, result, bet)
                 await event.reply(reply, parse_mode="html")
-                self._games.pop(chat_id, None)
                 return
 
-            self._games[chat_id] = gs
+            self._games[game_key] = gs
             p_val, _ = _hand_value(player_cards)
             msg = await event.reply(
                 f"<b>🃏 21点</b> · 下注 {bet} 筹码\n\n"
@@ -471,21 +474,16 @@ class BlackjackPlugin(Plugin):
             gs.message_id = msg.id if msg else None
 
             # 超时自动停牌
-            self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, gs.started_at)))
+            self._track_task(asyncio.create_task(self._auto_timeout(chat_id, sender_id, ctx, gs.started_at)))
 
     # ── 玩家操作 ─────────────────────────────────────
-    async def _player_action(self, chat_id: int, action: str, event: Any, ctx: PluginContext) -> None:
+    async def _player_action(self, chat_id: int, player_id: int, action: str, event: Any, ctx: PluginContext) -> None:
+        game_key = (chat_id, player_id)
         lock = self._get_lock(chat_id)
         async with lock:
-            gs = self._games.get(chat_id)
+            gs = self._games.get(game_key)
             if not gs or gs.finished:
                 await event.reply("没有进行中的牌局。输入指令开一局~", parse_mode="html")
-                return
-
-            sender = await event.get_sender()
-            sender_id = int(getattr(sender, "id", 0) or 0)
-            if sender_id != gs.player_id:
-                await event.reply("这不是你的牌局哦~", parse_mode="html")
                 return
 
             if action == "hit":
@@ -496,11 +494,11 @@ class BlackjackPlugin(Plugin):
                     gs.finished = True
                     reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet)
                     await event.reply(reply, parse_mode="html")
-                    self._games.pop(chat_id, None)
+                    self._games.pop(game_key, None)
                     return
                 elif p_val == 21:
                     # 自动停牌
-                    return await self._dealer_turn(chat_id, event, ctx)
+                    return await self._dealer_turn(chat_id, player_id, event, ctx)
                 else:
                     await event.reply(
                         f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
@@ -509,7 +507,7 @@ class BlackjackPlugin(Plugin):
                     )
 
             elif action == "stand":
-                return await self._dealer_turn(chat_id, event, ctx)
+                return await self._dealer_turn(chat_id, player_id, event, ctx)
 
             elif action == "double":
                 if len(gs.player_cards) != 2:
@@ -523,14 +521,15 @@ class BlackjackPlugin(Plugin):
                     gs.finished = True
                     reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet)
                     await event.reply(reply, parse_mode="html")
-                    self._games.pop(chat_id, None)
+                    self._games.pop(game_key, None)
                     return
                 # 加倍后强制停牌
-                return await self._dealer_turn(chat_id, event, ctx)
+                return await self._dealer_turn(chat_id, player_id, event, ctx)
 
     # ── 庄家回合 ─────────────────────────────────────
-    async def _dealer_turn(self, chat_id: int, event: Any, ctx: PluginContext) -> None:
-        gs = self._games.get(chat_id)
+    async def _dealer_turn(self, chat_id: int, player_id: int, event: Any, ctx: PluginContext) -> None:
+        game_key = (chat_id, player_id)
+        gs = self._games.get(game_key)
         if not gs:
             return
 
@@ -561,19 +560,20 @@ class BlackjackPlugin(Plugin):
         gs.finished = True
         reply = _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet)
         await event.reply(reply, parse_mode="html")
-        self._games.pop(chat_id, None)
+        self._games.pop(game_key, None)
 
     # ── 超时 ─────────────────────────────────────────
-    async def _auto_timeout(self, chat_id: int, ctx: PluginContext, started_at: float, timeout: int | None = None) -> None:
+    async def _auto_timeout(self, chat_id: int, player_id: int, ctx: PluginContext, started_at: float, timeout: int | None = None) -> None:
         await asyncio.sleep(timeout or self._timeout)
+        game_key = (chat_id, player_id)
         async with self._get_lock(chat_id):
-            gs = self._games.get(chat_id)
+            gs = self._games.get(game_key)
             if not gs or gs.finished or gs.started_at != started_at:
                 return
             gs.finished = True
-            self._games.pop(chat_id, None)
+            self._games.pop(game_key, None)
         if ctx.log:
-            await ctx.log("info", f"[blackjack] chat {chat_id} 牌局超时自动结束")
+            await ctx.log("info", f"[blackjack] chat {chat_id} player {player_id} 牌局超时自动结束")
 
     # ── 消息钩子（留空，只用命令）──────────────────
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
