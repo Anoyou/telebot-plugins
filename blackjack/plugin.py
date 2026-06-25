@@ -251,6 +251,8 @@ class BlackjackPlugin(Plugin):
             return [{"type": "send_message", "text": "❌ 21 点需要在群聊里使用。"}]
         if event_type in {"payment_confirmed", "keyword"}:
             return await self._interaction_start(ctx, payload, chat_id)
+        if event_type == "callback_query":
+            return await self._interaction_callback_action(payload, chat_id)
         if event_type == "message":
             return await self._interaction_action(payload, chat_id)
         if event_type == "session_close":
@@ -297,6 +299,15 @@ class BlackjackPlugin(Plugin):
                 ),
                 "parse_mode": "html",
                 "reply_to_message_id": _interaction_message_id(payload),
+                "reply_markup": {
+                    "inline_keyboard": [
+                        [
+                            {"text": "🃏 要牌", "callback_data": f"bj:hit:{player_id}"},
+                            {"text": "🛑 停牌", "callback_data": f"bj:stand:{player_id}"},
+                            {"text": "💰 加倍", "callback_data": f"bj:double:{player_id}"},
+                        ]
+                    ]
+                },
             }
         ]
 
@@ -331,9 +342,22 @@ class BlackjackPlugin(Plugin):
                 return [
                     {
                         "type": "send_message",
-                        "text": f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n继续发送：要牌 / 停牌",
+                        "text": (
+                            f"<b>🃏 21点</b> · {gs.player_name}\n\n"
+                            f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n"
+                            f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
+                            "继续操作："
+                        ),
                         "parse_mode": "html",
                         "reply_to_message_id": _interaction_message_id(payload),
+                        "reply_markup": {
+                            "inline_keyboard": [
+                                [
+                                    {"text": "🃏 要牌", "callback_data": f"bj:hit:{actor_id}"},
+                                    {"text": "🛑 停牌", "callback_data": f"bj:stand:{actor_id}"},
+                                ]
+                            ]
+                        },
                     }
                 ]
             if action == "double":
@@ -351,6 +375,103 @@ class BlackjackPlugin(Plugin):
             result = self._result_for_finished(gs)
             self._games.pop(game_key, None)
             return self._interaction_settle_actions(gs, result, _interaction_message_id(payload))
+
+    async def _interaction_callback_action(self, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+        """Handle callback_query events from inline keyboard buttons."""
+        event = _payload_event(payload)
+        callback_data = str(
+            payload.get("callback_data")
+            or event.get("callback_data")
+            or event.get("data")
+            or ""
+        ).strip()
+        if not callback_data:
+            return []
+
+        # Parse bj:action:player_id
+        parts = callback_data.split(":")
+        if len(parts) != 3 or parts[0] != "bj":
+            return []
+        action = parts[1]
+        if action not in ("hit", "stand", "double"):
+            return []
+        try:
+            owner_id = int(parts[2])
+        except (ValueError, TypeError):
+            return []
+
+        # Validate sender is the game owner
+        sender_id, _ = _interaction_actor(payload)
+        if sender_id != owner_id:
+            return []
+
+        game_key = (chat_id, owner_id)
+        reply_to = _interaction_message_id(payload)
+
+        async with self._get_lock(chat_id):
+            gs = self._games.get(game_key)
+            if not gs or gs.finished:
+                return [{"type": "no_session"}]
+
+            if action == "hit":
+                gs.player_cards.append(_deal_card())
+                p_val, _ = _hand_value(gs.player_cards)
+                if p_val > 21:
+                    gs.finished = True
+                    self._games.pop(game_key, None)
+                    return self._interaction_settle_actions(gs, "bust", reply_to)
+                if p_val == 21:
+                    self._dealer_finish(gs)
+                    result = self._result_for_finished(gs)
+                    self._games.pop(game_key, None)
+                    return self._interaction_settle_actions(gs, result, reply_to)
+                # Non-terminal: send update with buttons
+                return [
+                    {
+                        "type": "send_message",
+                        "text": (
+                            f"<b>🃏 21点</b> · {gs.player_name}\n\n"
+                            f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n"
+                            f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
+                            "继续操作："
+                        ),
+                        "parse_mode": "html",
+                        "reply_to_message_id": reply_to,
+                        "reply_markup": {
+                            "inline_keyboard": [
+                                [
+                                    {"text": "🃏 要牌", "callback_data": f"bj:hit:{owner_id}"},
+                                    {"text": "🛑 停牌", "callback_data": f"bj:stand:{owner_id}"},
+                                ]
+                            ]
+                        },
+                    }
+                ]
+
+            if action == "double":
+                if len(gs.player_cards) != 2:
+                    return [
+                        {
+                            "type": "send_message",
+                            "text": "只能在前两张牌时加倍。",
+                            "reply_to_message_id": reply_to,
+                        }
+                    ]
+                gs.bet *= 2
+                gs.doubled = True
+                gs.player_cards.append(_deal_card())
+                p_val, _ = _hand_value(gs.player_cards)
+                if p_val > 21:
+                    gs.finished = True
+                    self._games.pop(game_key, None)
+                    return self._interaction_settle_actions(gs, "bust", reply_to)
+                # Double forces stand — fall through to dealer
+
+            # stand (or double that didn't bust) → dealer turn
+            self._dealer_finish(gs)
+            result = self._result_for_finished(gs)
+            self._games.pop(game_key, None)
+            return self._interaction_settle_actions(gs, result, reply_to)
 
     def _dealer_finish(self, gs: GameState) -> None:
         while True:

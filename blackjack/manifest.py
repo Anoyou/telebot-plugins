@@ -33,7 +33,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.30.4",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -48,7 +48,7 @@ MANIFEST = Manifest(
   'interaction_profile': 'session_game',
   'launch_mode': 'hybrid',
   'session_scope': 'chat',
-  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'events': ['payment_confirmed', 'keyword', 'message', 'callback_query', 'session_close'],
   'preserve_command_trigger': True,
   'command_fallback': {'enabled': True, 'command': 'bj', 'mode': 'hint_only'},
   'session_policy': {'ttl_seconds': 120,
