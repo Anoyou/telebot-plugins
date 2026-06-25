@@ -146,7 +146,7 @@ class MindreaderSurvivalPlugin(Plugin):
                 "🍉西瓜", "🍈哈密瓜", "🫐蓝莓", "🥑牛油果", "🍌香蕉",
             ]
 
-        self.commands = {self._command: self._cmd_handler}
+        # on_command 已直接重写，无需注册 commands dict
         if ctx.log:
             await ctx.log("info",
                 f"[mindreader_survival] 已启动 v{MANIFEST.version}；"
