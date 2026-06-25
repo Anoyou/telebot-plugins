@@ -204,9 +204,36 @@ class MindreaderSurvivalPlugin(Plugin):
         if not user_id:
             return []
 
+        # 从转账事件中提取金额
+        event = payload.get("event", {}) if isinstance(payload.get("event"), dict) else {}
+        data = event.get("data", {}) if isinstance(event.get("data"), dict) else {}
+        amount = self._pint(
+            data.get("amount") or payload.get("amount") or self._ticket_price,
+            self._ticket_price,
+        )
+
         async with self._get_lock(chat_id):
             session = self._sessions.get(chat_id)
-            if not session or session.phase != "waiting":
+
+            # 如果没有会话，自动创建（管理员通过 UserBot 命令开局的场景）
+            if not session:
+                session = GameSession(
+                    chat_id=chat_id,
+                    ticket_price=amount,
+                    total_rounds=self._total_rounds,
+                    round_timeout=self._round_timeout,
+                    option_word_pool=list(self._option_word_pool),
+                    phase="waiting",
+                    created_at=time.monotonic(),
+                )
+                self._sessions[chat_id] = session
+
+                if ctx.log:
+                    await ctx.log("info",
+                        f"[mindreader_survival] 自动创建会话 chat={chat_id} "
+                        f"（由转账触发，ticket={amount}）")
+
+            if session.phase != "waiting":
                 return [{"type": "send_message", "text": "⚠️ 当前没有等待中的游戏。"}]
 
             if user_id in session.players:
@@ -215,14 +242,14 @@ class MindreaderSurvivalPlugin(Plugin):
 
             session.players[user_id] = PlayerInfo(
                 user_id=user_id, display_name=name,
-                username=self._uname(payload), paid=session.ticket_price,
+                username=self._uname(payload), paid=amount,
             )
-            session.pool += session.ticket_price
+            session.pool += amount
 
             if ctx.log:
                 await ctx.log("info",
                     f"[mindreader_survival] 加入 chat={chat_id} user={user_id} "
-                    f"name={name!r} pool={session.pool}")
+                    f"name={name!r} amount={amount} pool={session.pool}")
 
         return [{"type": "send_message",
                  "text": self._r(PLAYER_JOINED_TEMPLATE, {
