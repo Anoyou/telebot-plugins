@@ -146,7 +146,7 @@ class MindreaderSurvivalPlugin(Plugin):
                 "🍉西瓜", "🍈哈密瓜", "🫐蓝莓", "🥑牛油果", "🍌香蕉",
             ]
 
-        # on_command 已直接重写，无需注册 commands dict
+        self.commands = {self._command: self._cmd_handler}
         if ctx.log:
             await ctx.log("info",
                 f"[mindreader_survival] 已启动 v{MANIFEST.version}；"
@@ -480,17 +480,14 @@ class MindreaderSurvivalPlugin(Plugin):
     #  UserBot 命令（管理员直接使用）
     # ══════════════════════════════════════════════════════════
 
-    async def on_command(
-        self, ctx: PluginContext, cmd: str, args: list[str], event: Any,
-    ) -> bool:
-        if cmd != self._command:
-            return False
-
+    async def _cmd_handler(
+        self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
+    ) -> None:
         chat_id = int(
             getattr(event.chat_id, "channel_id", None) or event.chat_id or 0
         )
         if not chat_id:
-            return True
+            return
 
         sender = await event.get_sender()
         uid = int(getattr(sender, "id", 0) or 0)
@@ -513,7 +510,6 @@ class MindreaderSurvivalPlugin(Plugin):
 
         for a in actions:
             await self._send_action(ctx, event, a)
-        return True
 
     # ── 停止游戏 ─────────────────────────────────────────────
 
