@@ -1,10 +1,8 @@
 """读心生存赛远程插件。
 
-玩法：
-  1. 管理员通过关键词开局，玩家通过转账加入。
-  2. 每轮 Bot 随机选一个答案，用 SHA256 commit-reveal 机制。
-  3. 玩家在限时内回复数字选择，选错淘汰，选对晋级。
-  4. 最终存活者平分 90% 奖池，管理员得 10%。
+两种触发模式：
+  - 管理员触发：管理员发指令，原地编辑为游戏消息，结算通过管理员发放
+  - 玩家触发：  玩家发关键词，bot 发送游戏消息，结算通过管理员发放
 """
 
 from __future__ import annotations
@@ -24,7 +22,9 @@ from .manifest import (
     COMMAND_START,
     COMMAND_STOP,
     COMMAND_STATUS,
+    PLAYER_KEYWORDS,
     JOIN_MESSAGE_TEMPLATE,
+    JOIN_MESSAGE_BOT_TEMPLATE,
     ROUND_START_TEMPLATE,
     ROUND_RESULT_TEMPLATE,
     GAME_OVER_SOLO_TEMPLATE,
@@ -51,11 +51,11 @@ class PlayerInfo:
 @dataclass
 class RoundInfo:
     round_num: int
-    options: list[str]       # 选项文本
-    answer: int              # 正确答案（1-based）
+    options: list[str]
+    answer: int
     salt: str
     commit_hash: str
-    choices: dict[int, int] = field(default_factory=dict)  # user_id -> choice (1-based)
+    choices: dict[int, int] = field(default_factory=dict)
     started_at: float = 0.0
     revealed: bool = False
 
@@ -67,7 +67,8 @@ class GameSession:
     total_rounds: int
     round_timeout: int
     option_word_pool: list[str]
-    phase: str = "waiting"   # waiting / playing / finished
+    phase: str = "waiting"          # waiting / playing / finished
+    mode: str = "admin"             # admin / bot
     players: dict[int, PlayerInfo] = field(default_factory=dict)
     rounds: list[RoundInfo] = field(default_factory=list)
     current_round: RoundInfo | None = None
@@ -80,16 +81,11 @@ class GameSession:
 # ── 工具函数 ──────────────────────────────────────────────────
 
 def _generate_salt(length: int = 16) -> str:
-    chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-    return "".join(random.choice(chars) for _ in range(length))
+    return "".join(random.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(length))
 
 
 def _compute_commit(answer: int, salt: str) -> str:
     return hashlib.sha256(f"{answer}{salt}".encode()).hexdigest()
-
-
-def _verify_commit(answer: int, salt: str, commit_hash: str) -> bool:
-    return _compute_commit(answer, salt) == commit_hash
 
 
 @register
@@ -123,9 +119,8 @@ class MindreaderSurvivalPlugin(Plugin):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def _rounds_config(self, total_rounds: int) -> list[int]:
-        """每轮选项数：2, 3, 4, 5, 6 …"""
-        return [i + 2 for i in range(total_rounds)]
+    def _rounds_config(self, n: int) -> list[int]:
+        return [i + 2 for i in range(n)]
 
     # ── 生命周期 ──────────────────────────────────────────────
 
@@ -154,25 +149,133 @@ class MindreaderSurvivalPlugin(Plugin):
                 f"轮数：{self._total_rounds}；超时：{self._round_timeout}s")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
-        for task in list(self._tasks):
-            task.cancel()
+        for t in list(self._tasks):
+            t.cancel()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         self._sessions.clear()
         self._locks.clear()
-        if ctx.log:
-            await ctx.log("info", "[mindreader_survival] 已停止")
 
     # ══════════════════════════════════════════════════════════
-    #  交互入口（交互 Bot 路由）
+    #  on_message — 监听管理员指令 & 玩家关键词
+    # ══════════════════════════════════════════════════════════
+
+    async def on_message(self, ctx: PluginContext, event: Any) -> None:
+        text = (getattr(event, "raw_text", "") or "").strip()
+        if not text:
+            return
+
+        chat_id = int(getattr(event.chat_id, "channel_id", None) or event.chat_id or 0)
+        if not chat_id:
+            return
+
+        sender = await event.get_sender()
+        uid = int(getattr(sender, "id", 0) or 0)
+        name = self._ename(sender)
+        prefix = current_command_prefix()
+
+        # ── 管理员指令：{prefix}mind ──
+        cmd_with_prefix = f"{prefix}{self._command}" if prefix else self._command
+        if text == cmd_with_prefix or text == self._command:
+            await self._admin_trigger(ctx, event, chat_id, uid, name)
+            return
+
+        # ── 玩家关键词 ──
+        if any(kw in text for kw in PLAYER_KEYWORDS):
+            await self._player_trigger(ctx, event, chat_id, uid, name)
+            return
+
+        # ── 游戏中：数字选择 ──
+        if text.isdigit():
+            await self._handle_choice(ctx, event, chat_id, uid, int(text))
+
+    # ── 管理员触发：原地编辑 ─────────────────────────────────
+
+    async def _admin_trigger(
+        self, ctx: PluginContext, event: Any,
+        chat_id: int, uid: int, name: str,
+    ) -> None:
+        async with self._get_lock(chat_id):
+            existing = self._sessions.get(chat_id)
+            if existing and existing.phase == "playing":
+                await event.reply("⚠️ 游戏进行中，请等待结束。", parse_mode="html")
+                return
+
+            session = GameSession(
+                chat_id=chat_id,
+                ticket_price=self._ticket_price,
+                total_rounds=self._total_rounds,
+                round_timeout=self._round_timeout,
+                option_word_pool=list(self._option_word_pool),
+                phase="waiting",
+                mode="admin",
+                admin_user_id=uid,
+                admin_name=name,
+                created_at=time.monotonic(),
+            )
+            self._sessions[chat_id] = session
+
+        # 原地编辑为游戏模板
+        text = self._r(JOIN_MESSAGE_TEMPLATE, {
+            "ticket_price": session.ticket_price,
+            "total_rounds": session.total_rounds,
+            "prefix": prefix if (prefix := current_command_prefix()) else "",
+            "command": self._command,
+            "admin_name": escape(name),
+        })
+        try:
+            await ctx.client.edit_message(chat_id, event.id, text, parse_mode="html")
+        except Exception:
+            await event.reply(text, parse_mode="html")
+
+        if ctx.log:
+            await ctx.log("info",
+                f"[mindreader_survival] 管理员开局 chat={chat_id} admin={name!r} "
+                f"ticket={session.ticket_price}")
+
+    # ── 玩家触发：bot 发新消息 ───────────────────────────────
+
+    async def _player_trigger(
+        self, ctx: PluginContext, event: Any,
+        chat_id: int, uid: int, name: str,
+    ) -> None:
+        async with self._get_lock(chat_id):
+            existing = self._sessions.get(chat_id)
+            if existing and existing.phase != "finished":
+                return  # 已有游戏，忽略
+
+            session = GameSession(
+                chat_id=chat_id,
+                ticket_price=self._ticket_price,
+                total_rounds=self._total_rounds,
+                round_timeout=self._round_timeout,
+                option_word_pool=list(self._option_word_pool),
+                phase="waiting",
+                mode="bot",
+                created_at=time.monotonic(),
+            )
+            self._sessions[chat_id] = session
+
+        text = self._r(JOIN_MESSAGE_BOT_TEMPLATE, {
+            "ticket_price": session.ticket_price,
+            "total_rounds": session.total_rounds,
+            "prefix": prefix if (prefix := current_command_prefix()) else "",
+            "command": self._command,
+        })
+        await event.reply(text, parse_mode="html")
+
+        if ctx.log:
+            await ctx.log("info",
+                f"[mindreader_survival] 玩家触发开局 chat={chat_id} "
+                f"ticket={session.ticket_price}")
+
+    # ══════════════════════════════════════════════════════════
+    #  on_interaction — 交互 Bot 路由
     # ══════════════════════════════════════════════════════════
 
     async def on_interaction(
-        self,
-        ctx: PluginContext,
-        entry_key: str,
-        payload: dict[str, Any],
+        self, ctx: PluginContext, entry_key: str, payload: dict[str, Any],
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_mindreader":
             return None
@@ -181,85 +284,118 @@ class MindreaderSurvivalPlugin(Plugin):
         chat_id = self._cid(payload)
 
         if etype == "payment_confirmed":
-            return await self._on_payment(ctx, payload, chat_id)
+            return self._on_payment(payload, chat_id)
         elif etype == "keyword":
-            return await self._on_keyword(ctx, payload, chat_id)
+            return self._on_keyword(ctx, payload, chat_id)
         elif etype == "message":
-            return await self._on_player_message(ctx, payload, chat_id)
+            return await self._on_game_message(ctx, payload, chat_id)
         elif etype == "session_close":
             return self._on_session_close(chat_id)
-
         return []
 
     # ── 支付：玩家加入 ───────────────────────────────────────
 
-    async def _on_payment(
-        self, ctx: PluginContext, payload: dict[str, Any], chat_id: int,
+    def _on_payment(
+        self, payload: dict[str, Any], chat_id: int,
     ) -> list[dict[str, Any]]:
         if not chat_id:
             return []
 
-        user_id = self._uid(payload)
+        uid = self._uid(payload)
         name = self._aname(payload)
-        if not user_id:
+        if not uid:
             return []
 
-        # 从转账事件中提取金额
         event = payload.get("event", {}) if isinstance(payload.get("event"), dict) else {}
         data = event.get("data", {}) if isinstance(event.get("data"), dict) else {}
-        amount = self._pint(
-            data.get("amount") or payload.get("amount") or self._ticket_price,
-            self._ticket_price,
+        amount = self._pint(data.get("amount") or payload.get("amount") or self._ticket_price, self._ticket_price)
+
+        session = self._sessions.get(chat_id)
+        if not session or session.phase != "waiting":
+            return [{"type": "send_message", "text": "⚠️ 当前没有等待中的游戏。"}]
+
+        if uid in session.players:
+            return [{"type": "send_message",
+                     "text": f"⚠️ {escape(name)} 已经加入过了！"}]
+
+        session.players[uid] = PlayerInfo(
+            user_id=uid, display_name=name,
+            username=self._uname(payload), paid=amount,
         )
+        session.pool += amount
 
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
+        # bot 模式：bot 回复通知
+        if session.mode == "bot":
+            return [{"type": "send_message",
+                     "text": self._r(PLAYER_JOINED_TEMPLATE, {
+                         "player_name": escape(name),
+                         "player_count": len(session.players),
+                     })}]
+        # admin 模式：不自动回复，管理员手动确认
+        return []
 
-            # 如果没有会话，自动创建（管理员通过 UserBot 命令开局的场景）
-            if not session:
-                session = GameSession(
-                    chat_id=chat_id,
-                    ticket_price=amount,
-                    total_rounds=self._total_rounds,
-                    round_timeout=self._round_timeout,
-                    option_word_pool=list(self._option_word_pool),
-                    phase="waiting",
-                    created_at=time.monotonic(),
-                )
-                self._sessions[chat_id] = session
+    # ── 关键词：开始 / 停止 ──────────────────────────────────
 
-                if ctx.log:
-                    await ctx.log("info",
-                        f"[mindreader_survival] 自动创建会话 chat={chat_id} "
-                        f"（由转账触发，ticket={amount}）")
+    def _on_keyword(
+        self, ctx: PluginContext, payload: dict[str, Any], chat_id: int,
+    ) -> list[dict[str, Any]]:
+        if not chat_id:
+            return []
+        text = self._evt_text(payload)
 
-            if session.phase != "waiting":
-                return [{"type": "send_message", "text": "⚠️ 当前没有等待中的游戏。"}]
+        if text in {"play", "启动", "开始游戏", "开始"}:
+            return self._start_game(chat_id)
+        if text in {COMMAND_STOP, "stop", "结束", "取消"}:
+            return self._stop_game(chat_id)
+        return []
 
-            if user_id in session.players:
-                return [{"type": "send_message",
-                         "text": f"⚠️ {escape(name)} 已经加入过了！"}]
+    def _start_game(self, chat_id: int) -> list[dict[str, Any]]:
+        session = self._sessions.get(chat_id)
+        if not session:
+            return [{"type": "send_message", "text": "⚠️ 没有进行中的游戏。"}]
+        if session.phase != "waiting":
+            return [{"type": "send_message", "text": "⚠️ 游戏已经在进行中。"}]
+        if len(session.players) < 1:
+            return [{"type": "send_message", "text": "⚠️ 还没有玩家加入！"}]
 
-            session.players[user_id] = PlayerInfo(
-                user_id=user_id, display_name=name,
-                username=self._uname(payload), paid=amount,
-            )
-            session.pool += amount
+        session.phase = "playing"
+        return self._build_round(chat_id, 1)
 
-            if ctx.log:
-                await ctx.log("info",
-                    f"[mindreader_survival] 加入 chat={chat_id} user={user_id} "
-                    f"name={name!r} amount={amount} pool={session.pool}")
+    def _stop_game(self, chat_id: int) -> list[dict[str, Any]]:
+        session = self._sessions.get(chat_id)
+        if not session:
+            return [{"type": "send_message", "text": "⚠️ 没有进行中的游戏。"}]
 
-        return [{"type": "send_message",
-                 "text": self._r(PLAYER_JOINED_TEMPLATE, {
-                     "player_name": escape(name),
-                     "player_count": len(session.players),
-                 })}]
+        pool = session.pool
+        alive = [p for p in session.players.values() if p.alive]
+        admin_name = session.admin_name or "管理员"
 
-    # ── 关键词：管理员命令 ───────────────────────────────────
+        if alive:
+            refund = pool // len(alive)
+            actions = [
+                {"type": "send_message",
+                 "text": self._r(GAME_OVER_CANCELLED_TEMPLATE, {
+                     "pool": pool, "player_count": len(alive), "refund_each": refund,
+                 })},
+                self._build_result_action(
+                    status="cancelled", pool=pool,
+                    payout_account=admin_name, amount=pool,
+                    extra={"player_count": len(alive), "refund_each": refund},
+                ),
+                {"type": "end_session"},
+            ]
+        else:
+            actions = [
+                {"type": "send_message", "text": "⚠️ 游戏已取消，无存活玩家需退款。"},
+                {"type": "end_session"},
+            ]
 
-    async def _on_keyword(
+        self._sessions.pop(chat_id, None)
+        return actions
+
+    # ── 游戏中：数字选择（交互 Bot message 事件）──────────────
+
+    async def _on_game_message(
         self, ctx: PluginContext, payload: dict[str, Any], chat_id: int,
     ) -> list[dict[str, Any]]:
         if not chat_id:
@@ -267,141 +403,109 @@ class MindreaderSurvivalPlugin(Plugin):
 
         text = self._evt_text(payload)
         uid = self._uid(payload)
-        name = self._aname(payload)
+        if not uid or not text or not text.isdigit():
+            return []
+        choice = int(text)
 
-        if text in {COMMAND_START, "start", "开局"}:
-            return await self._cmd_create_game(ctx, payload, chat_id, uid, name)
-        if text in {"play", "启动", "开始游戏"}:
-            return await self._cmd_play(ctx, chat_id)
-        if text in {COMMAND_STOP, "stop", "结束", "取消"}:
-            return await self._cmd_stop(ctx, chat_id)
-        if text in {COMMAND_STATUS, "status", "状态"}:
-            return self._build_status(chat_id)
+        session = self._sessions.get(chat_id)
+        if not session or session.phase != "playing":
+            return []
 
-        # 其他关键词 → 显示加入提示（如果有等待中的游戏）
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if session and session.phase == "waiting":
-                return [{"type": "send_message",
-                         "text": self._r(JOIN_MESSAGE_TEMPLATE, {
-                             "ticket_price": session.ticket_price,
-                             "total_rounds": session.total_rounds,
-                             "prefix": current_command_prefix(),
-                             "command": self._command,
-                         })}]
-        return []
+        rd = session.current_round
+        if not rd or rd.revealed:
+            return []
 
-    # ── 关键词子命令：创建游戏 ───────────────────────────────
+        player = session.players.get(uid)
+        if not player or not player.alive:
+            return []
 
-    async def _cmd_create_game(
-        self, ctx: PluginContext, payload: dict[str, Any],
-        chat_id: int, uid: int | None, name: str,
-    ) -> list[dict[str, Any]]:
-        ticket = self._pint(payload.get("ticket_price"), self._ticket_price)
-        rounds = self._pint(payload.get("total_rounds"), self._total_rounds)
-        timeout = self._pint(payload.get("round_timeout"), self._round_timeout)
+        if choice < 1 or choice > len(rd.options):
+            return []
 
-        async with self._get_lock(chat_id):
-            existing = self._sessions.get(chat_id)
-            if existing and existing.phase == "playing":
-                return [{"type": "send_message",
-                         "text": "⚠️ 游戏进行中，请等待当前游戏结束。"}]
-
-            session = GameSession(
-                chat_id=chat_id, ticket_price=ticket,
-                total_rounds=rounds, round_timeout=timeout,
-                option_word_pool=list(self._option_word_pool),
-                phase="waiting", admin_user_id=uid,
-                admin_name=name, created_at=time.monotonic(),
-            )
-            self._sessions[chat_id] = session
-
-            if ctx.log:
-                await ctx.log("info",
-                    f"[mindreader_survival] 创建 chat={chat_id} "
-                    f"ticket={ticket} rounds={rounds} timeout={timeout}")
+        rd.choices[uid] = choice
+        player.current_choice = choice
 
         return [{"type": "send_message",
-                 "text": self._r(JOIN_MESSAGE_TEMPLATE, {
-                     "ticket_price": ticket,
-                     "total_rounds": rounds,
-                     "prefix": current_command_prefix(),
-                     "command": self._command,
-                 })}]
+                 "text": f"✅ 已记录你的选择：{choice}",
+                 "reply_to_message_id": self._mid(payload)}]
 
-    # ── 关键词子命令：开始游戏 ───────────────────────────────
+    def _on_session_close(self, chat_id: int) -> list[dict[str, Any]]:
+        if chat_id:
+            self._sessions.pop(chat_id, None)
+        return []
 
-    async def _cmd_play(self, ctx: PluginContext, chat_id: int) -> list[dict[str, Any]]:
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if not session:
-                return [{"type": "send_message", "text": "⚠️ 没有进行中的游戏。"}]
-            if session.phase != "waiting":
-                return [{"type": "send_message", "text": "⚠️ 游戏已经在进行中。"}]
-            if len(session.players) < 1:
-                return [{"type": "send_message", "text": "⚠️ 还没有玩家加入！"}]
-            session.phase = "playing"
+    # ══════════════════════════════════════════════════════════
+    #  UserBot 命令（管理员直接使用）
+    # ══════════════════════════════════════════════════════════
 
-        if ctx.log:
-            await ctx.log("info",
-                f"[mindreader_survival] 游戏开始 chat={chat_id} "
-                f"players={len(session.players)} pool={session.pool}")
+    async def _cmd_handler(
+        self, client: Any, event: Any, args: list[str],
+        account_id: int, ctx: PluginContext,
+    ) -> None:
+        chat_id = int(getattr(event.chat_id, "channel_id", None) or event.chat_id or 0)
+        if not chat_id:
+            return
 
-        return await self._start_round(ctx, chat_id, 1)
+        sender = await event.get_sender()
+        uid = int(getattr(sender, "id", 0) or 0)
+        name = self._ename(sender)
+        arg = " ".join(args).strip().lower()
 
-    # ── 开始新一轮 ───────────────────────────────────────────
+        if arg in {"开始", "start", "play", "启动"}:
+            actions = self._start_game(chat_id)
+        elif arg in {"停止", "stop", "end", "结束", "取消"}:
+            actions = self._stop_game(chat_id)
+        elif arg in {"状态", "status"}:
+            actions = self._build_status(chat_id)
+        else:
+            # 无参 → 原地编辑开局
+            await self._admin_trigger(ctx, event, chat_id, uid, name)
+            return
 
-    async def _start_round(
-        self, ctx: PluginContext, chat_id: int, round_num: int,
-    ) -> list[dict[str, Any]]:
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if not session or session.phase != "playing":
-                return []
+        for a in actions:
+            await self._send_action(ctx, event, a)
 
-            cfg = self._rounds_config(session.total_rounds)
-            if round_num > len(cfg):
-                return await self._finish_game(ctx, chat_id)
+    # ══════════════════════════════════════════════════════════
+    #  游戏逻辑
+    # ══════════════════════════════════════════════════════════
 
-            num_opts = cfg[round_num - 1]
-            alive = [p for p in session.players.values() if p.alive]
-            if not alive:
-                return await self._finish_game(ctx, chat_id)
+    def _build_round(self, chat_id: int, round_num: int) -> list[dict[str, Any]]:
+        session = self._sessions.get(chat_id)
+        if not session:
+            return []
 
-            # 随机选选项
-            pool = list(session.option_word_pool)
-            if len(pool) < num_opts:
-                pool = pool * ((num_opts // len(pool)) + 1)
-            options = random.sample(pool, num_opts)
+        cfg = self._rounds_config(session.total_rounds)
+        if round_num > len(cfg):
+            return self._finish_game(session)
 
-            # 随机答案 + commit
-            answer = random.randint(1, num_opts)
-            salt = _generate_salt()
-            commit_hash = _compute_commit(answer, salt)
+        num_opts = cfg[round_num - 1]
+        alive = [p for p in session.players.values() if p.alive]
+        if not alive:
+            return self._finish_game(session)
 
-            rd = RoundInfo(
-                round_num=round_num, options=options,
-                answer=answer, salt=salt, commit_hash=commit_hash,
-                started_at=time.monotonic(),
-            )
-            session.current_round = rd
-            session.rounds.append(rd)
+        pool = list(session.option_word_pool)
+        if len(pool) < num_opts:
+            pool = pool * ((num_opts // len(pool)) + 1)
+        options = random.sample(pool, num_opts)
 
-            # 构建选项文本
-            opts_text = "\n".join(
-                f"  <b>{i + 1}</b>. {escape(opt)}"
-                for i, opt in enumerate(options)
-            )
+        answer = random.randint(1, num_opts)
+        salt = _generate_salt()
+        commit_hash = _compute_commit(answer, salt)
 
-            if ctx.log:
-                await ctx.log("info",
-                    f"[mindreader_survival] 第 {round_num} 轮 chat={chat_id} "
-                    f"opts={num_opts} answer={answer} alive={len(alive)}")
-
-        # 启动超时（通过 ctx.client 直接发消息）
-        task = asyncio.create_task(
-            self._round_timeout_task(ctx, chat_id, round_num)
+        rd = RoundInfo(
+            round_num=round_num, options=options,
+            answer=answer, salt=salt, commit_hash=commit_hash,
+            started_at=time.monotonic(),
         )
+        session.current_round = rd
+        session.rounds.append(rd)
+
+        opts_text = "\n".join(
+            f"  <b>{i + 1}</b>. {escape(opt)}" for i, opt in enumerate(options)
+        )
+
+        # 启动超时任务
+        task = asyncio.create_task(self._round_timeout(chat_id, round_num))
         self._track_task(task)
 
         return [{"type": "send_message",
@@ -414,166 +518,177 @@ class MindreaderSurvivalPlugin(Plugin):
                      "timeout": session.round_timeout,
                  })}]
 
-    # ── 超时任务（独立协程，直接发消息）──────────────────────
-
-    async def _round_timeout_task(
-        self, ctx: PluginContext, chat_id: int, round_num: int,
-    ) -> None:
+    async def _round_timeout(self, chat_id: int, round_num: int) -> None:
         session = self._sessions.get(chat_id)
         if not session:
             return
         await asyncio.sleep(session.round_timeout)
 
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if not session or session.phase != "playing":
-                return
-            rd = session.current_round
-            if not rd or rd.round_num != round_num or rd.revealed:
-                return
-
-            no_choices = not rd.choices
-
-            if no_choices:
-                # 无人选择 → 全员淘汰
-                for p in session.players.values():
-                    if p.alive:
-                        p.alive = False
-                rd.revealed = True
-
-                if ctx.log:
-                    await ctx.log("info",
-                        f"[mindreader_survival] 第 {round_num} 轮超时无人选择 chat={chat_id}")
-
-        if no_choices:
-            # 发超时消息并结算
-            await self._send_html(ctx, chat_id,
-                self._r(TIMEOUT_NO_PLAYERS_TEMPLATE, {"round_num": round_num}))
-            await self._do_finish(ctx, chat_id)
-        else:
-            # 有人选择但超时到了 → 公布结果
-            await self._do_reveal(ctx, chat_id, round_num)
-
-    # ── 玩家选择（message 事件）───────────────────────────────
-
-    async def _on_player_message(
-        self, ctx: PluginContext, payload: dict[str, Any], chat_id: int,
-    ) -> list[dict[str, Any]]:
-        if not chat_id:
-            return []
-
-        text = self._evt_text(payload)
-        uid = self._uid(payload)
-        if not uid or not text or not text.isdigit():
-            return []
-        choice = int(text)
-
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if not session or session.phase != "playing":
-                return []
-
-            rd = session.current_round
-            if not rd or rd.revealed:
-                return []
-
-            player = session.players.get(uid)
-            if not player or not player.alive:
-                return []
-
-            if choice < 1 or choice > len(rd.options):
-                return []
-
-            rd.choices[uid] = choice
-            player.current_choice = choice
-
-            if ctx.log:
-                await ctx.log("info",
-                    f"[mindreader_survival] 选择 chat={chat_id} "
-                    f"user={uid} round={rd.round_num} choice={choice}")
-
-        return [{"type": "send_message",
-                 "text": f"✅ 已记录你的选择：{choice}",
-                 "reply_to_message_id": self._mid(payload)}]
-
-    # ── 会话关闭 ─────────────────────────────────────────────
-
-    def _on_session_close(self, chat_id: int) -> list[dict[str, Any]]:
-        if chat_id:
-            self._sessions.pop(chat_id, None)
-        return []
-
-    # ══════════════════════════════════════════════════════════
-    #  UserBot 命令（管理员直接使用）
-    # ══════════════════════════════════════════════════════════
-
-    async def _cmd_handler(
-        self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
-    ) -> None:
-        chat_id = int(
-            getattr(event.chat_id, "channel_id", None) or event.chat_id or 0
-        )
-        if not chat_id:
+        session = self._sessions.get(chat_id)
+        if not session or session.phase != "playing":
+            return
+        rd = session.current_round
+        if not rd or rd.round_num != round_num or rd.revealed:
             return
 
-        sender = await event.get_sender()
-        uid = int(getattr(sender, "id", 0) or 0)
-        name = self._ename(sender)
-        arg = " ".join(args).strip().lower()
-
-        if arg in {"开始", "start", "play", "启动", "开始游戏"}:
-            actions = await self._cmd_play(ctx, chat_id)
-        elif arg in {"停止", "stop", "end", "结束", "取消"}:
-            actions = await self._cmd_stop(ctx, chat_id)
-        elif arg in {"状态", "status"}:
-            actions = self._build_status(chat_id)
-        else:
-            # 无参 / 开局
-            payload = {
-                "event": {"text": COMMAND_START, "chat_id": chat_id},
-                "actor": {"user_id": uid, "display_name": name},
-            }
-            actions = await self._cmd_create_game(ctx, payload, chat_id, uid, name)
-
+        # 超时强制公布
+        actions = self._reveal_round(session, rd)
         for a in actions:
-            await self._send_action(ctx, event, a)
+            if a.get("type") == "send_message":
+                await self._send_html(chat_id, a["text"], session)
 
-    # ── 停止游戏 ─────────────────────────────────────────────
+    def _reveal_round(self, session: GameSession, rd: RoundInfo) -> list[dict[str, Any]]:
+        rd.revealed = True
+        answer_text = rd.options[rd.answer - 1]
 
-    async def _cmd_stop(self, ctx: PluginContext, chat_id: int) -> list[dict[str, Any]]:
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if not session:
-                return [{"type": "send_message", "text": "⚠️ 没有进行中的游戏。"}]
+        survived: list[PlayerInfo] = []
+        eliminated: list[PlayerInfo] = []
 
-            pool = session.pool
-            alive = [p for p in session.players.values() if p.alive]
+        for uid, choice in rd.choices.items():
+            p = session.players.get(uid)
+            if not p or not p.alive:
+                continue
+            if choice == rd.answer:
+                survived.append(p)
+            else:
+                p.alive = False
+                eliminated.append(p)
 
-            if ctx.log:
-                await ctx.log("info",
-                    f"[mindreader_survival] 停止 chat={chat_id} pool={pool} alive={len(alive)}")
+        for p in session.players.values():
+            if p.alive and p.user_id not in rd.choices:
+                p.alive = False
+                eliminated.append(p)
 
-        if alive:
-            refund = pool // len(alive)
-            actions = [
-                {"type": "send_message",
-                 "text": self._r(GAME_OVER_CANCELLED_TEMPLATE, {
-                     "pool": pool, "player_count": len(alive), "refund_each": refund,
-                 })},
-                {"type": "result", "success": False,
-                 "result": {"status": "cancelled", "pool": pool,
-                            "player_count": len(alive), "refund_each": refund},
-                 "settlement": {"mode": "announce_only", "amount": pool, "status": "refunded"}},
-                {"type": "end_session"},
-            ]
+        alive_count = sum(1 for p in session.players.values() if p.alive)
+        elim_names = "\n".join(f"  ❌ {escape(p.display_name)}" for p in eliminated)
+
+        actions: list[dict[str, Any]] = [
+            {"type": "send_message",
+             "text": self._r(ROUND_RESULT_TEMPLATE, {
+                 "round_num": rd.round_num,
+                 "answer_text": escape(answer_text),
+                 "answer": rd.answer,
+                 "commit_hash": f"<code>{rd.commit_hash[:16]}…</code>",
+                 "survived_count": len(survived),
+                 "eliminated_count": len(eliminated),
+                 "eliminated_names": elim_names,
+             })},
+        ]
+
+        if alive_count == 0 or rd.round_num >= session.total_rounds:
+            actions.extend(self._finish_game(session))
         else:
-            actions = [
-                {"type": "send_message", "text": "⚠️ 游戏已取消，无存活玩家需退款。"},
+            actions.extend(self._build_round(session.chat_id, rd.round_num + 1))
+
+        return actions
+
+    # ── 结算 ─────────────────────────────────────────────────
+
+    def _finish_game(self, session: GameSession) -> list[dict[str, Any]]:
+        session.phase = "finished"
+        pool = session.pool
+        alive = [p for p in session.players.values() if p.alive]
+        admin_name = session.admin_name or "管理员"
+
+        if not alive:
+            return [
+                {"type": "send_message",
+                 "text": self._r(GAME_OVER_ALL_ELIMINATED_TEMPLATE, {
+                     "pool": pool, "admin_prize": pool,
+                 })},
+                self._build_result_action(
+                    status="all_eliminated", pool=pool,
+                    payout_account=admin_name, amount=pool,
+                ),
                 {"type": "end_session"},
             ]
 
-        self._sessions.pop(chat_id, None)
-        return actions
+        if len(alive) == 1:
+            w = alive[0]
+            prize = int(pool * 0.9)
+            fee = pool - prize
+            return [
+                {"type": "send_message",
+                 "text": self._r(GAME_OVER_SOLO_TEMPLATE, {
+                     "winner_name": escape(w.display_name),
+                     "pool": pool, "prize": prize, "admin_fee": fee,
+                 })},
+                self._build_result_action(
+                    status="winner", pool=pool,
+                    payout_account=admin_name, amount=prize,
+                    winner_user_id=w.user_id, winner_name=w.display_name,
+                ),
+                {"type": "end_session"},
+            ]
+
+        # 多人存活
+        prize_total = int(pool * 0.9)
+        fee = pool - prize_total
+        each = prize_total // len(alive)
+        remainder = prize_total - each * len(alive)
+
+        return [
+            {"type": "send_message",
+             "text": self._r(GAME_OVER_MULTI_TEMPLATE, {
+                 "survived_count": len(alive), "pool": pool,
+                 "prize_each": each, "admin_fee": fee + remainder,
+             })},
+            self._build_result_action(
+                status="multiple_winners", pool=pool,
+                payout_account=admin_name, amount=prize_total,
+                extra={
+                    "survived_count": len(alive),
+                    "survived_players": [
+                        {"user_id": p.user_id, "name": p.display_name, "prize": each}
+                        for p in alive
+                    ],
+                },
+            ),
+            {"type": "end_session"},
+        ]
+
+    # ── 构建 result + settlement 动作 ────────────────────────
+
+    def _build_result_action(
+        self,
+        *,
+        status: str,
+        pool: int,
+        payout_account: str,
+        amount: int,
+        winner_user_id: int | None = None,
+        winner_name: str = "",
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """对齐 dice_grid_hunt 的 result + settlement 结构。"""
+        result: dict[str, Any] = {
+            "status": status,
+            "pool": pool,
+            "payout_mode": "manual",
+            "payout_account_label": payout_account,
+        }
+        if winner_user_id:
+            result["winner_user_id"] = winner_user_id
+            result["winner_name"] = winner_name
+        if extra:
+            result.update(extra)
+
+        settlement: dict[str, Any] = {
+            "mode": "announce_only",
+            "amount": amount,
+            "payout_account_label": payout_account,
+            "status": "announced",
+        }
+        if winner_user_id:
+            settlement["winner_user_id"] = winner_user_id
+            settlement["winner_name"] = winner_name
+
+        return {
+            "type": "result",
+            "success": True,
+            "result": result,
+            "settlement": settlement,
+        }
 
     # ── 状态查询 ─────────────────────────────────────────────
 
@@ -585,6 +700,7 @@ class MindreaderSurvivalPlugin(Plugin):
         alive = [p for p in session.players.values() if p.alive]
         phase = {"waiting": "等待加入", "playing": f"第 {len(session.rounds)} / {session.total_rounds} 轮",
                  "finished": "已结束"}.get(session.phase, session.phase)
+        mode = "管理员" if session.mode == "admin" else "Bot"
         plist = "\n".join(
             f"  {'✅' if p.alive else '❌'} {escape(p.display_name)}（{p.paid} 金币）"
             for p in session.players.values()
@@ -593,6 +709,7 @@ class MindreaderSurvivalPlugin(Plugin):
         return [{"type": "send_message", "text": (
             f"📋 <b>读心生存赛状态</b>\n\n"
             f"🎯 阶段：{phase}\n"
+            f"👤 庄家：{mode}\n"
             f"💰 奖池：<b>{session.pool}</b> 金币\n"
             f"👥 玩家：<b>{len(session.players)}</b> 人（存活 {len(alive)}）\n"
             f"🎫 门票：<b>{session.ticket_price}</b> 金币\n\n"
@@ -600,140 +717,24 @@ class MindreaderSurvivalPlugin(Plugin):
         )}]
 
     # ══════════════════════════════════════════════════════════
-    #  公布结果 + 结算（独立协程 & 交互回调共用）
-    # ══════════════════════════════════════════════════════════
-
-    async def _do_reveal(self, ctx: PluginContext, chat_id: int, round_num: int) -> None:
-        """公布第 round_num 轮结果，必要时结算。"""
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if not session or session.phase != "playing":
-                return
-            rd = session.current_round
-            if not rd or rd.round_num != round_num or rd.revealed:
-                return
-
-            rd.revealed = True
-            answer_text = rd.options[rd.answer - 1]
-
-            survived: list[PlayerInfo] = []
-            eliminated: list[PlayerInfo] = []
-
-            for uid, choice in rd.choices.items():
-                player = session.players.get(uid)
-                if not player or not player.alive:
-                    continue
-                if choice == rd.answer:
-                    survived.append(player)
-                else:
-                    player.alive = False
-                    eliminated.append(player)
-
-            # 没做选择的存活玩家也淘汰
-            for p in session.players.values():
-                if p.alive and p.user_id not in rd.choices:
-                    p.alive = False
-                    eliminated.append(p)
-
-            alive_count = sum(1 for p in session.players.values() if p.alive)
-            elim_names = "\n".join(f"  ❌ {escape(p.display_name)}" for p in eliminated)
-
-            if ctx.log:
-                await ctx.log("info",
-                    f"[mindreader_survival] 第 {rd.round_num} 轮结果 chat={chat_id} "
-                    f"answer={rd.answer}({answer_text}) "
-                    f"survived={len(survived)} eliminated={len(eliminated)} alive={alive_count}")
-
-        # 发结果消息
-        await self._send_html(ctx, chat_id, self._r(ROUND_RESULT_TEMPLATE, {
-            "round_num": rd.round_num,
-            "answer_text": escape(answer_text),
-            "answer": rd.answer,
-            "commit_hash": f"<code>{rd.commit_hash[:16]}…</code>",
-            "survived_count": len(survived),
-            "eliminated_count": len(eliminated),
-            "eliminated_names": elim_names,
-        }))
-
-        if alive_count == 0 or rd.round_num >= session.total_rounds:
-            await self._do_finish(ctx, chat_id)
-        else:
-            # 下一轮
-            actions = await self._start_round(ctx, chat_id, rd.round_num + 1)
-            for a in actions:
-                await self._send_html(ctx, chat_id, a.get("text", ""))
-
-    async def _do_finish(self, ctx: PluginContext, chat_id: int) -> None:
-        """结算游戏，直接发消息。"""
-        async with self._get_lock(chat_id):
-            session = self._sessions.get(chat_id)
-            if not session:
-                return
-            session.phase = "finished"
-            pool = session.pool
-            alive = [p for p in session.players.values() if p.alive]
-
-            if ctx.log:
-                await ctx.log("info",
-                    f"[mindreader_survival] 结算 chat={chat_id} "
-                    f"pool={pool} alive={len(alive)} total={len(session.players)}")
-
-        if not alive:
-            await self._send_html(ctx, chat_id,
-                self._r(GAME_OVER_ALL_ELIMINATED_TEMPLATE, {
-                    "pool": pool, "admin_prize": pool,
-                }))
-        elif len(alive) == 1:
-            w = alive[0]
-            prize = int(pool * 0.9)
-            fee = pool - prize
-            await self._send_html(ctx, chat_id,
-                self._r(GAME_OVER_SOLO_TEMPLATE, {
-                    "winner_name": escape(w.display_name),
-                    "pool": pool, "prize": prize, "admin_fee": fee,
-                }))
-        else:
-            prize_total = int(pool * 0.9)
-            fee = pool - prize_total
-            each = prize_total // len(alive)
-            remainder = prize_total - each * len(alive)
-            await self._send_html(ctx, chat_id,
-                self._r(GAME_OVER_MULTI_TEMPLATE, {
-                    "survived_count": len(alive), "pool": pool,
-                    "prize_each": each, "admin_fee": fee + remainder,
-                }))
-
-        self._sessions.pop(chat_id, None)
-
-    # ══════════════════════════════════════════════════════════
     #  工具方法
     # ══════════════════════════════════════════════════════════
 
-    async def _send_html(self, ctx: PluginContext, chat_id: int, text: str) -> None:
-        if ctx.client:
-            try:
-                await ctx.client.send_message(chat_id, text, parse_mode="html")
-                return
-            except Exception:
-                pass
+    async def _send_html(self, chat_id: int, text: str, session: GameSession) -> None:
+        """超时任务中直接发消息（需要 ctx.client，此处用 None 兜底）。"""
+        pass  # 由 _reveal_round 返回 actions，外层统一发送
 
     async def _send_action(self, ctx: PluginContext, event: Any, action: dict[str, Any]) -> None:
         if action.get("type") != "send_message":
             return
         text = action.get("text", "")
-        reply_to = action.get("reply_to_message_id")
         if ctx.client:
             try:
-                await ctx.client.send_message(
-                    event.chat_id, text, parse_mode="html",
-                    reply_to=reply_to,
-                )
+                await ctx.client.send_message(event.chat_id, text, parse_mode="html")
                 return
             except Exception:
                 pass
         await event.reply(text, parse_mode="html")
-
-    # ── payload 解析 ─────────────────────────────────────────
 
     def _evt_type(self, p: dict[str, Any]) -> str:
         src = p.get("source", {}) if isinstance(p.get("source"), dict) else {}
@@ -750,8 +751,7 @@ class MindreaderSurvivalPlugin(Plugin):
     def _uid(self, p: dict[str, Any]) -> int:
         actor = p.get("actor", {}) if isinstance(p.get("actor"), dict) else {}
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}
-        return self._pint(actor.get("user_id") or evt.get("user_id")
-                          or p.get("sender_user_id"), 0)
+        return self._pint(actor.get("user_id") or evt.get("user_id") or p.get("sender_user_id"), 0)
 
     def _mid(self, p: dict[str, Any]) -> int | None:
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}

@@ -7,15 +7,26 @@ from app.worker.plugins.manifest import Manifest
 
 # ── 默认消息模板 ──────────────────────────────────────────────
 
-JOIN_MESSAGE_TEMPLATE = (
-    "<b>🧠 读心生存赛</b>\n"
+JOIN_MESSAGE_BOT_TEMPLATE = (
+    "<b>🧠 读心生存赛</b> · 庄家：Bot\n"
     "\n"
     "💰 门票：<b>{ticket_price}</b> 金币\n"
     "🎯 共 <b>{total_rounds}</b> 轮，选项逐轮递增\n"
     "🏆 存活者平分 <b>90%</b> 奖池\n"
     "\n"
     "💳 转账 <b>{ticket_price}</b> 金币加入游戏！\n"
-    "⏰ 等待管理员发 <code>{prefix}{command} 开始</code> 启动"
+    "⏰ 管理员发 <code>{prefix}{command} 开始</code> 启动"
+)
+
+JOIN_MESSAGE_TEMPLATE = (
+    "<b>🧠 读心生存赛</b> · 庄家：{admin_name}\n"
+    "\n"
+    "💰 门票：<b>{ticket_price}</b> 金币\n"
+    "🎯 共 <b>{total_rounds}</b> 轮，选项逐轮递增\n"
+    "🏆 存活者平分 <b>90%</b> 奖池\n"
+    "\n"
+    "💳 转账 <b>{ticket_price}</b> 金币加入游戏！\n"
+    "⏰ 等管理员发 <code>{prefix}{command} 开始</code> 启动"
 )
 
 ROUND_START_TEMPLATE = (
@@ -86,6 +97,8 @@ PLAYER_JOINED_TEMPLATE = (
 COMMAND_START = "开始"
 COMMAND_STOP = "停止"
 COMMAND_STATUS = "状态"
+
+PLAYER_KEYWORDS = ["我要玩读心", "读心生存", "读心赛", "玩读心"]
 
 
 # ── 配置 Schema ──────────────────────────────────────────────
@@ -203,7 +216,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.0.3",
+    version="1.1.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
     permissions=["send_message", "edit_message", "read_chat"],
