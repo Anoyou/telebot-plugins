@@ -220,7 +220,7 @@ class MindreaderSurvivalPlugin(Plugin):
         text = self._r(JOIN_MESSAGE_TEMPLATE, {
             "ticket_price": session.ticket_price,
             "total_rounds": session.total_rounds,
-            "prefix": prefix if (prefix := current_command_prefix()) else "",
+            "prefix": current_command_prefix() or "/",
             "command": self._command,
             "admin_name": escape(name),
         })
@@ -260,7 +260,7 @@ class MindreaderSurvivalPlugin(Plugin):
         text = self._r(JOIN_MESSAGE_BOT_TEMPLATE, {
             "ticket_price": session.ticket_price,
             "total_rounds": session.total_rounds,
-            "prefix": prefix if (prefix := current_command_prefix()) else "",
+            "prefix": current_command_prefix() or "/",
             "command": self._command,
         })
         await event.reply(text, parse_mode="html")
@@ -311,7 +311,22 @@ class MindreaderSurvivalPlugin(Plugin):
         amount = self._pint(data.get("amount") or payload.get("amount") or self._ticket_price, self._ticket_price)
 
         session = self._sessions.get(chat_id)
-        if not session or session.phase != "waiting":
+
+        # 没会话 → 自动创建（管理员通过 on_message 开局但交互 bot 无会话的场景）
+        if not session:
+            session = GameSession(
+                chat_id=chat_id,
+                ticket_price=amount,
+                total_rounds=self._total_rounds,
+                round_timeout=self._round_timeout,
+                option_word_pool=list(self._option_word_pool),
+                phase="waiting",
+                mode="bot",  # 兜底默认 bot 模式
+                created_at=time.monotonic(),
+            )
+            self._sessions[chat_id] = session
+
+        if session.phase != "waiting":
             return [{"type": "send_message", "text": "⚠️ 当前没有等待中的游戏。"}]
 
         if uid in session.players:
