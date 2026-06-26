@@ -108,6 +108,7 @@ class MindreaderSurvivalPlugin(Plugin):
         self._sessions: dict[int, GameSession] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._ctx: PluginContext | None = None
 
     def _lock(self, cid: int) -> asyncio.Lock:
         if cid not in self._locks:
@@ -141,6 +142,7 @@ class MindreaderSurvivalPlugin(Plugin):
             ]
 
         self.commands = {self._command: self._cmd_handler}
+        self._ctx = ctx
         if ctx.log:
             await ctx.log("info",
                 f"[mindreader_survival] 启动 v{MANIFEST.version} cmd={self._command} "
@@ -470,7 +472,8 @@ class MindreaderSurvivalPlugin(Plugin):
         )
 
         # 超时任务
-        self._track(asyncio.create_task(self._timeout(chat_id, round_num)))
+        if self._ctx:
+            self._track(asyncio.create_task(self._timeout(self._ctx, chat_id, round_num)))
 
         return [{"type": "send_message",
                  "text": self._render(ROUND_START_TEMPLATE, {
@@ -484,12 +487,13 @@ class MindreaderSurvivalPlugin(Plugin):
 
     # ── 超时 ─────────────────────────────────────────────────
 
-    async def _timeout(self, chat_id: int, round_num: int) -> None:
+    async def _timeout(self, ctx: PluginContext, chat_id: int, round_num: int) -> None:
         session = self._sessions.get(chat_id)
         if not session:
             return
         await asyncio.sleep(session.round_timeout)
 
+        no_choices = False
         async with self._lock(chat_id):
             session = self._sessions.get(chat_id)
             if not session or session.phase != "playing":
@@ -513,14 +517,14 @@ class MindreaderSurvivalPlugin(Plugin):
             ]
             actions.extend(self._finish(session))
             for a in actions:
-                await self._act(chat_id, a)
+                await self._send_via_ctx(ctx, chat_id, a)
         else:
             # 超时有人选 → 公布结果
-            await self._do_reveal(chat_id, round_num)
+            await self._do_reveal(ctx, chat_id, round_num)
 
     # ── 公布结果 ─────────────────────────────────────────────
 
-    async def _do_reveal(self, chat_id: int, round_num: int) -> None:
+    async def _do_reveal(self, ctx: PluginContext, chat_id: int, round_num: int) -> None:
         async with self._lock(chat_id):
             session = self._sessions.get(chat_id)
             if not session or session.phase != "playing":
@@ -553,7 +557,7 @@ class MindreaderSurvivalPlugin(Plugin):
             elim_text = "\n".join(f"  ❌ {escape(p.display_name)}" for p in eliminated)
 
         # 发结果
-        await self._act(chat_id, {
+        await self._send_via_ctx(ctx, chat_id, {
             "type": "send_message",
             "text": self._render(ROUND_RESULT_TEMPLATE, {
                 "round_num": rd.round_num,
@@ -569,10 +573,10 @@ class MindreaderSurvivalPlugin(Plugin):
         # 下一轮或结算
         if alive == 0 or rd.round_num >= session.total_rounds:
             for a in self._finish(session):
-                await self._act(chat_id, a)
+                await self._send_via_ctx(ctx, chat_id, a)
         else:
             for a in self._build_round(chat_id, rd.round_num + 1):
-                await self._act(chat_id, a)
+                await self._send_via_ctx(ctx, chat_id, a)
 
     # ── 结算 ─────────────────────────────────────────────────
 
@@ -730,9 +734,17 @@ class MindreaderSurvivalPlugin(Plugin):
     #  工具方法
     # ══════════════════════════════════════════════════════════
 
-    async def _act(self, chat_id: int, action: dict[str, Any]) -> None:
-        """超时协程中直接通过平台发消息（无 ctx.client 时静默失败）。"""
-        pass  # 由 _timeout / _do_reveal 在锁外调用，实际发送由上层处理
+    async def _send_via_ctx(self, ctx: PluginContext, chat_id: int, action: dict[str, Any]) -> None:
+        """超时协程中通过 ctx.client 直接发消息。"""
+        if action.get("type") != "send_message":
+            return
+        text = action.get("text", "")
+        if ctx.client:
+            try:
+                await ctx.client.send_message(chat_id, text, parse_mode="html")
+                return
+            except Exception:
+                pass
 
     async def _send(self, ctx: PluginContext, event: Any, action: dict[str, Any]) -> None:
         """UserBot 命令中通过 ctx.client 发送。"""
