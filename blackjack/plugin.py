@@ -190,6 +190,18 @@ def _interaction_actor(payload: dict[str, Any]) -> tuple[int, str]:
     return _positive_int(raw_id, 0, minimum=0), str(raw_name).strip() or "玩家"
 
 
+def _interaction_start_player(payload: dict[str, Any]) -> tuple[int, str]:
+    event = _payload_event(payload)
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if _interaction_event_type(payload) == "payment_confirmed":
+        raw_id = payload.get("payer_user_id") or data.get("payer_user_id")
+        raw_name = payload.get("payer_name") or data.get("payer_name") or "玩家"
+        payer_id = _positive_int(raw_id, 0, minimum=0)
+        if payer_id:
+            return payer_id, str(raw_name).strip() or "玩家"
+    return _interaction_actor(payload)
+
+
 # ─────────────────────────────────────────────────────
 # 插件
 # ─────────────────────────────────────────────────────
@@ -264,7 +276,7 @@ class BlackjackPlugin(Plugin):
         return []
 
     async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
-        player_id, player_name = _interaction_actor(payload)
+        player_id, player_name = _interaction_start_player(payload)
         bet = _positive_int(payload.get("prize") or payload.get("bet") or _interaction_amount(payload), 10, minimum=1)
         timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
         game_key = (chat_id, player_id)
