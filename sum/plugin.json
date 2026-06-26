@@ -3,7 +3,7 @@
   "display_name": "群消息总结",
   "description": "调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
   "author": "Anoyou",
-  "version": "1.1.28",
+  "version": "1.1.29",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -14,7 +14,7 @@
     "send_file",
     "delete_message"
   ],
-  "min_telepilot_version": "0.30.4",
+  "min_telepilot_version": "0.33.0",
   "cleanup_mode": "resource",
   "commands": [
     "sum",

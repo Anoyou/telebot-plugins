@@ -343,9 +343,10 @@ class BlackjackPlugin(Plugin):
 
         # Delete the callback source message so old messages don't linger
         msg_id = _interaction_message_id(payload)
-        if msg_id and ctx.client:
+        client = getattr(ctx, "client", None)
+        if msg_id and client:
             try:
-                await ctx.client.delete_message(chat_id, msg_id)
+                await client.delete_message(chat_id, msg_id)
             except Exception:
                 pass
 
@@ -431,9 +432,10 @@ class BlackjackPlugin(Plugin):
 
         # Delete the button message so old buttons don't linger
         msg_id = _interaction_message_id(payload)
-        if msg_id and ctx.client:
+        client = getattr(ctx, "client", None)
+        if msg_id and client:
             try:
-                await ctx.client.delete_message(chat_id, msg_id)
+                await client.delete_message(chat_id, msg_id)
             except Exception:
                 pass
 

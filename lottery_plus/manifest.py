@@ -226,8 +226,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.7",
-    min_telepilot_version="0.30.4",
+    version="1.0.8",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内彩票玩法，支持下注、奖池滚存、自动开奖、历史和消息模板预览",
@@ -255,9 +255,11 @@ MANIFEST = Manifest(
                    'properties': {'message': {'type': 'string',
                                               'title': '自定义提示',
                                               'default': '开始下注，祝你好运。'}}},
-  'settlement': {'mode': 'announce_only',
-                 'winner_field': 'actor.user_id',
-                 'amount_field': 'prize'}}],
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'paid_pool'}],
     config_schema=CONFIG_SCHEMA,
 )
 

@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -66,7 +66,7 @@
   "license": "MIT",
   "category": "interactive",
   "interaction_profile": "session_game",
-  "min_telepilot_version": "0.30.4",
+  "min_telepilot_version": "0.33.0",
   "interaction_entries": [
     {
       "key": "start_ten_half",
@@ -75,13 +75,13 @@
       "interaction_profile": "session_game",
       "launch_mode": "hybrid",
       "session_scope": "chat",
-        "events": [
-          "payment_confirmed",
-          "keyword",
-          "message",
-          "callback_query",
-          "session_close"
-        ],
+      "events": [
+        "payment_confirmed",
+        "keyword",
+        "message",
+        "callback_query",
+        "session_close"
+      ],
       "preserve_command_trigger": true,
       "command_fallback": {
         "enabled": true,
@@ -157,7 +157,17 @@
       },
       "settlement": {
         "mode": "announce_only"
-      }
+      },
+      "dispatch_modes": [
+        "admin_command",
+        "public_keyword"
+      ],
+      "message_channels": {
+        "admin_command": "userbot_reply",
+        "public_keyword": "interaction_bot"
+      },
+      "money_channel": "userbot_reply",
+      "participant_policy": "paid_pool"
     }
   ]
 }

@@ -1,4 +1,10 @@
 # 更新日志
+
+## 1.0.21 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
+- 交互 Bot 回调删除旧按钮消息时改为检测 `ctx.client` 是否可用，兼容受限测试桩和 0.33 facade 注入场景。
+
 ## 1.0.20 (2026-06-26)
 - 点击按钮（要牌/停牌/加倍）或发送文字指令时，自动删除旧 Bot 消息，避免聊天记录堆积。
 - 交互 Bot 回调路径（callback_query / message）删除按钮来源消息，新消息不再 reply_to 已删除消息。

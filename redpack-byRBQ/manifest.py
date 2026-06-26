@@ -127,8 +127,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.19",
-    min_telepilot_version="0.30.4",
+    version="1.1.20",
+    min_telepilot_version="0.33.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
     permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message"],
@@ -168,7 +168,11 @@ MANIFEST = Manifest(
                                             'maximum': 500}}},
   'settlement': {'mode': 'announce_only',
                  'winner_field': 'actor.user_id',
-                 'amount_field': 'total_amount'}}],
+                 'amount_field': 'total_amount'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
 

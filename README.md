@@ -13,6 +13,9 @@ TelePilot 远程插件仓库。
 | [poetry_blank](./poetry_blank/) | `,poetry 金额` | 古诗词填空抢答 |
 | [chatter_challenge](./chatter_challenge/) | `,chat` | 话痨挑战，违反规则自动扣分 |
 | [dice_grid_hunt](./dice_grid_hunt/) | `,dicegrid 金额` | 九宫格骰子图片竞猜 |
+| [lottery_plus](./lottery_plus/) | `,lotto` | 群内彩票下注与开奖 |
+| [mindreader_survival](./mindreader_survival/) | `,mind` | 多人读心生存赛 |
+| [ten_half](./ten_half/) | `,10d` | 多人十点半纸牌游戏 |
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
 | [sum](./sum/) | `,sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
 | [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
@@ -59,4 +62,4 @@ TelePilot 远程插件仓库。
 - `plugin.py` — 入口文件
 - `__init__.py` — 导出 `PLUGIN_CLASS` 和 `MANIFEST`（必填）
 
-参考 [插件开发指南](https://github.com/Anoyou/TelePilot/blob/main/docs/PLUGIN-DEV-GUIDE.md)
+参考 [TelePilot 0.33 插件开发文档](https://github.com/Anoyou/Telebot/tree/codex/0.33-interaction-framework/docs)

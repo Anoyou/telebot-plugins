@@ -3,7 +3,7 @@
   "display_name": "骰子比大小",
   "description": "群内骰子对战，两人各掷骰子比点数，支持下注",
   "author": "Anoyou",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -135,9 +135,19 @@
         "mode": "announce_only",
         "winner_field": "actor.user_id",
         "amount_field": "prize"
-      }
+      },
+      "dispatch_modes": [
+        "admin_command",
+        "public_keyword"
+      ],
+      "message_channels": {
+        "admin_command": "userbot_reply",
+        "public_keyword": "interaction_bot"
+      },
+      "money_channel": "userbot_reply",
+      "participant_policy": "open_race"
     }
   ],
-  "min_telepilot_version": "0.30.4",
+  "min_telepilot_version": "0.33.0",
   "interaction_profile": "challenge_game"
 }

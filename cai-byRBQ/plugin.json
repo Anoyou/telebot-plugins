@@ -3,7 +3,7 @@
   "display_name": "cai-byRBQ",
   "description": "# CAI - 自动点踩插件 自动点踩插件，支持多目标配置、冷却时间限制、标准表情和自定义表情。支...",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -46,5 +46,5 @@
   },
   "category": "automation",
   "interaction_entries": [],
-  "min_telepilot_version": "0.30.4"
+  "min_telepilot_version": "0.33.0"
 }

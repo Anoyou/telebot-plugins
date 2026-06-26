@@ -33,8 +33,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="poetry_blank",
     display_name="诗词填空",
-    version="1.0.7",
-    min_telepilot_version="0.30.4",
+    version="1.0.8",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="古诗词填空抢答，答对获奖",
@@ -69,9 +69,11 @@ MANIFEST = Manifest(
                                               'default': 120,
                                               'minimum': 10,
                                               'maximum': 86400}}},
-  'settlement': {'mode': 'announce_only',
-                 'winner_field': 'actor.user_id',
-                 'amount_field': 'prize'}}],
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
 

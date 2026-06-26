@@ -1,4 +1,9 @@
-# Changelog
+# 更新日志
+
+
+## 1.0.16 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
 
 ## 1.0.15 (2026-06-26)
 - 修复状态消息模板中 `{torrent_id}` 等占位符未被实际值替换的 bug。原因是 `_status_template` 把 message 当作一个值传给外层模板，`format_map` 只替换顶层占位符，message 内部的变量不会被递归处理。现在先用 payload 预格式化 message 再传入外层模板。

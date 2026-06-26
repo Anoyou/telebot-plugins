@@ -250,8 +250,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.13",
-    min_telepilot_version="0.30.4",
+    version="1.1.14",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
@@ -290,9 +290,11 @@ MANIFEST = Manifest(
                                               'default': 90,
                                               'minimum': 10,
                                               'maximum': 86400}}},
-  'settlement': {'mode': 'announce_only',
-                 'winner_field': 'actor.user_id',
-                 'amount_field': 'prize'}}],
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
 

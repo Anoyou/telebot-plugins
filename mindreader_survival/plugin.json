@@ -1,7 +1,7 @@
 {
   "name": "mindreader_survival",
   "key": "mindreader_survival",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "author": "Anoyou",
   "display_name": "读心生存赛",
   "description": "多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
@@ -155,8 +155,29 @@
         "mode": "announce_only",
         "winner_field": "actor.user_id",
         "amount_field": "prize"
-      }
+      },
+      "dispatch_modes": [
+        "admin_command",
+        "public_keyword"
+      ],
+      "message_channels": {
+        "admin_command": "userbot_reply",
+        "public_keyword": "interaction_bot"
+      },
+      "money_channel": "userbot_reply",
+      "participant_policy": "paid_pool"
     }
   ],
-  "min_telepilot_version": "0.30.4"
+  "min_telepilot_version": "0.33.0",
+  "entry": "plugin.py",
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat"
+  ],
+  "commands": [
+    "mind"
+  ],
+  "cleanup_mode": "resource",
+  "interaction_profile": "reward_pool"
 }

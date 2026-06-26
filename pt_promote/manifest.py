@@ -45,8 +45,8 @@ INFO_OK_TEMPLATE_DEFAULT = (
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.14",
-    min_telepilot_version="0.30.4",
+    version="1.0.16",
+    min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",
@@ -70,7 +70,11 @@ MANIFEST = Manifest(
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'torrent_id': {'type': 'string', 'title': '种子 ID', 'default': ''},
-                                  'options': {'type': 'string', 'title': '促销参数', 'default': ''}}}}],
+                                  'options': {'type': 'string', 'title': '促销参数', 'default': ''}}},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'notify_only'}],
     permissions=["send_message", "edit_message", "external_http"],
     allowed_hosts=["www.qingwapt.com"],
     config_schema={

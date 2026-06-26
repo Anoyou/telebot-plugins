@@ -1,5 +1,11 @@
 # 更新日志
 
+
+## 1.1.4 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
+- 补齐远程安装阶段需要的静态元数据，避免插件市场只读取 `plugin.json` 时缺少入口、权限或命令信息。
+
 ## 1.1.3 (2026-06-25)
 - 修复玩家在 UserBot 普通消息路径发送数字选择时调用缺失 `_handle_choice` 导致插件报错的问题。
 - 普通消息数字选择现在复用交互 Bot 的答题逻辑，保证两条入口的选择记录行为一致。

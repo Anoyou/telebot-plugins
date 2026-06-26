@@ -3,7 +3,7 @@
   "display_name": "诗词填空",
   "description": "古诗词填空抢答，答对获奖",
   "author": "Anoyou",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -127,9 +127,19 @@
         "mode": "announce_only",
         "winner_field": "actor.user_id",
         "amount_field": "prize"
-      }
+      },
+      "dispatch_modes": [
+        "admin_command",
+        "public_keyword"
+      ],
+      "message_channels": {
+        "admin_command": "userbot_reply",
+        "public_keyword": "interaction_bot"
+      },
+      "money_channel": "userbot_reply",
+      "participant_policy": "open_race"
     }
   ],
-  "min_telepilot_version": "0.30.4",
+  "min_telepilot_version": "0.33.0",
   "interaction_profile": "session_game"
 }

@@ -33,8 +33,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_battle",
     display_name="骰子比大小",
-    version="1.0.6",
-    min_telepilot_version="0.30.4",
+    version="1.0.7",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内骰子对战，两人各掷骰子比点数，支持下注",
@@ -74,9 +74,11 @@ MANIFEST = Manifest(
                                                  'default': 2,
                                                  'minimum': 1,
                                                  'maximum': 6}}},
-  'settlement': {'mode': 'announce_only',
-                 'winner_field': 'actor.user_id',
-                 'amount_field': 'prize'}}],
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
 

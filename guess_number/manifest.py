@@ -33,8 +33,8 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="guess_number",
     display_name="猜数字",
-    version="1.0.8",
-    min_telepilot_version="0.30.4",
+    version="1.0.9",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
@@ -82,9 +82,11 @@ MANIFEST = Manifest(
                                                    'default': 0,
                                                    'minimum': 0,
                                                    'maximum': 1000}}},
-  'settlement': {'mode': 'announce_only',
-                 'winner_field': 'actor.user_id',
-                 'amount_field': 'prize'}}],
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
 
