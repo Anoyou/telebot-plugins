@@ -76,7 +76,9 @@ def _hand_value(cards: list[tuple[str, str]]) -> tuple[int, bool]:
 
 def _format_hand(cards: list[tuple[str, str]], hide_first: bool = False) -> str:
     if hide_first:
-        return "🂠 " + " ".join(_card_str(r, s) for r, s in cards[1:]) + "  [?]"
+        hidden = cards[0]
+        visible = " ".join(_card_str(r, s) for r, s in cards[1:])
+        return f"🂠 {visible}（暗牌 {hidden[1]}）"
     return " ".join(_card_str(r, s) for r, s in cards)
 
 
@@ -526,18 +528,6 @@ class BlackjackPlugin(Plugin):
             actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": gs.trigger_message_id, "send_via": "userbot_reply"})
             if ctx.log:
                 await ctx.log("info", f"[blackjack] settle: sending +{amount} reward via userbot_reply, reply_to={gs.trigger_message_id}, player {gs.player_id}({gs.player_name})")
-        elif result in {"bust", "lose"}:
-            actions.append({"type": "send_message", "text": f"-{gs.bet}", "reply_to_message_id": gs.trigger_message_id, "send_via": "userbot_reply"})
-            if ctx.log:
-                await ctx.log("info", f"[blackjack] settle: sending -{gs.bet} deduction via userbot_reply, reply_to={gs.trigger_message_id}, player {gs.player_id}({gs.player_name})")
-            actions.append(
-                {
-                    "type": "result",
-                    "success": True,
-                    "result": {"winner_user_id": gs.player_id, "winner_name": gs.player_name, "amount": amount, "result": result},
-                    "settlement": {"mode": "announce_only", "winner_user_id": gs.player_id, "winner_name": gs.player_name, "amount": amount, "amount_field": "prize"},
-                }
-            )
         actions.append({"type": "end_session"})
         if ctx.log:
             for act in actions:
