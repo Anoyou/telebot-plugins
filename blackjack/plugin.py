@@ -278,7 +278,7 @@ class BlackjackPlugin(Plugin):
 
     async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int, event_type: str = "keyword") -> list[dict[str, Any]]:
         player_id, player_name = _interaction_start_player(payload)
-        bet = _positive_int(payload.get("prize") or payload.get("bet") or _interaction_amount(payload), 10, minimum=1)
+        bet = _positive_int(_interaction_amount(payload) or payload.get("bet") or payload.get("prize"), 10, minimum=1)
         timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
         game_key = (chat_id, player_id)
         async with self._get_lock(chat_id):
@@ -350,7 +350,7 @@ class BlackjackPlugin(Plugin):
                 gs.player_cards.append(_deal_card())
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
-                    gs.finished = True
+                    self._dealer_finish(gs)
                     self._games.pop(game_key, None)
                     return await self._interaction_settle_actions(ctx, gs, "bust", _interaction_message_id(payload))
                 if p_val == 21:
@@ -387,7 +387,7 @@ class BlackjackPlugin(Plugin):
                 gs.player_cards.append(_deal_card())
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
-                    gs.finished = True
+                    self._dealer_finish(gs)
                     self._games.pop(game_key, None)
                     return await self._interaction_settle_actions(ctx, gs, "bust", _interaction_message_id(payload))
             self._dealer_finish(gs)
@@ -438,7 +438,7 @@ class BlackjackPlugin(Plugin):
                 gs.player_cards.append(_deal_card())
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
-                    gs.finished = True
+                    self._dealer_finish(gs)
                     self._games.pop(game_key, None)
                     return await self._interaction_settle_actions(ctx, gs, "bust", reply_to)
                 if p_val == 21:
@@ -484,7 +484,7 @@ class BlackjackPlugin(Plugin):
                 gs.player_cards.append(_deal_card())
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
-                    gs.finished = True
+                    self._dealer_finish(gs)
                     self._games.pop(game_key, None)
                     return await self._interaction_settle_actions(ctx, gs, "bust", reply_to)
                 # Double forces stand — fall through to dealer
@@ -668,7 +668,7 @@ class BlackjackPlugin(Plugin):
                 gs.player_cards.append(_deal_card())
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
-                    gs.finished = True
+                    self._dealer_finish(gs)
                     reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet, gs.player_name)
                     await event.reply(reply, parse_mode="html")
                     self._games.pop(game_key, None)

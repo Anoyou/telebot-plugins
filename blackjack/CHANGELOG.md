@@ -1,4 +1,9 @@
 # 更新日志
+## 1.0.17 (2026-06-26)
+- 修复下注金额取值优先级：优先取玩家实际转账金额（amount），而非规则配置的固定值（prize）。
+- 修复玩家爆牌后庄家不补牌的问题：爆牌时也执行 _dealer_finish，展示庄家完整手牌。
+- 玩家抓牌无上限限制，可以一直要牌直到停牌或爆牌。
+
 ## 1.0.16 (2026-06-26)
 - 修复 payment_confirmed 触发时 trigger_message_id 取错消息的问题：payment_confirmed 的 message_id 是转账通知（bot发的），参与者的"+数字"消息在 reply_to.message_id 里。
 
