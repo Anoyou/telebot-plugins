@@ -134,7 +134,12 @@ def _status_template(
     message: str,
     payload: dict[str, Any] | None = None,
 ) -> str:
-    values = {"icon": icon, "message": message, **(payload or {})}
+    _p = payload or {}
+    try:
+        message = message.format_map(_SafeTemplateDict(_p))
+    except Exception:
+        pass
+    values = {"icon": icon, "message": message, **_p}
     return _cfg_template(ctx, "promote_status_template", PROMOTE_STATUS_TEMPLATE_DEFAULT, values)
 
 

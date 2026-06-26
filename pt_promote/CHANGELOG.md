@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.15 (2026-06-26)
+- 修复状态消息模板中 `{torrent_id}` 等占位符未被实际值替换的 bug。原因是 `_status_template` 把 message 当作一个值传给外层模板，`format_map` 只替换顶层占位符，message 内部的变量不会被递归处理。现在先用 payload 预格式化 message 再传入外层模板。
+
+## 1.0.14 (2026-06-19)
 ## 1.0.14 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。
 - 保留原有 UserBot 命令触发，交互 Bot 入口只负责触发和高频互动承接，不改变插件本体配置。
