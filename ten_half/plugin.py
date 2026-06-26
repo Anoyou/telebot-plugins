@@ -1312,7 +1312,10 @@ class TenHalfPlugin(Plugin):
     async def _ix_payment_join(
         self, ctx: PluginContext, payload: dict[str, Any], cid: int,
     ) -> list[dict[str, Any]]:
-        """payment_confirmed: 玩家转账给管理员(userbot)后自动加入大厅。"""
+        """payment_confirmed: 玩家转账给管理员(userbot)。
+
+        有活跃大厅 → 加入；没有大厅 → 用转账金额作为底注自动创建大厅并加入。
+        """
         payer_id, payer_name = _ie_payer(payload)
         amount = _ie_payment_amount(payload)
         mid = _ie_mid(payload)
@@ -1328,23 +1331,31 @@ class TenHalfPlugin(Plugin):
         async with self._lock(cid):
             g = self._games.get(cid)
 
-            # 没有活跃大厅 → 拒绝
+            # 没有活跃大厅 → 用转账金额作为底注自动创建大厅
             if not g or g.finished or g.phase != "lobby":
+                if amount <= 0:
+                    return [{
+                        "type": "send_message",
+                        "text": "⚠️ 转账金额无效。",
+                        "reply_to_message_id": mid,
+                    }]
+
+                g = TenHalfGame(
+                    chat_id=cid, bet=amount,
+                    phase="lobby", started_at=time.monotonic(),
+                    via_interaction=True,
+                )
+                self._games[cid] = g
                 if ctx.log:
                     await ctx.log("info",
-                        f"[ten_half] payment_rejected: no active lobby, "
-                        f"payer={payer_id}, chat_id={cid}")
-                return [{
-                    "type": "send_message",
-                    "text": "⚠️ 当前没有进行中的十点半大厅，请等待开局后再转账加入。",
-                    "reply_to_message_id": mid,
-                }]
+                        f"[ten_half] lobby_created_by_payment: chat_id={cid}, "
+                        f"bet={amount}, creator={payer_id} ({payer_name})")
 
-            # 校验金额
-            if amount < g.bet:
+            # 校验金额（已有大厅时必须 >= 底注）
+            elif amount < g.bet:
                 return [{
                     "type": "send_message",
-                    "text": f"⚠️ 转账金额不足，需要 {g.bet}，你转了 {amount}。",
+                    "text": f"⚠️ 转账金额不足，底注 {g.bet}，你转了 {amount}。",
                     "reply_to_message_id": mid,
                 }]
 
@@ -1372,13 +1383,32 @@ class TenHalfPlugin(Plugin):
             if ctx.log:
                 await ctx.log("info",
                     f"[ten_half] player_joined: uid={payer_id}, name={payer_name}, "
-                    f"via=payment, count={cnt}/{self._max_players}, chat_id={cid}")
+                    f"via=payment, amount={amount}, count={cnt}/{self._max_players}, chat_id={cid}")
 
             result: list[dict[str, Any]] = [{
                 "type": "send_message",
                 "text": f"✅ {payer_name} 转账 {amount} 加入成功！({cnt}/{self._max_players})",
                 "reply_to_message_id": mid,
             }]
+
+            # 仅大厅刚创建时发大厅公告
+            if cnt == 1:
+                lobby_text = (
+                    f"🃏 <b>十点半开局！</b>\n"
+                    f"💰 底注: {amount}\n\n"
+                    f"📢 请转账 <b>{amount}</b> 给管理员（本群 userbot）加入游戏\n"
+                    f"⏰ 等待玩家加入中... ({self._lobby_timeout}秒)"
+                )
+                result.append({
+                    "type": "send_message",
+                    "text": lobby_text,
+                    "parse_mode": "html",
+                    "reply_to_message_id": mid,
+                })
+                # 启动大厅超时
+                self._track(asyncio.create_task(
+                    self._lobby_timeout_task(cid, g.started_at, ctx),
+                ))
 
             # 人满了自动进入选庄
             if cnt >= self._max_players:
