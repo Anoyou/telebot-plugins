@@ -3,7 +3,7 @@
   "display_name": "21点",
   "description": "经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
   "author": "Anoyou",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -74,7 +74,7 @@
       },
       "session_policy": {
         "ttl_seconds": 120,
-        "duplicate_start": "reject",
+        "duplicate_start": "allow",
         "close_on": [
           "winner",
           "timeout",
