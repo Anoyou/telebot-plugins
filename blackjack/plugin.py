@@ -295,7 +295,7 @@ class BlackjackPlugin(Plugin):
                     f"<b>🃏 21点</b> · {player_name} 下注 {bet} 筹码\n\n"
                     f"庄家：{_format_hand(dealer_cards, hide_first=True)}\n"
                     f"你的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
-                    "直接发送：要牌 / 停牌 / 加倍"
+                    "点击下方按钮操作 👇"
                 ),
                 "parse_mode": "html",
                 "reply_to_message_id": _interaction_message_id(payload),
