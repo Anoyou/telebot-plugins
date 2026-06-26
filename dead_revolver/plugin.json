@@ -1,0 +1,62 @@
+{
+  "name": "dead_revolver",
+  "display_name": "死亡左轮",
+  "description": "群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
+  "author": "Anoyou",
+  "version": "1.0.0",
+  "entry": "plugin.py",
+  "permissions": ["send_message", "edit_message", "read_chat", "delete_message"],
+  "min_telebot_version": "0.10.0",
+  "cleanup_mode": "resource",
+  "commands": ["dr", "dr_start"],
+  "tags": ["game", "revolver", "russian_roulette", "interactive"],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "single",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "license": "MIT",
+  "category": "interactive",
+  "interaction_entries": [
+    {
+      "key": "join_paid_game",
+      "title": "转账加入游戏",
+      "description": "用户转账命中后自动加入当前等待中的死亡左轮游戏。",
+      "interaction_profile": "session_game",
+      "launch_mode": "bridge",
+      "session_scope": "chat",
+      "events": ["payment_confirmed", "keyword", "callback_query", "session_close"],
+      "preserve_command_trigger": true,
+      "payload_contract": {
+        "required_envelope": ["source", "actor"],
+        "required_event_fields": ["type", "chat_id"]
+      },
+      "result_contract": {
+        "actions": ["send_message", "result"],
+        "send_via": ["interaction_bot", "userbot_reply", "bbot_notice"]
+      },
+      "settlement": {
+        "mode": "announce_only",
+        "winner_field": "actor.user_id",
+        "amount_field": "prize"
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "entry_fee": {
+            "type": "integer",
+            "title": "门票金额",
+            "description": "每个玩家的入场费，发送 dr <金额> 或用此默认值",
+            "default": 100,
+            "minimum": 1
+          }
+        },
+        "required": ["entry_fee"]
+      }
+    }
+  ],
+  "min_telepilot_version": "0.30.4",
+  "interaction_profile": "session_game"
+}

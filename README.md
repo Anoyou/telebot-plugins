@@ -15,6 +15,7 @@ TelePilot 远程插件仓库。
 | [dice_grid_hunt](./dice_grid_hunt/) | `,dicegrid 金额` | 九宫格骰子图片竞猜 |
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
 | [sum](./sum/) | `,sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
+| [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
 
 ## byRBQ 迁移插件（Pagermaid → TelePilot）
 
