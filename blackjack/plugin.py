@@ -293,11 +293,11 @@ class BlackjackPlugin(Plugin):
                 player_id=player_id,
                 player_name=player_name,
                 started_at=time.monotonic(),
-                trigger_message_id=_interaction_message_id(payload) if event_type == "keyword" else None,
+                trigger_message_id=_interaction_message_id(payload),
             )
             p_val, _ = _hand_value(player_cards)
             if ctx.log:
-                await ctx.log("info", f"[blackjack] _interaction_start: player_id={player_id}, player_name={player_name}, bet={bet}, initial_cards={_format_hand(player_cards)}")
+                await ctx.log("info", f"[blackjack] _interaction_start: event_type={event_type}, player_id={player_id}, player_name={player_name}, bet={bet}, trigger_msg_id={_interaction_message_id(payload)}, source_msg_id={payload.get('source_message_id')}, message_id={payload.get('message_id')}, initial_cards={_format_hand(player_cards)}")
             if p_val == 21:
                 gs.finished = True
                 return await self._interaction_settle_actions(ctx, gs, "blackjack", _interaction_message_id(payload))
@@ -525,7 +525,7 @@ class BlackjackPlugin(Plugin):
             amount = int(gs.bet * 1.5) if result == "blackjack" else gs.bet
             actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": gs.trigger_message_id, "send_via": "userbot_reply"})
             if ctx.log:
-                await ctx.log("info", f"[blackjack] settle: sending +{amount} reward via userbot_reply for player {gs.player_id}({gs.player_name})")
+                await ctx.log("info", f"[blackjack] settle: sending +{amount} reward via userbot_reply, reply_to={gs.trigger_message_id}, player {gs.player_id}({gs.player_name})")
             actions.append(
                 {
                     "type": "result",
