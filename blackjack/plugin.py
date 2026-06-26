@@ -80,26 +80,26 @@ def _format_hand(cards: list[tuple[str, str]], hide_first: bool = False) -> str:
     return " ".join(_card_str(r, s) for r, s in cards)
 
 
-def _format_result(player_cards, dealer_cards, result: str, bet: int) -> str:
+def _format_result(player_cards, dealer_cards, result: str, bet: int, player_name: str = "玩家") -> str:
     p_val, _ = _hand_value(player_cards)
     d_val, _ = _hand_value(dealer_cards)
     lines = [
         f"<b>🃏 21点 结算</b>",
         f"",
         f"庄家：{_format_hand(dealer_cards)}（{d_val}点）",
-        f"你的牌：{_format_hand(player_cards)}（{p_val}点）",
+        f"{player_name}的牌：{_format_hand(player_cards)}（{p_val}点）",
         f"",
     ]
     if result == "win":
-        lines.append(f"🎉 你赢了！+{bet} 筹码")
+        lines.append(f"🎉 你赢了！+{bet} 蝌蚪")
     elif result == "lose":
-        lines.append(f"😢 你输了 -{bet} 筹码")
+        lines.append(f"😢 你输了 -{bet} 蝌蚪")
     elif result == "push":
-        lines.append(f"🤝 平局，筹码退回")
+        lines.append(f"🤝 平局，蝌蚪退回")
     elif result == "blackjack":
-        lines.append(f"💰 Blackjack！+{int(bet * 1.5)} 筹码")
+        lines.append(f"💰 Blackjack！+{int(bet * 1.5)} 蝌蚪")
     elif result == "bust":
-        lines.append(f"💥 爆了！-{bet} 筹码")
+        lines.append(f"💥 爆了！-{bet} 蝌蚪")
     return "\n".join(lines)
 
 
@@ -117,6 +117,7 @@ class GameState:
     started_at: float = 0.0
     doubled: bool = False
     finished: bool = False
+    trigger_message_id: int | None = None  # 玩家触发消息ID，用于奖励 reply_to
 
 
 def _payload_event(payload: dict[str, Any]) -> dict[str, Any]:
@@ -292,6 +293,7 @@ class BlackjackPlugin(Plugin):
                 player_id=player_id,
                 player_name=player_name,
                 started_at=time.monotonic(),
+                trigger_message_id=_interaction_message_id(payload),
             )
             p_val, _ = _hand_value(player_cards)
             if ctx.log:
@@ -306,11 +308,10 @@ class BlackjackPlugin(Plugin):
             {
                 "type": "send_message",
                 "text": (
-                    f"<b>🃏 21点</b> · {player_name} 下注 {bet} 筹码\n\n"
+                    f"<b>🃏 21点</b> · {player_name} 下注 {bet} 蝌蚪\n\n"
                     f"庄家：{_format_hand(dealer_cards, hide_first=True)}\n"
-                    f"你的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
-                    "点击下方按钮操作 👇\n\n"
-                    f"🔔 <a href=\"tg://user?id={player_id}\">{player_name}</a>"
+                    f"{player_name}的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
+                    f"请 <a href=\"tg://user?id={player_id}\">{player_name}</a> 点击下方按钮进行操作"
                 ),
                 "parse_mode": "html",
                 "reply_to_message_id": _interaction_message_id(payload),
@@ -362,9 +363,9 @@ class BlackjackPlugin(Plugin):
                         "text": (
                             f"<b>🃏 21点</b> · {gs.player_name}\n\n"
                             f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n"
-                            f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
+                            f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
                             "继续操作：\n\n"
-                            f"🔔 <a href=\"tg://user?id={actor_id}\">{gs.player_name}</a>"
+                            f"请 <a href=\"tg://user?id={actor_id}\">{gs.player_name}</a> 点击下方按钮进行操作"
                         ),
                         "parse_mode": "html",
                         "reply_to_message_id": _interaction_message_id(payload),
@@ -452,9 +453,9 @@ class BlackjackPlugin(Plugin):
                         "text": (
                             f"<b>🃏 21点</b> · {gs.player_name}\n\n"
                             f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n"
-                            f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
+                            f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
                             "继续操作：\n\n"
-                            f"🔔 <a href=\"tg://user?id={owner_id}\">{gs.player_name}</a>"
+                            f"请 <a href=\"tg://user?id={owner_id}\">{gs.player_name}</a> 点击下方按钮进行操作"
                         ),
                         "parse_mode": "html",
                         "reply_to_message_id": reply_to,
@@ -518,11 +519,11 @@ class BlackjackPlugin(Plugin):
 
     async def _interaction_settle_actions(self, ctx: PluginContext, gs: GameState, result: str, reply_to: int | None) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = [
-            {"type": "send_message", "text": _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet), "parse_mode": "html", "reply_to_message_id": reply_to}
+            {"type": "send_message", "text": _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet, gs.player_name), "parse_mode": "html", "reply_to_message_id": reply_to}
         ]
         if result in {"win", "blackjack"}:
             amount = int(gs.bet * 1.5) if result == "blackjack" else gs.bet
-            actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": reply_to, "send_via": "userbot_reply"})
+            actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": gs.trigger_message_id, "send_via": "userbot_reply"})
             if ctx.log:
                 await ctx.log("info", f"[blackjack] settle: sending +{amount} reward via userbot_reply for player {gs.player_id}({gs.player_name})")
             actions.append(
@@ -569,7 +570,7 @@ class BlackjackPlugin(Plugin):
                 p_val, _ = _hand_value(gs.player_cards)
                 await event.reply(
                     f"🃏 你已有一局进行中的牌局！\n"
-                    f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n"
+                    f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n"
                     f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n\n"
                     f"操作：,{self._command} 要牌 / ,{self._command} 停牌 / ,{self._command} 加倍",
                     parse_mode="html",
@@ -596,6 +597,7 @@ class BlackjackPlugin(Plugin):
                 player_id=sender_id,
                 player_name=player_name,
                 started_at=time.monotonic(),
+                trigger_message_id=int(getattr(event, "id", 0) or 0) or None,
             )
 
             # 检查 Blackjack
@@ -603,16 +605,16 @@ class BlackjackPlugin(Plugin):
             if p_val == 21:
                 gs.finished = True
                 result = "blackjack"
-                reply = _format_result(player_cards, dealer_cards, result, bet)
+                reply = _format_result(player_cards, dealer_cards, result, bet, player_name)
                 await event.reply(reply, parse_mode="html")
                 return
 
             self._games[game_key] = gs
             p_val, _ = _hand_value(player_cards)
             msg = await event.reply(
-                f"<b>🃏 21点</b> · 下注 {bet} 筹码\n\n"
+                f"<b>🃏 21点</b> · 下注 {bet} 蝌蚪\n\n"
                 f"庄家：{_format_hand(dealer_cards, hide_first=True)}\n"
-                f"你的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
+                f"{player_name}的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
                 f"操作：\n"
                 f"  ,{self._command} 要牌 — 再拿一张\n"
                 f"  ,{self._command} 停牌 — 不要了\n"
@@ -640,7 +642,7 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     # 爆了
                     gs.finished = True
-                    reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet)
+                    reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet, gs.player_name)
                     await event.reply(reply, parse_mode="html")
                     self._games.pop(game_key, None)
                     return
@@ -649,7 +651,7 @@ class BlackjackPlugin(Plugin):
                     return await self._dealer_turn(chat_id, player_id, event, ctx)
                 else:
                     await event.reply(
-                        f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
+                        f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
                         f"继续：,{self._command} 要牌 / ,{self._command} 停牌",
                         parse_mode="html",
                     )
@@ -667,7 +669,7 @@ class BlackjackPlugin(Plugin):
                 p_val, _ = _hand_value(gs.player_cards)
                 if p_val > 21:
                     gs.finished = True
-                    reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet)
+                    reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet, gs.player_name)
                     await event.reply(reply, parse_mode="html")
                     self._games.pop(game_key, None)
                     return
@@ -706,7 +708,7 @@ class BlackjackPlugin(Plugin):
             result = "blackjack"
 
         gs.finished = True
-        reply = _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet)
+        reply = _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet, gs.player_name)
         await event.reply(reply, parse_mode="html")
         self._games.pop(game_key, None)
 
