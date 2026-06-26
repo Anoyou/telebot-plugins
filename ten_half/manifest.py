@@ -63,7 +63,7 @@ MANIFEST = Manifest(
         "interaction_profile": "session_game",
         "launch_mode": "hybrid",
         "session_scope": "chat",
-        "events": ["payment_confirmed", "keyword", "message", "session_close"],
+        "events": ["payment_confirmed", "keyword", "message", "callback_query", "session_close"],
         "preserve_command_trigger": True,
         "command_fallback": {"enabled": True, "command": "10d", "mode": "hint_only"},
         "session_policy": {

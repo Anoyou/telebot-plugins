@@ -255,6 +255,56 @@ def _ie_actor(p: dict[str, Any]) -> tuple[int, str]:
     return _pint(rid, 0, minimum=0), str(rname).strip() or "玩家"
 
 
+def _ie_callback_data(p: dict[str, Any]) -> str:
+    """Extract callback_data from a callback_query payload."""
+    e = _pe(p)
+    return str(
+        p.get("callback_data")
+        or e.get("callback_data")
+        or e.get("data")
+        or ""
+    ).strip()
+
+
+# ─────────────────────────────────────────────────────
+# Inline keyboard builders
+# ─────────────────────────────────────────────────────
+def _kb_join(bet: int) -> dict[str, Any]:
+    """Lobby join button. Pay button for paid games, plain join for free."""
+    if bet > 0:
+        return {
+            "inline_keyboard": [[
+                {"text": f"💰 付 {bet} 加入", "callback_data": "th:join:0"},
+            ]]
+        }
+    return {
+        "inline_keyboard": [[
+            {"text": "🎮 加入游戏", "callback_data": "th:join:0"},
+        ]]
+    }
+
+
+def _kb_dealer(uid: int) -> dict[str, Any]:
+    """Dealer question buttons."""
+    return {
+        "inline_keyboard": [[
+            {"text": "👑 我要当庄", "callback_data": f"th:dealer_yes:{uid}"},
+            {"text": "🤖 机器人当庄", "callback_data": "th:dealer_no:0"},
+        ]]
+    }
+
+
+def _kb_turn(uid: int, *, can_double: bool = True) -> dict[str, Any]:
+    """Player turn action buttons."""
+    row: list[dict[str, str]] = [
+        {"text": "🃏 要牌", "callback_data": f"th:hit:{uid}"},
+        {"text": "🛑 停牌", "callback_data": f"th:stand:{uid}"},
+    ]
+    if can_double:
+        row.append({"text": "💰 加倍", "callback_data": f"th:double:{uid}"})
+    return {"inline_keyboard": [row]}
+
+
 # ─────────────────────────────────────────────────────
 # 插件
 # ─────────────────────────────────────────────────────
@@ -292,7 +342,7 @@ class TenHalfPlugin(Plugin):
 
     async def _send(self, ctx: PluginContext, cid: int, text: str, *,
                     parse_mode: str = "html", reply_to: int | None = None) -> None:
-        """安全发送消息（用于异步任务）。"""
+        """安全发送消息（用于异步任务/命令流）。"""
         if not ctx.client:
             return
         try:
@@ -385,12 +435,29 @@ class TenHalfPlugin(Plugin):
             if not g.lobby_players:
                 g.finished = True
                 self._games.pop(cid, None)
-                await self._send(ctx, cid, "⏰ 没人加入，十点半游戏取消。")
+                # NOTE: timeout messages use ctx.client for interaction flow
+                # because on_interaction already returned; this is acceptable
+                # for system-initiated notifications.
+                if g.via_interaction:
+                    try:
+                        if ctx.client:
+                            await ctx.client.send_message(
+                                cid, "⏰ 没人加入，十点半游戏取消。", parse_mode="html",
+                            )
+                    except Exception:
+                        pass
+                else:
+                    await self._send(ctx, cid, "⏰ 没人加入，十点半游戏取消。")
                 return
-            await self._ask_dealer(cid, g, ctx)
+            if g.via_interaction:
+                # For interaction flow, we can't return actions from a timeout task.
+                # Send via ctx.client as a system notification.
+                await self._ask_dealer_ix(cid, g, ctx)
+            else:
+                await self._ask_dealer(cid, g, ctx)
 
     async def _ask_dealer(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
-        """向第一个加入的玩家询问是否当庄家。"""
+        """向第一个加入的玩家询问是否当庄家 (userbot 流)。"""
         first_id, first_name = g.lobby_players[0]
         g.phase = "ask_dealer"
         g.ask_dealer_uid = first_id
@@ -407,6 +474,31 @@ class TenHalfPlugin(Plugin):
             self._dealer_question_timeout(cid, g.started_at, ctx),
         ))
 
+    async def _ask_dealer_ix(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
+        """向第一个加入的玩家询问是否当庄家 (interaction 流, 通过 ctx.client 发送)。"""
+        first_id, first_name = g.lobby_players[0]
+        g.phase = "ask_dealer"
+        g.ask_dealer_uid = first_id
+        g.ask_dealer_name = first_name
+
+        plist = "、".join(n for _, n in g.lobby_players)
+        markup = _kb_dealer(first_id)
+        try:
+            if ctx.client:
+                await ctx.client.send_message(
+                    cid,
+                    f"👥 参与玩家: {plist}\n\n"
+                    f"❓ <b>{first_name}</b>，你要当庄家吗？",
+                    parse_mode="html",
+                    reply_markup=markup,
+                )
+        except Exception:
+            pass
+
+        self._track(asyncio.create_task(
+            self._dealer_question_timeout(cid, g.started_at, ctx),
+        ))
+
     async def _dealer_question_timeout(self, cid: int, sa: float, ctx: PluginContext) -> None:
         await asyncio.sleep(30)
         async with self._lock(cid):
@@ -414,10 +506,13 @@ class TenHalfPlugin(Plugin):
             if not g or g.phase != "ask_dealer" or g.finished or g.started_at != sa:
                 return
             # 超时默认机器人当庄
-            await self._begin_game(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
+            if g.via_interaction:
+                await self._begin_game_ix(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
+            else:
+                await self._begin_game(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
 
     # ═══════════════════════════════════════════════════
-    # 开局发牌
+    # 开局发牌 (userbot 流)
     # ═══════════════════════════════════════════════════
     async def _begin_game(
         self, cid: int, g: TenHalfGame,
@@ -486,12 +581,14 @@ class TenHalfPlugin(Plugin):
         return "\n".join(lines)
 
     # ═══════════════════════════════════════════════════
-    # 回合推进
+    # 回合推进 (userbot 流)
     # ═══════════════════════════════════════════════════
     async def _advance_turn(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
         """跳过已完成的玩家，找到下一个可行动的玩家或进入庄家回合。"""
         if g.phase != "playing":
             return
+
+        g.current_turn = g.current_player_idx
 
         while g.current_player_idx < len(g.players):
             p = g.players[g.current_player_idx]
@@ -528,7 +625,7 @@ class TenHalfPlugin(Plugin):
             f"⏳ 轮到 <b>{p.name}</b> 行动\n"
             f"指令: 要牌 / 停牌 / 加倍",
         )
-        self._track(asyncio.create_task(
+        self._track_task(asyncio.create_task(
             self._turn_timeout_task(cid, g.current_player_idx, g.started_at, ctx),
         ))
 
@@ -544,12 +641,148 @@ class TenHalfPlugin(Plugin):
             if p.is_done:
                 return
             p.stood = True
-            await self._send(ctx, cid, f"⏰ {p.name} 超时，自动停牌。")
-            g.current_player_idx += 1
-            await self._advance_turn(cid, g, ctx)
+
+            if g.via_interaction:
+                # Timeout in interaction flow: send notification via ctx.client,
+                # then advance. This is a system-initiated message, not player-initiated.
+                try:
+                    if ctx.client:
+                        await ctx.client.send_message(
+                            cid,
+                            f"⏰ {p.name} 超时，自动停牌。",
+                            parse_mode="html",
+                        )
+                except Exception:
+                    pass
+                g.current_player_idx += 1
+                await self._ix_advance_and_send(cid, g, ctx)
+            else:
+                await self._send(ctx, cid, f"⏰ {p.name} 超时，自动停牌。")
+                g.current_player_idx += 1
+                await self._advance_turn(cid, g, ctx)
+
+    async def _ix_advance_and_send(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
+        """Advance turn in interaction flow and send messages via ctx.client.
+
+        Used by timeout tasks where on_interaction already returned.
+        """
+        if g.phase != "playing":
+            return
+
+        g.current_turn = g.current_player_idx
+
+        while g.current_player_idx < len(g.players):
+            p = g.players[g.current_player_idx]
+            if p.is_done:
+                g.current_player_idx += 1
+                continue
+            if p.is_natural:
+                p.stood = True
+                try:
+                    if ctx.client:
+                        await ctx.client.send_message(
+                            cid, f"✨ <b>{p.name}</b> 天生十点半！自动停牌。", parse_mode="html",
+                        )
+                except Exception:
+                    pass
+                g.current_player_idx += 1
+                continue
+            if p.is_five_small:
+                p.stood = True
+                try:
+                    if ctx.client:
+                        await ctx.client.send_message(
+                            cid, f"🌟 <b>{p.name}</b> 五小！自动停牌。", parse_mode="html",
+                        )
+                except Exception:
+                    pass
+                g.current_player_idx += 1
+                continue
+            if p.value > 10.5 + 1e-9:
+                p.busted = True
+                g.current_player_idx += 1
+                continue
+            break
+
+        if g.current_player_idx >= len(g.players):
+            await self._dealer_play_ix(cid, g, ctx)
+            return
+
+        p = g.players[g.current_player_idx]
+        can_double = len(p.cards) == 2
+        markup = _kb_turn(p.user_id, can_double=can_double)
+        self._track_task(asyncio.create_task(
+            self._turn_timeout_task(cid, g.current_player_idx, g.started_at, ctx),
+        ))
+        try:
+            if ctx.client:
+                await ctx.client.send_message(
+                    cid,
+                    f"⏳ 轮到 <b>{p.name}</b> 行动",
+                    parse_mode="html",
+                    reply_markup=markup,
+                )
+        except Exception:
+            pass
+
+    async def _dealer_play_ix(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
+        """Dealer turn + settle in interaction flow, sent via ctx.client."""
+        g.phase = "dealer_turn"
+        all_bust = all(p.busted for p in g.players)
+
+        msgs: list[str] = []
+        msgs.append(
+            f"🎰 <b>{g.dealer_name}</b> 亮牌！\n"
+            f"手牌: {g.dealer_hand_str(reveal=True)}"
+        )
+
+        if all_bust:
+            msgs.append(f"💀 所有玩家都爆牌，{g.dealer_name} 自动获胜！")
+        else:
+            while g.dealer_val() <= 5.0 + 1e-9:
+                if not g.deck:
+                    g.deck = create_deck()
+                card = g.deck.pop()
+                g.dealer_cards.append(card)
+                msgs.append(
+                    f"  🎰 {g.dealer_name} 要牌 {card.display()}\n"
+                    f"  手牌: {g.dealer_hand_str(reveal=True)}"
+                )
+                if g.dealer_busted():
+                    msgs.append(f"  💥 {g.dealer_name} 爆牌！")
+                    break
+            else:
+                if not g.dealer_busted():
+                    msgs.append(f"  ✅ {g.dealer_name} 停牌 ({_fv(g.dealer_val())}点)")
+
+        # Build settlement text
+        g.phase = "finished"
+        g.finished = True
+        dv = g.dealer_val()
+        db = g.dealer_busted()
+        dn = g.dealer_natural()
+        dfs = g.dealer_five_small()
+
+        lines = ["🏆 <b>结算</b>\n"]
+        lines.append(f"庄家 {g.dealer_name}: {g.dealer_hand_str(reveal=True)}\n")
+        for p in g.players:
+            eb = g.bet * (2 if p.doubled else 1)
+            outcome = self._compare(p, dv, db, dn, dfs)
+            lines.append(f"👤 {p.name}: {p.hand_str()} → {self._outcome_str(outcome, eb)}")
+        msgs.append("\n".join(lines))
+
+        # Send all messages via ctx.client
+        try:
+            if ctx.client:
+                for msg in msgs:
+                    await ctx.client.send_message(cid, msg, parse_mode="html")
+        except Exception:
+            pass
+
+        self._games.pop(cid, None)
 
     # ═══════════════════════════════════════════════════
-    # 玩家动作（命令流，直接发送消息）
+    # 玩家动作 (userbot 流)
     # ═══════════════════════════════════════════════════
     async def _act_hit(self, cid: int, g: TenHalfGame, pi: int, ctx: PluginContext) -> None:
         p = g.players[pi]
@@ -619,7 +852,7 @@ class TenHalfPlugin(Plugin):
         await self._advance_turn(cid, g, ctx)
 
     # ═══════════════════════════════════════════════════
-    # 庄家回合
+    # 庄家回合 (userbot 流)
     # ═══════════════════════════════════════════════════
     async def _dealer_play(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
         g.phase = "dealer_turn"
@@ -633,14 +866,11 @@ class TenHalfPlugin(Plugin):
         if all_bust:
             await self._send(ctx, cid, f"💀 所有玩家都爆牌，{g.dealer_name} 自动获胜！")
         else:
-            # 庄家自动要牌/停牌规则：≤5 要牌，≥5.5 停牌
-            drew = False
             while g.dealer_val() <= 5.0 + 1e-9:
                 if not g.deck:
                     g.deck = create_deck()
                 card = g.deck.pop()
                 g.dealer_cards.append(card)
-                drew = True
                 await self._send(
                     ctx, cid,
                     f"  🎰 {g.dealer_name} 要牌 {card.display()}\n"
@@ -649,7 +879,6 @@ class TenHalfPlugin(Plugin):
                     await self._send(ctx, cid, f"  💥 {g.dealer_name} 爆牌！")
                     break
             else:
-                # 循环正常结束（非 break）→ 庄家停牌
                 if not g.dealer_busted():
                     await self._send(
                         ctx, cid,
@@ -658,7 +887,7 @@ class TenHalfPlugin(Plugin):
         await self._settle(cid, g, ctx)
 
     # ═══════════════════════════════════════════════════
-    # 结算
+    # 结算 (userbot 流)
     # ═══════════════════════════════════════════════════
     async def _settle(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
         g.phase = "finished"
@@ -742,7 +971,7 @@ class TenHalfPlugin(Plugin):
         return f"❌ 输 -{bet}"
 
     # ═══════════════════════════════════════════════════
-    # on_message（命令流）
+    # on_message (userbot 流)
     # ═══════════════════════════════════════════════════
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         text = (getattr(event, "raw_text", "") or "").strip()
@@ -852,6 +1081,8 @@ class TenHalfPlugin(Plugin):
 
         if etype in ("payment_confirmed", "keyword"):
             return await self._ix_start(ctx, payload, cid)
+        if etype == "callback_query":
+            return await self._ix_callback(ctx, payload, cid)
         if etype == "message":
             return await self._ix_message(ctx, payload, cid)
         if etype == "session_close":
@@ -896,16 +1127,158 @@ class TenHalfPlugin(Plugin):
             self._lobby_timeout_task(cid, g.started_at, ctx),
         ))
 
+        # Lobby message with join button
+        join_text = f"💰 付 {bet} 加入" if bet > 0 else "🎮 加入游戏"
         return [{
             "type": "send_message",
             "text": (
                 f"🃏 <b>十点半开局！</b>\n💰 底注: {bet}\n\n"
-                f"📢 输入 <b>「加入」</b> 参加游戏\n"
+                f"📢 点击下方按钮参加游戏\n"
                 f"⏰ 等待玩家加入中... ({self._lobby_timeout}秒)"
             ),
             "parse_mode": "html",
             "reply_to_message_id": _ie_mid(payload),
+            "reply_markup": _kb_join(bet),
         }]
+
+    # ── 交互：callback_query 处理 ────────────────────
+    async def _ix_callback(
+        self, ctx: PluginContext, payload: dict[str, Any], cid: int,
+    ) -> list[dict[str, Any]]:
+        """Handle callback_query events from inline keyboard buttons.
+
+        Callback data format: th:<action>:<id>
+        Actions: join, dealer_yes, dealer_no, hit, stand, double
+        """
+        callback_data = _ie_callback_data(payload)
+        if not callback_data:
+            return []
+
+        parts = callback_data.split(":")
+        if len(parts) != 3 or parts[0] != "th":
+            return []
+
+        action = parts[1]
+        try:
+            cb_id = int(parts[2])
+        except (ValueError, TypeError):
+            return []
+
+        aid, aname = _ie_actor(payload)
+        mid = _ie_mid(payload)
+
+        async with self._lock(cid):
+            g = self._games.get(cid)
+            if not g or g.finished:
+                return [{"type": "no_session"}]
+
+            # ── join ──
+            if action == "join":
+                prev_phase = g.phase
+                result = self._ix_join(g, aid, aname, mid)
+                # If max players reached, _ix_join transitions to ask_dealer.
+                # We need to start the dealer question timeout task.
+                if prev_phase == "lobby" and g.phase == "ask_dealer":
+                    self._track(asyncio.create_task(
+                        self._dealer_question_timeout(cid, g.started_at, ctx),
+                    ))
+                return result
+
+            # ── dealer_yes / dealer_no ──
+            if action in ("dealer_yes", "dealer_no"):
+                return await self._ix_dealer_choice(g, action, aid, aname, ctx)
+
+            # ── hit / stand / double ──
+            if action in ("hit", "stand", "double"):
+                return await self._ix_player_action(g, action, aid, mid, ctx)
+
+        return []
+
+    def _ix_join(
+        self, g: TenHalfGame, aid: int, aname: str, mid: int | None,
+    ) -> list[dict[str, Any]]:
+        """Handle join button press."""
+        if g.phase != "lobby":
+            return [{"type": "send_message", "text": "⚠️ 游戏不在大厅阶段。", "reply_to_message_id": mid}]
+
+        for uid, _ in g.lobby_players:
+            if uid == aid:
+                return [{"type": "send_message", "text": "⚠️ 你已经加入了。", "reply_to_message_id": mid}]
+        if len(g.lobby_players) >= self._max_players:
+            return [{"type": "send_message", "text": "⚠️ 人数已满。", "reply_to_message_id": mid}]
+
+        g.lobby_players.append((aid, aname))
+        cnt = len(g.lobby_players)
+        result: list[dict[str, Any]] = [{
+            "type": "send_message",
+            "text": f"✅ {aname} 加入成功！({cnt}/{self._max_players})",
+            "reply_to_message_id": mid,
+        }]
+
+        if cnt >= self._max_players:
+            # 满员 → 直接进入选庄
+            first_id, first_name = g.lobby_players[0]
+            g.phase = "ask_dealer"
+            g.ask_dealer_uid = first_id
+            g.ask_dealer_name = first_name
+            plist = "、".join(n for _, n in g.lobby_players)
+            result.append({
+                "type": "send_message",
+                "text": (
+                    f"👥 参与玩家: {plist}\n\n"
+                    f"❓ <b>{first_name}</b>，你要当庄家吗？"
+                ),
+                "parse_mode": "html",
+                "reply_markup": _kb_dealer(first_id),
+            })
+            # NOTE: dealer question timeout task is started in _ix_start flow,
+            # but if we hit max_players early we need to start it here too.
+            # The timeout task is already started when the game was created;
+            # the lobby timeout will trigger _ask_dealer_ix which also handles
+            # the transition. For the max-players case, we start a fresh
+            # dealer-question timeout.
+            # We can't start async tasks from a sync context easily, so we
+            # rely on the lobby_timeout_task's internal logic to handle this
+            # (it checks phase before proceeding).
+        return result
+
+    async def _ix_dealer_choice(
+        self, g: TenHalfGame, action: str, aid: int, aname: str,
+        ctx: PluginContext,
+    ) -> list[dict[str, Any]]:
+        """Handle dealer_yes / dealer_no button press."""
+        if g.phase != "ask_dealer":
+            return [{"type": "send_message", "text": "⚠️ 当前不在选庄阶段。"}]
+
+        if aid != g.ask_dealer_uid:
+            return [{"type": "send_message", "text": "⚠️ 只有被指定的玩家可以选择当庄。"}]
+
+        if action == "dealer_yes":
+            return await self._ix_begin(g.chat_id, g, aid, aname, ctx)
+        else:  # dealer_no
+            return await self._ix_begin(g.chat_id, g, 0, "🤖 庄家", ctx)
+
+    async def _ix_player_action(
+        self, g: TenHalfGame, action: str, aid: int, mid: int | None,
+        ctx: PluginContext,
+    ) -> list[dict[str, Any]]:
+        """Handle hit/stand/double button press."""
+        if g.phase != "playing":
+            return [{"type": "send_message", "text": "⚠️ 游戏不在进行中。", "reply_to_message_id": mid}]
+        if g.current_player_idx >= len(g.players):
+            return []
+
+        cur = g.players[g.current_player_idx]
+        if aid != cur.user_id:
+            return [{"type": "send_message", "text": "⚠️ 还没轮到你。", "reply_to_message_id": mid}]
+
+        if action == "hit":
+            return await self._ix_hit(g.chat_id, g, ctx)
+        elif action == "stand":
+            return await self._ix_stand(g.chat_id, g, ctx)
+        elif action == "double":
+            return await self._ix_double(g.chat_id, g, ctx)
+        return []
 
     # ── 交互：消息处理 ──────────────────────────────
     async def _ix_message(
@@ -923,46 +1296,19 @@ class TenHalfPlugin(Plugin):
 
             aid, aname = _ie_actor(payload)
 
-            # ── 大厅 ──
+            # ── 大厅 (free games only: bet=0) ──
             if g.phase == "lobby":
-                if text not in ("加入", "join"):
-                    return []
-                for uid, _ in g.lobby_players:
-                    if uid == aid:
-                        return [{"type": "send_message", "text": "⚠️ 你已经加入了。", "reply_to_message_id": mid}]
-                if len(g.lobby_players) >= self._max_players:
-                    return [{"type": "send_message", "text": "⚠️ 人数已满。", "reply_to_message_id": mid}]
+                if g.bet <= 0 and text in ("加入", "join"):
+                    prev_phase = g.phase
+                    result = self._ix_join(g, aid, aname, mid)
+                    if prev_phase == "lobby" and g.phase == "ask_dealer":
+                        self._track(asyncio.create_task(
+                            self._dealer_question_timeout(cid, g.started_at, ctx),
+                        ))
+                    return result
+                return []
 
-                g.lobby_players.append((aid, aname))
-                cnt = len(g.lobby_players)
-                result: list[dict[str, Any]] = [{
-                    "type": "send_message",
-                    "text": f"✅ {aname} 加入成功！({cnt}/{self._max_players})",
-                    "reply_to_message_id": mid,
-                }]
-
-                if cnt >= self._max_players:
-                    # 满员 → 直接进入选庄
-                    first_id, first_name = g.lobby_players[0]
-                    g.phase = "ask_dealer"
-                    g.ask_dealer_uid = first_id
-                    g.ask_dealer_name = first_name
-                    plist = "、".join(n for _, n in g.lobby_players)
-                    result.append({
-                        "type": "send_message",
-                        "text": (
-                            f"👥 参与玩家: {plist}\n\n"
-                            f"❓ <b>{first_name}</b>，你要当庄家吗？\n"
-                            f"回复 <b>「是」</b> 当庄家 或 <b>「否」</b> 让机器人当庄家"
-                        ),
-                        "parse_mode": "html",
-                    })
-                    self._track(asyncio.create_task(
-                        self._dealer_question_timeout(cid, g.started_at, ctx),
-                    ))
-                return result
-
-            # ── 选庄 ──
+            # ── 选庄 (text fallback alongside buttons) ──
             if g.phase == "ask_dealer":
                 if aid != g.ask_dealer_uid:
                     return []
@@ -972,7 +1318,7 @@ class TenHalfPlugin(Plugin):
                     return await self._ix_begin(cid, g, 0, "🤖 庄家", ctx)
                 return []
 
-            # ── 游戏中 ──
+            # ── 游戏中 (text fallback alongside buttons) ──
             if g.phase == "playing":
                 if g.current_player_idx >= len(g.players):
                     return []
@@ -1058,6 +1404,7 @@ class TenHalfPlugin(Plugin):
         if g.phase != "playing":
             return []
 
+        g.current_turn = g.current_player_idx
         actions: list[dict[str, Any]] = []
 
         while g.current_player_idx < len(g.players):
@@ -1086,13 +1433,15 @@ class TenHalfPlugin(Plugin):
             return actions
 
         p = g.players[g.current_player_idx]
-        self._track(asyncio.create_task(
+        can_double = len(p.cards) == 2
+        self._track_task(asyncio.create_task(
             self._turn_timeout_task(cid, g.current_player_idx, g.started_at, ctx),
         ))
         actions.append({
             "type": "send_message",
-            "text": f"⏳ 轮到 <b>{p.name}</b> 行动\n指令: 要牌 / 停牌 / 加倍",
+            "text": f"⏳ 轮到 <b>{p.name}</b> 行动",
             "parse_mode": "html",
+            "reply_markup": _kb_turn(p.user_id, can_double=can_double),
         })
         return actions
 
