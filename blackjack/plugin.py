@@ -264,9 +264,9 @@ class BlackjackPlugin(Plugin):
         if event_type in {"payment_confirmed", "keyword"}:
             return await self._interaction_start(ctx, payload, chat_id)
         if event_type == "callback_query":
-            return await self._interaction_callback_action(payload, chat_id)
+            return await self._interaction_callback_action(ctx, payload, chat_id)
         if event_type == "message":
-            return await self._interaction_action(payload, chat_id)
+            return await self._interaction_action(ctx, payload, chat_id)
         if event_type == "session_close":
             player_id, _ = _interaction_actor(payload)
             if player_id:
@@ -294,9 +294,11 @@ class BlackjackPlugin(Plugin):
                 started_at=time.monotonic(),
             )
             p_val, _ = _hand_value(player_cards)
+            if ctx.log:
+                await ctx.log("info", f"[blackjack] _interaction_start: player_id={player_id}, player_name={player_name}, bet={bet}, initial_cards={_format_hand(player_cards)}")
             if p_val == 21:
                 gs.finished = True
-                return self._interaction_settle_actions(gs, "blackjack", _interaction_message_id(payload))
+                return await self._interaction_settle_actions(ctx, gs, "blackjack", _interaction_message_id(payload))
             self._games[game_key] = gs
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, player_id, ctx, gs.started_at, timeout)))
         p_val, _ = _hand_value(player_cards)
@@ -307,7 +309,8 @@ class BlackjackPlugin(Plugin):
                     f"<b>🃏 21点</b> · {player_name} 下注 {bet} 筹码\n\n"
                     f"庄家：{_format_hand(dealer_cards, hide_first=True)}\n"
                     f"你的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
-                    "点击下方按钮操作 👇"
+                    "点击下方按钮操作 👇\n\n"
+                    f"🔔 <a href=\"tg://user?id={player_id}\">{player_name}</a>"
                 ),
                 "parse_mode": "html",
                 "reply_to_message_id": _interaction_message_id(payload),
@@ -323,7 +326,7 @@ class BlackjackPlugin(Plugin):
             }
         ]
 
-    async def _interaction_action(self, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+    async def _interaction_action(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         action_text = _interaction_message_text(payload).lower()
         action = ""
         if action_text in {"h", "hit", "要牌"}:
@@ -335,6 +338,8 @@ class BlackjackPlugin(Plugin):
         if not action:
             return []
         actor_id, _ = _interaction_actor(payload)
+        if ctx.log:
+            await ctx.log("info", f"[blackjack] _interaction_action: action={action}, actor_id={actor_id}, chat_id={chat_id}")
         game_key = (chat_id, actor_id)
         async with self._get_lock(chat_id):
             gs = self._games.get(game_key)
@@ -346,11 +351,11 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     gs.finished = True
                     self._games.pop(game_key, None)
-                    return self._interaction_settle_actions(gs, "bust", _interaction_message_id(payload))
+                    return await self._interaction_settle_actions(ctx, gs, "bust", _interaction_message_id(payload))
                 if p_val == 21:
                     self._dealer_finish(gs)
                     self._games.pop(game_key, None)
-                    return self._interaction_settle_actions(gs, self._result_for_finished(gs), _interaction_message_id(payload))
+                    return await self._interaction_settle_actions(ctx, gs, self._result_for_finished(gs), _interaction_message_id(payload))
                 return [
                     {
                         "type": "send_message",
@@ -358,7 +363,8 @@ class BlackjackPlugin(Plugin):
                             f"<b>🃏 21点</b> · {gs.player_name}\n\n"
                             f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n"
                             f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
-                            "继续操作："
+                            "继续操作：\n\n"
+                            f"🔔 <a href=\"tg://user?id={actor_id}\">{gs.player_name}</a>"
                         ),
                         "parse_mode": "html",
                         "reply_to_message_id": _interaction_message_id(payload),
@@ -382,13 +388,13 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     gs.finished = True
                     self._games.pop(game_key, None)
-                    return self._interaction_settle_actions(gs, "bust", _interaction_message_id(payload))
+                    return await self._interaction_settle_actions(ctx, gs, "bust", _interaction_message_id(payload))
             self._dealer_finish(gs)
             result = self._result_for_finished(gs)
             self._games.pop(game_key, None)
-            return self._interaction_settle_actions(gs, result, _interaction_message_id(payload))
+            return await self._interaction_settle_actions(ctx, gs, result, _interaction_message_id(payload))
 
-    async def _interaction_callback_action(self, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+    async def _interaction_callback_action(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         """Handle callback_query events from inline keyboard buttons."""
         event = _payload_event(payload)
         callback_data = str(
@@ -414,6 +420,8 @@ class BlackjackPlugin(Plugin):
 
         # Validate sender is the game owner
         sender_id, _ = _interaction_actor(payload)
+        if ctx.log:
+            await ctx.log("info", f"[blackjack] _interaction_callback_action: callback_data={callback_data}, action={action}, owner_id={owner_id}, sender_id={sender_id}")
         if sender_id != owner_id:
             return []
 
@@ -431,12 +439,12 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     gs.finished = True
                     self._games.pop(game_key, None)
-                    return self._interaction_settle_actions(gs, "bust", reply_to)
+                    return await self._interaction_settle_actions(ctx, gs, "bust", reply_to)
                 if p_val == 21:
                     self._dealer_finish(gs)
                     result = self._result_for_finished(gs)
                     self._games.pop(game_key, None)
-                    return self._interaction_settle_actions(gs, result, reply_to)
+                    return await self._interaction_settle_actions(ctx, gs, result, reply_to)
                 # Non-terminal: send update with buttons
                 return [
                     {
@@ -445,7 +453,8 @@ class BlackjackPlugin(Plugin):
                             f"<b>🃏 21点</b> · {gs.player_name}\n\n"
                             f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n"
                             f"你的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
-                            "继续操作："
+                            "继续操作：\n\n"
+                            f"🔔 <a href=\"tg://user?id={owner_id}\">{gs.player_name}</a>"
                         ),
                         "parse_mode": "html",
                         "reply_to_message_id": reply_to,
@@ -476,14 +485,14 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     gs.finished = True
                     self._games.pop(game_key, None)
-                    return self._interaction_settle_actions(gs, "bust", reply_to)
+                    return await self._interaction_settle_actions(ctx, gs, "bust", reply_to)
                 # Double forces stand — fall through to dealer
 
             # stand (or double that didn't bust) → dealer turn
             self._dealer_finish(gs)
             result = self._result_for_finished(gs)
             self._games.pop(game_key, None)
-            return self._interaction_settle_actions(gs, result, reply_to)
+            return await self._interaction_settle_actions(ctx, gs, result, reply_to)
 
     def _dealer_finish(self, gs: GameState) -> None:
         while True:
@@ -507,13 +516,15 @@ class BlackjackPlugin(Plugin):
             return "lose"
         return "push"
 
-    def _interaction_settle_actions(self, gs: GameState, result: str, reply_to: int | None) -> list[dict[str, Any]]:
+    async def _interaction_settle_actions(self, ctx: PluginContext, gs: GameState, result: str, reply_to: int | None) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = [
             {"type": "send_message", "text": _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet), "parse_mode": "html", "reply_to_message_id": reply_to}
         ]
         if result in {"win", "blackjack"}:
             amount = int(gs.bet * 1.5) if result == "blackjack" else gs.bet
             actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": reply_to, "send_via": "userbot_reply"})
+            if ctx.log:
+                await ctx.log("info", f"[blackjack] settle: sending +{amount} reward via userbot_reply for player {gs.player_id}({gs.player_name})")
             actions.append(
                 {
                     "type": "result",
@@ -523,6 +534,10 @@ class BlackjackPlugin(Plugin):
                 }
             )
         actions.append({"type": "end_session"})
+        if ctx.log:
+            for act in actions:
+                send_via = act.get("send_via", "interaction_bot")
+                await ctx.log("info", f"[blackjack] settle: result={result}, type={act.get('type')}, amount={gs.bet}, winner={gs.player_id}({gs.player_name}), send_via={send_via}")
         return actions
 
     # ── 命令入口 ─────────────────────────────────────
