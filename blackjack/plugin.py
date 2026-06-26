@@ -263,7 +263,7 @@ class BlackjackPlugin(Plugin):
         if not chat_id:
             return [{"type": "send_message", "text": "❌ 21 点需要在群聊里使用。"}]
         if event_type in {"payment_confirmed", "keyword"}:
-            return await self._interaction_start(ctx, payload, chat_id)
+            return await self._interaction_start(ctx, payload, chat_id, event_type)
         if event_type == "callback_query":
             return await self._interaction_callback_action(ctx, payload, chat_id)
         if event_type == "message":
@@ -276,7 +276,7 @@ class BlackjackPlugin(Plugin):
             return [{"type": "end_session"}]
         return []
 
-    async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+    async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int, event_type: str = "keyword") -> list[dict[str, Any]]:
         player_id, player_name = _interaction_start_player(payload)
         bet = _positive_int(payload.get("prize") or payload.get("bet") or _interaction_amount(payload), 10, minimum=1)
         timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
@@ -293,7 +293,7 @@ class BlackjackPlugin(Plugin):
                 player_id=player_id,
                 player_name=player_name,
                 started_at=time.monotonic(),
-                trigger_message_id=_interaction_message_id(payload),
+                trigger_message_id=_interaction_message_id(payload) if event_type == "keyword" else None,
             )
             p_val, _ = _hand_value(player_cards)
             if ctx.log:

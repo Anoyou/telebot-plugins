@@ -1,4 +1,7 @@
 # 更新日志
+## 1.0.13 (2026-06-26)
+- 修复 payment_confirmed 触发时奖励 reply_to 指向 bot 消息的问题，仅 keyword 触发时存储玩家消息 ID 作为 trigger_message_id。
+
 ## 1.0.12 (2026-06-26)
 - GameState 新增 `trigger_message_id` 字段，记录玩家触发消息 ID。
 - 奖励 `+{amount}` 消息改为回复玩家原始触发消息（`send_via: userbot_reply`），而非操作按钮消息。
