@@ -1994,43 +1994,41 @@ class TenHalfPlugin(Plugin):
         # 总底注池 = 所有玩家的有效下注（含加倍）
         total_pot = sum(g.bet * (2 if p.doubled else 1) for p in g.players)
 
+        # ── 结算明细 ──
         lines = ["🏆 <b>结算</b>\n"]
         lines.append(f"💰 总底注池: {total_pot}\n")
         lines.append(f"庄家 {g.dealer_name}: {g.dealer_hand_str(reveal=True)}\n")
 
         player_results: list[dict[str, Any]] = []
+        winners: list[dict[str, Any]] = []
+        losers: list[dict[str, Any]] = []
+
         for p in g.players:
             eb = g.bet * (2 if p.doubled else 1)
             outcome = self._compare(p, dv, db, dn, dfs)
 
-            # 计算倍数
-            if outcome == "win_nat":
-                multiplier = 2.0
-            elif outcome == "win_5s":
-                multiplier = 1.5
-            elif outcome == "win":
-                multiplier = 1.0
-            elif outcome == "push":
-                multiplier = 0.0
-            else:
-                multiplier = 0.0
+            # 倍数
+            multiplier = (
+                2.0 if outcome == "win_nat"
+                else 1.5 if outcome == "win_5s"
+                else 1.0 if outcome == "win"
+                else 0.0
+            )
 
             # 赢家获得 = 总底注池 × 倍数 × 0.9（抽水10%）
-            if multiplier > 0:
-                reward = int(total_pot * multiplier * 0.9)
-            else:
-                reward = 0
-
-            # 输家损失自己的下注
+            reward = int(total_pot * multiplier * 0.9) if multiplier > 0 else 0
             loss = eb if outcome == "lose" else 0
 
+            # 显示文案
             outcome_display = self._outcome_str(outcome, eb)
             if reward > 0:
-                outcome_display += f" → 获得 {reward}"
+                outcome_display += f" → 获得 <b>{reward}</b>"
+            elif loss > 0:
+                outcome_display += f" → 损失 {loss}"
 
             lines.append(f"👤 {p.name}: {p.hand_str()} → {outcome_display}")
 
-            player_results.append({
+            pr = {
                 "user_id": p.user_id,
                 "name": p.name,
                 "outcome": outcome,
@@ -2038,57 +2036,69 @@ class TenHalfPlugin(Plugin):
                 "reward": reward,
                 "loss": loss,
                 "bet": eb,
-            })
+            }
+            player_results.append(pr)
+            if reward > 0:
+                winners.append(pr)
+            elif loss > 0:
+                losers.append(pr)
 
             if ctx.log:
                 await ctx.log("info",
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
                     f"outcome={outcome}, multiplier={multiplier}, reward={reward}, "
-                    f"bet={eb}, total_pot={total_pot}, chat_id={cid}")
+                    f"loss={loss}, bet={eb}, total_pot={total_pot}, chat_id={cid}")
 
-        actions: list[dict[str, Any]] = [
-            {"type": "send_message", "text": "\n".join(lines), "parse_mode": "html"},
-        ]
+        actions: list[dict[str, Any]] = []
 
-        # 向每位赢家发放奖励（userbot 发放）
-        for pr in player_results:
-            if pr["reward"] > 0:
-                actions.append({
-                    "type": "send_message",
-                    "text": f"🎉 {pr['name']} 赢得 {pr['reward']}！",
-                    "send_via": "userbot_reply",
-                })
-                if ctx.log:
-                    await ctx.log("info",
-                        f"[ten_half] reward_sent: uid={pr['user_id']}, name={pr['name']}, "
-                        f"amount={pr['reward']}, chat_id={cid}")
+        # ── 结算公告（走 interaction_bot） ──
+        actions.append({"type": "send_message", "text": "\n".join(lines), "parse_mode": "html"})
 
-        # 结算元数据
-        winners = [pr for pr in player_results if pr["reward"] > 0]
+        # ── 向每位赢家发放奖励（走 userbot_reply，参照 dice_grid_hunt） ──
+        for w in winners:
+            actions.append({
+                "type": "send_message",
+                "text": f"🎉 {w['name']} +{w['reward']}",
+                "send_via": "userbot_reply",
+            })
+            if ctx.log:
+                await ctx.log("info",
+                    f"[ten_half] reward_sent: uid={w['user_id']}, name={w['name']}, "
+                    f"amount={w['reward']}, chat_id={cid}")
+
+        # ── 平台结算元数据（参照 dice_grid_hunt / guess_number） ──
         if winners:
             primary = max(winners, key=lambda r: r["reward"])
             actions.append({
                 "type": "result",
                 "success": True,
                 "result": {
+                    "status": "finished",
                     "dealer_name": g.dealer_name,
                     "dealer_value": dv,
                     "total_pot": total_pot,
+                    "winner_user_id": primary["user_id"],
+                    "winner_name": primary["name"],
+                    "winner_count": len(winners),
                     "players": player_results,
+                    "payout_mode": "auto",
                 },
                 "settlement": {
                     "mode": "announce_only",
+                    "amount": primary["reward"],
                     "winner_user_id": primary["user_id"],
                     "winner_name": primary["name"],
-                    "amount": primary["reward"],
-                    "amount_field": "prize",
+                    "payout_account_label": "管理员",
+                    "status": "announced",
                 },
             })
         else:
+            # 所有玩家都输了（庄家通吃）
             actions.append({
                 "type": "result",
                 "success": True,
                 "result": {
+                    "status": "dealer_wins",
                     "dealer_name": g.dealer_name,
                     "dealer_value": dv,
                     "total_pot": total_pot,
