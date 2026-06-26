@@ -100,6 +100,11 @@ COMMAND_STATUS = "状态"
 
 PLAYER_KEYWORDS = ["我要玩读心", "读心生存", "读心赛", "玩读心"]
 
+IN_PROGRESS_MESSAGE_TEMPLATE = (
+    "⚠️ 游戏进行中，请等待当前游戏结束。\n"
+    "发 <code>{prefix}{command} 停止</code> 可强制结束。"
+)
+
 
 # ── 配置 Schema ──────────────────────────────────────────────
 
