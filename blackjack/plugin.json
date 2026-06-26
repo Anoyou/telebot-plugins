@@ -3,7 +3,7 @@
   "display_name": "21点",
   "description": "经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
   "author": "Anoyou",
-  "version": "1.0.13",
+  "version": "1.0.15",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -58,7 +58,7 @@
       "description": "由交互 Bot 在群内发起一局 21 点牌局。",
       "interaction_profile": "session_game",
       "launch_mode": "hybrid",
-      "session_scope": "chat",
+      "session_scope": "user",
       "events": [
         "payment_confirmed",
         "keyword",

@@ -1,6 +1,12 @@
 # 更新日志
+## 1.0.15 (2026-06-26)
+- session_scope 从 chat 改为 user，支持同一群内多名玩家同时开局互不干扰。
+- 每个玩家独立会话，A 开局的同时 B 可以正常转账开局和交互。
+
+## 1.0.14 (2026-06-26)
+- 回退 trigger_message_id 逻辑：keyword 和 payment_confirmed 触发均存储玩家消息 ID，payment_confirmed 的参与者回复 "+数字" 本身就是玩家消息。
+
 ## 1.0.13 (2026-06-26)
-- 修复 payment_confirmed 触发时奖励 reply_to 指向 bot 消息的问题，仅 keyword 触发时存储玩家消息 ID 作为 trigger_message_id。
 
 ## 1.0.12 (2026-06-26)
 - GameState 新增 `trigger_message_id` 字段，记录玩家触发消息 ID。
