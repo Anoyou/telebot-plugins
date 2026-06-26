@@ -340,6 +340,15 @@ class BlackjackPlugin(Plugin):
             action = "double"
         if not action:
             return []
+
+        # Delete the callback source message so old messages don't linger
+        msg_id = _interaction_message_id(payload)
+        if msg_id and ctx.client:
+            try:
+                await ctx.client.delete_message(chat_id, msg_id)
+            except Exception:
+                pass
+
         actor_id, _ = _interaction_actor(payload)
         if ctx.log:
             await ctx.log("info", f"[blackjack] _interaction_action: action={action}, actor_id={actor_id}, chat_id={chat_id}")
@@ -354,11 +363,11 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     self._dealer_finish(gs)
                     self._games.pop(game_key, None)
-                    return await self._interaction_settle_actions(ctx, gs, "bust", _interaction_message_id(payload))
+                    return await self._interaction_settle_actions(ctx, gs, "bust")
                 if p_val == 21:
                     self._dealer_finish(gs)
                     self._games.pop(game_key, None)
-                    return await self._interaction_settle_actions(ctx, gs, self._result_for_finished(gs), _interaction_message_id(payload))
+                    return await self._interaction_settle_actions(ctx, gs, self._result_for_finished(gs))
                 return [
                     {
                         "type": "send_message",
@@ -370,7 +379,6 @@ class BlackjackPlugin(Plugin):
                             f"请 <a href=\"tg://user?id={actor_id}\">{gs.player_name}</a> 点击下方按钮进行操作"
                         ),
                         "parse_mode": "html",
-                        "reply_to_message_id": _interaction_message_id(payload),
                         "reply_markup": {
                             "inline_keyboard": [
                                 [
@@ -383,7 +391,7 @@ class BlackjackPlugin(Plugin):
                 ]
             if action == "double":
                 if len(gs.player_cards) != 2:
-                    return [{"type": "send_message", "text": "只能在前两张牌时加倍。", "reply_to_message_id": _interaction_message_id(payload)}]
+                    return [{"type": "send_message", "text": "只能在前两张牌时加倍。"}]
                 gs.bet *= 2
                 gs.doubled = True
                 gs.player_cards.append(_deal_card())
@@ -391,11 +399,11 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     self._dealer_finish(gs)
                     self._games.pop(game_key, None)
-                    return await self._interaction_settle_actions(ctx, gs, "bust", _interaction_message_id(payload))
+                    return await self._interaction_settle_actions(ctx, gs, "bust")
             self._dealer_finish(gs)
             result = self._result_for_finished(gs)
             self._games.pop(game_key, None)
-            return await self._interaction_settle_actions(ctx, gs, result, _interaction_message_id(payload))
+            return await self._interaction_settle_actions(ctx, gs, result)
 
     async def _interaction_callback_action(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         """Handle callback_query events from inline keyboard buttons."""
@@ -421,6 +429,14 @@ class BlackjackPlugin(Plugin):
         except (ValueError, TypeError):
             return []
 
+        # Delete the button message so old buttons don't linger
+        msg_id = _interaction_message_id(payload)
+        if msg_id and ctx.client:
+            try:
+                await ctx.client.delete_message(chat_id, msg_id)
+            except Exception:
+                pass
+
         # Validate sender is the game owner
         sender_id, _ = _interaction_actor(payload)
         if ctx.log:
@@ -429,7 +445,6 @@ class BlackjackPlugin(Plugin):
             return []
 
         game_key = (chat_id, owner_id)
-        reply_to = _interaction_message_id(payload)
 
         async with self._get_lock(chat_id):
             gs = self._games.get(game_key)
@@ -442,12 +457,12 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     self._dealer_finish(gs)
                     self._games.pop(game_key, None)
-                    return await self._interaction_settle_actions(ctx, gs, "bust", reply_to)
+                    return await self._interaction_settle_actions(ctx, gs, "bust")
                 if p_val == 21:
                     self._dealer_finish(gs)
                     result = self._result_for_finished(gs)
                     self._games.pop(game_key, None)
-                    return await self._interaction_settle_actions(ctx, gs, result, reply_to)
+                    return await self._interaction_settle_actions(ctx, gs, result)
                 # Non-terminal: send update with buttons
                 return [
                     {
@@ -460,7 +475,6 @@ class BlackjackPlugin(Plugin):
                             f"请 <a href=\"tg://user?id={owner_id}\">{gs.player_name}</a> 点击下方按钮进行操作"
                         ),
                         "parse_mode": "html",
-                        "reply_to_message_id": reply_to,
                         "reply_markup": {
                             "inline_keyboard": [
                                 [
@@ -478,7 +492,6 @@ class BlackjackPlugin(Plugin):
                         {
                             "type": "send_message",
                             "text": "只能在前两张牌时加倍。",
-                            "reply_to_message_id": reply_to,
                         }
                     ]
                 gs.bet *= 2
@@ -488,14 +501,14 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     self._dealer_finish(gs)
                     self._games.pop(game_key, None)
-                    return await self._interaction_settle_actions(ctx, gs, "bust", reply_to)
+                    return await self._interaction_settle_actions(ctx, gs, "bust")
                 # Double forces stand — fall through to dealer
 
             # stand (or double that didn't bust) → dealer turn
             self._dealer_finish(gs)
             result = self._result_for_finished(gs)
             self._games.pop(game_key, None)
-            return await self._interaction_settle_actions(ctx, gs, result, reply_to)
+            return await self._interaction_settle_actions(ctx, gs, result)
 
     def _dealer_finish(self, gs: GameState) -> None:
         while True:
@@ -519,9 +532,9 @@ class BlackjackPlugin(Plugin):
             return "lose"
         return "push"
 
-    async def _interaction_settle_actions(self, ctx: PluginContext, gs: GameState, result: str, reply_to: int | None) -> list[dict[str, Any]]:
+    async def _interaction_settle_actions(self, ctx: PluginContext, gs: GameState, result: str, reply_to: int | None = None) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = [
-            {"type": "send_message", "text": _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet, gs.player_name), "parse_mode": "html", "reply_to_message_id": reply_to}
+            {"type": "send_message", "text": _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet, gs.player_name), "parse_mode": "html"}
         ]
         if result in {"win", "blackjack"}:
             amount = int(gs.bet * 1.5) if result == "blackjack" else gs.bet
@@ -562,13 +575,20 @@ class BlackjackPlugin(Plugin):
             if game_key in self._games and not self._games[game_key].finished:
                 gs = self._games[game_key]
                 p_val, _ = _hand_value(gs.player_cards)
-                await event.reply(
+                # Delete previous bot reply so old messages don't linger
+                if gs.message_id:
+                    try:
+                        await event.client.delete_message(chat_id, gs.message_id)
+                    except Exception:
+                        pass
+                msg = await event.reply(
                     f"🃏 你已有一局进行中的牌局！\n"
                     f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n"
                     f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n\n"
                     f"操作：,{self._command} 要牌 / ,{self._command} 停牌 / ,{self._command} 加倍",
                     parse_mode="html",
                 )
+                gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                 return
 
             # 解析下注
@@ -600,7 +620,8 @@ class BlackjackPlugin(Plugin):
                 gs.finished = True
                 result = "blackjack"
                 reply = _format_result(player_cards, dealer_cards, result, bet, player_name)
-                await event.reply(reply, parse_mode="html")
+                msg = await event.reply(reply, parse_mode="html")
+                gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                 return
 
             self._games[game_key] = gs
@@ -627,8 +648,15 @@ class BlackjackPlugin(Plugin):
         async with lock:
             gs = self._games.get(game_key)
             if not gs or gs.finished:
-                await event.reply("没有进行中的牌局。输入指令开一局~", parse_mode="html")
+                msg = await event.reply("没有进行中的牌局。输入指令开一局~", parse_mode="html")
                 return
+
+            # Delete previous bot reply so old messages don't linger
+            if gs.message_id:
+                try:
+                    await event.client.delete_message(chat_id, gs.message_id)
+                except Exception:
+                    pass
 
             if action == "hit":
                 gs.player_cards.append(_deal_card())
@@ -637,25 +665,28 @@ class BlackjackPlugin(Plugin):
                     # 爆了
                     gs.finished = True
                     reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet, gs.player_name)
-                    await event.reply(reply, parse_mode="html")
+                    msg = await event.reply(reply, parse_mode="html")
+                    gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                     self._games.pop(game_key, None)
                     return
                 elif p_val == 21:
                     # 自动停牌
                     return await self._dealer_turn(chat_id, player_id, event, ctx)
                 else:
-                    await event.reply(
+                    msg = await event.reply(
                         f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
                         f"继续：,{self._command} 要牌 / ,{self._command} 停牌",
                         parse_mode="html",
                     )
+                    gs.message_id = int(getattr(msg, "id", 0) or 0) or None
 
             elif action == "stand":
                 return await self._dealer_turn(chat_id, player_id, event, ctx)
 
             elif action == "double":
                 if len(gs.player_cards) != 2:
-                    await event.reply("只能在前两张牌时加倍~", parse_mode="html")
+                    msg = await event.reply("只能在前两张牌时加倍~", parse_mode="html")
+                    gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                     return
                 gs.bet *= 2
                 gs.doubled = True
@@ -664,7 +695,8 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     self._dealer_finish(gs)
                     reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet, gs.player_name)
-                    await event.reply(reply, parse_mode="html")
+                    msg = await event.reply(reply, parse_mode="html")
+                    gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                     self._games.pop(game_key, None)
                     return
                 # 加倍后强制停牌
@@ -703,7 +735,8 @@ class BlackjackPlugin(Plugin):
 
         gs.finished = True
         reply = _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet, gs.player_name)
-        await event.reply(reply, parse_mode="html")
+        msg = await event.reply(reply, parse_mode="html")
+        gs.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._games.pop(game_key, None)
 
     # ── 超时 ─────────────────────────────────────────
