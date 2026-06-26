@@ -875,18 +875,17 @@ class TenHalfPlugin(Plugin):
         except Exception:
             pass
 
-        # Send individual reward messages to winners via ctx.client
+        # Send individual reward messages to each winner (reply to their message)
         for p in g.players:
             eb = g.bet * (2 if p.doubled else 1)
             outcome = self._compare(p, dv, db, dn, dfs)
             if outcome.startswith("win"):
-                amount = eb * 2 if outcome == "win_nat" else int(eb * 1.5) if outcome == "win_5s" else eb
-                try:
-                    if ctx.client:
-                        await ctx.client.send_message(cid, f"+{amount}")
-                except Exception:
-                    pass
-
+                reward = eb * 2 if outcome == "win_nat" else int(eb * 1.5) if outcome == "win_5s" else eb
+                actions.append({
+                    "type": "send_message",
+                    "text": f"🎉 {p.name} +{reward}",
+                    "send_via": "userbot_reply",
+                })
         self._games.pop(cid, None)
 
     # ═══════════════════════════════════════════════════
@@ -1223,7 +1222,9 @@ class TenHalfPlugin(Plugin):
         if not cid:
             return [{"type": "send_message", "text": "❌ 十点半需要在群聊里使用。"}]
 
-        if etype in ("payment_confirmed", "keyword"):
+        if etype == "payment_confirmed":
+            return await self._ix_payment_join(ctx, payload, cid)
+        if etype == "keyword":
             return await self._ix_start(ctx, payload, cid)
         if etype == "callback_query":
             return await self._ix_callback(ctx, payload, cid)
@@ -1245,60 +1246,7 @@ class TenHalfPlugin(Plugin):
             0, minimum=1,
         )
 
-        # Handle payment_confirmed as a join attempt (not a new game start)
-        if etype == "payment_confirmed":
-            async with self._lock(cid):
-                g = self._games.get(cid)
-                if g and not g.finished and g.phase == "lobby":
-                    payer_id, payer_name = _ie_payer(payload)
-                    amount = _ie_payment_amount(payload)
-                    if ctx.log:
-                        await ctx.log("info",
-                            f"[ten_half] payment_confirmed: payer={payer_id} ({payer_name}), "
-                            f"amount={amount}, expected_bet={g.bet}, chat_id={cid}")
-                    if amount < g.bet:
-                        return [{"type": "send_message",
-                                 "text": f"⚠️ 转账金额不足，需要 {g.bet}。"}]
-                    # Check duplicate
-                    for uid, _ in g.lobby_players:
-                        if uid == payer_id:
-                            return [{"type": "send_message",
-                                     "text": "⚠️ 你已经加入了。"}]
-                    if len(g.lobby_players) >= self._max_players:
-                        return [{"type": "send_message", "text": "⚠️ 人数已满。"}]
-                    g.lobby_players.append((payer_id, payer_name))
-                    cnt = len(g.lobby_players)
-                    if ctx.log:
-                        await ctx.log("info",
-                            f"[ten_half] player_joined: uid={payer_id}, name={payer_name}, "
-                            f"via=payment, chat_id={cid}, count={cnt}/{self._max_players}")
-                    result: list[dict[str, Any]] = [{
-                        "type": "send_message",
-                        "text": f"✅ {payer_name} 加入成功！({cnt}/{self._max_players})",
-                    }]
-                    if cnt >= self._max_players:
-                        # Transition to ask_dealer
-                        first_id, first_name = g.lobby_players[0]
-                        g.phase = "ask_dealer"
-                        g.ask_dealer_uid = first_id
-                        g.ask_dealer_name = first_name
-                        plist = "、".join(n for _, n in g.lobby_players)
-                        result.append({
-                            "type": "send_message",
-                            "text": (
-                                f"👥 参与玩家: {plist}\n\n"
-                                f"❓ <b>{first_name}</b>，你要当庄家吗？"
-                            ),
-                            "parse_mode": "html",
-                            "reply_markup": _kb_dealer(first_id),
-                        })
-                        self._track(asyncio.create_task(
-                            self._dealer_question_timeout(cid, g.started_at, ctx),
-                        ))
-                    return result
-                # No active lobby → treat as start request
-                if not bet:
-                    return [{"type": "end_session"}]
+
 
         if bet <= 0:
             return [
@@ -1339,7 +1287,7 @@ class TenHalfPlugin(Plugin):
             lobby_text = (
                 f"🃏 <b>十点半开局！</b>\n"
                 f"💰 底注: {bet}\n\n"
-                f"📢 请转账 <b>{bet}</b> 给机器人加入游戏\n"
+                f"📢 请转账 <b>{bet}</b> 给管理员（本群 userbot）加入游戏\n"
                 f"⏰ 等待玩家加入中... ({self._lobby_timeout}秒)"
             )
         else:
@@ -1358,6 +1306,105 @@ class TenHalfPlugin(Plugin):
         if reply_markup is not None:
             action["reply_markup"] = reply_markup
         return [action]
+
+
+    # ── 交互：转账加入 ────────────────────────────────
+    async def _ix_payment_join(
+        self, ctx: PluginContext, payload: dict[str, Any], cid: int,
+    ) -> list[dict[str, Any]]:
+        """payment_confirmed: 玩家转账给管理员(userbot)后自动加入大厅。"""
+        payer_id, payer_name = _ie_payer(payload)
+        amount = _ie_payment_amount(payload)
+        mid = _ie_mid(payload)
+
+        if ctx.log:
+            await ctx.log("info",
+                f"[ten_half] payment_confirmed: payer={payer_id} ({payer_name}), "
+                f"amount={amount}, chat_id={cid}")
+
+        if not payer_id:
+            return [{"type": "end_session"}]
+
+        async with self._lock(cid):
+            g = self._games.get(cid)
+
+            # 没有活跃大厅 → 拒绝
+            if not g or g.finished or g.phase != "lobby":
+                if ctx.log:
+                    await ctx.log("info",
+                        f"[ten_half] payment_rejected: no active lobby, "
+                        f"payer={payer_id}, chat_id={cid}")
+                return [{
+                    "type": "send_message",
+                    "text": "⚠️ 当前没有进行中的十点半大厅，请等待开局后再转账加入。",
+                    "reply_to_message_id": mid,
+                }]
+
+            # 校验金额
+            if amount < g.bet:
+                return [{
+                    "type": "send_message",
+                    "text": f"⚠️ 转账金额不足，需要 {g.bet}，你转了 {amount}。",
+                    "reply_to_message_id": mid,
+                }]
+
+            # 已满
+            if len(g.lobby_players) >= self._max_players:
+                return [{
+                    "type": "send_message",
+                    "text": "⚠️ 人数已满。",
+                    "reply_to_message_id": mid,
+                }]
+
+            # 重复加入
+            for uid, _ in g.lobby_players:
+                if uid == payer_id:
+                    return [{
+                        "type": "send_message",
+                        "text": "⚠️ 你已经加入了。",
+                        "reply_to_message_id": mid,
+                    }]
+
+            # 加入成功
+            cnt = len(g.lobby_players) + 1
+            g.lobby_players.append((payer_id, payer_name))
+
+            if ctx.log:
+                await ctx.log("info",
+                    f"[ten_half] player_joined: uid={payer_id}, name={payer_name}, "
+                    f"via=payment, count={cnt}/{self._max_players}, chat_id={cid}")
+
+            result: list[dict[str, Any]] = [{
+                "type": "send_message",
+                "text": f"✅ {payer_name} 转账 {amount} 加入成功！({cnt}/{self._max_players})",
+                "reply_to_message_id": mid,
+            }]
+
+            # 人满了自动进入选庄
+            if cnt >= self._max_players:
+                g.phase = "ask_dealer"
+                first_id, first_name = g.lobby_players[0]
+                g.ask_dealer_uid = first_id
+                g.ask_dealer_name = first_name
+                plist = "、".join(n for _, n in g.lobby_players)
+                result.append({
+                    "type": "send_message",
+                    "text": (
+                        f"👥 参与玩家: {plist}\n\n"
+                        f"❓ <b>{first_name}</b>，你要当庄家吗？"
+                    ),
+                    "parse_mode": "html",
+                    "reply_markup": _kb_dealer(first_id),
+                })
+                if ctx.log:
+                    await ctx.log("info",
+                        f"[ten_half] ask_dealer: uid={first_id}, name={first_name}, "
+                        f"players={[n for _, n in g.lobby_players]}")
+                self._track(asyncio.create_task(
+                    self._dealer_question_timeout(cid, g.started_at, ctx),
+                ))
+
+            return result
 
     # ── 交互：callback_query 处理 ────────────────────
     async def _ix_callback(
