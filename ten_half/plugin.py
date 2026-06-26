@@ -853,18 +853,25 @@ class TenHalfPlugin(Plugin):
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
+        # 总底注池
+        total_pot = sum(g.bet * (2 if p.doubled else 1) for p in g.players)
         lines = ["🏆 <b>结算</b>\n"]
+        lines.append(f"💰 总底注池: {total_pot}\n")
         lines.append(f"庄家 {g.dealer_name}: {g.dealer_hand_str(reveal=True)}\n")
         for p in g.players:
             eb = g.bet * (2 if p.doubled else 1)
             outcome = self._compare(p, dv, db, dn, dfs)
-            lines.append(f"👤 {p.name}: {p.hand_str()} → {self._outcome_str(outcome, eb)}")
+            mult = 2.0 if outcome == "win_nat" else 1.5 if outcome == "win_5s" else 1.0 if outcome == "win" else 0.0
+            reward = int(total_pot * mult * 0.9) if mult > 0 else 0
+            display = self._outcome_str(outcome, eb)
+            if reward > 0:
+                display += f" → 获得 {reward}"
+            lines.append(f"👤 {p.name}: {p.hand_str()} → {display}")
             if ctx.log:
-                amount = eb * 2 if outcome == "win_nat" else int(eb * 1.5) if outcome == "win_5s" else eb if outcome in ("win",) else 0 if outcome == "push" else -eb
                 await ctx.log("info",
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
-                    f"outcome={outcome}, amount={amount}, "
-                    f"cards={p.hand_str()}, doubled={p.doubled}, chat_id={cid}")
+                    f"outcome={outcome}, multiplier={mult}, reward={reward}, "
+                    f"bet={eb}, total_pot={total_pot}, chat_id={cid}")
         msgs.append("\n".join(lines))
 
         # Send all messages via ctx.client
@@ -1031,19 +1038,26 @@ class TenHalfPlugin(Plugin):
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
+        # 总底注池
+        total_pot = sum(g.bet * (2 if p.doubled else 1) for p in g.players)
         lines = ["🏆 <b>结算</b>\n"]
+        lines.append(f"💰 总底注池: {total_pot}\n")
         lines.append(f"庄家 {g.dealer_name}: {g.dealer_hand_str(reveal=True)}\n")
 
         for p in g.players:
             eb = g.bet * (2 if p.doubled else 1)
             outcome = self._compare(p, dv, db, dn, dfs)
-            lines.append(f"👤 {p.name}: {p.hand_str()} → {self._outcome_str(outcome, eb)}")
+            mult = 2.0 if outcome == "win_nat" else 1.5 if outcome == "win_5s" else 1.0 if outcome == "win" else 0.0
+            reward = int(total_pot * mult * 0.9) if mult > 0 else 0
+            display = self._outcome_str(outcome, eb)
+            if reward > 0:
+                display += f" → 获得 {reward}"
+            lines.append(f"👤 {p.name}: {p.hand_str()} → {display}")
             if ctx.log:
-                amount = eb * 2 if outcome == "win_nat" else int(eb * 1.5) if outcome == "win_5s" else eb if outcome in ("win",) else 0 if outcome == "push" else -eb
                 await ctx.log("info",
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
-                    f"outcome={outcome}, amount={amount}, "
-                    f"cards={p.hand_str()}, doubled={p.doubled}, chat_id={cid}")
+                    f"outcome={outcome}, multiplier={mult}, reward={reward}, "
+                    f"bet={eb}, total_pot={total_pot}, chat_id={cid}")
 
         await self._send(ctx, cid, "\n".join(lines))
         self._games.pop(cid, None)
@@ -1969,71 +1983,104 @@ class TenHalfPlugin(Plugin):
 
     # ── 交互：结算 ──────────────────────────────────
     async def _ix_settle(self, cid: int, g: TenHalfGame, ctx: PluginContext | None = None) -> list[dict[str, Any]]:
+        """结算：赢家获得总底注池 × 倍数 × 0.9（平台抽水10%），由 userbot 发放。"""
         g.phase = "finished"
         g.finished = True
-
         dv = g.dealer_val()
         db = g.dealer_busted()
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
+        # 总底注池 = 所有玩家的有效下注（含加倍）
+        total_pot = sum(g.bet * (2 if p.doubled else 1) for p in g.players)
+
         lines = ["🏆 <b>结算</b>\n"]
+        lines.append(f"💰 总底注池: {total_pot}\n")
         lines.append(f"庄家 {g.dealer_name}: {g.dealer_hand_str(reveal=True)}\n")
 
         player_results: list[dict[str, Any]] = []
         for p in g.players:
             eb = g.bet * (2 if p.doubled else 1)
             outcome = self._compare(p, dv, db, dn, dfs)
-            lines.append(f"👤 {p.name}: {p.hand_str()} → {self._outcome_str(outcome, eb)}")
-            if outcome.startswith("win"):
-                amount = eb * 2 if outcome == "win_nat" else int(eb * 1.5) if outcome == "win_5s" else eb
+
+            # 计算倍数
+            if outcome == "win_nat":
+                multiplier = 2.0
+            elif outcome == "win_5s":
+                multiplier = 1.5
+            elif outcome == "win":
+                multiplier = 1.0
             elif outcome == "push":
-                amount = 0
+                multiplier = 0.0
             else:
-                amount = -eb
+                multiplier = 0.0
+
+            # 赢家获得 = 总底注池 × 倍数 × 0.9（抽水10%）
+            if multiplier > 0:
+                reward = int(total_pot * multiplier * 0.9)
+            else:
+                reward = 0
+
+            # 输家损失自己的下注
+            loss = eb if outcome == "lose" else 0
+
+            outcome_display = self._outcome_str(outcome, eb)
+            if reward > 0:
+                outcome_display += f" → 获得 {reward}"
+
+            lines.append(f"👤 {p.name}: {p.hand_str()} → {outcome_display}")
+
             player_results.append({
                 "user_id": p.user_id,
                 "name": p.name,
                 "outcome": outcome,
-                "amount": amount,
+                "multiplier": multiplier,
+                "reward": reward,
+                "loss": loss,
+                "bet": eb,
             })
-            if ctx and ctx.log:
+
+            if ctx.log:
                 await ctx.log("info",
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
-                    f"outcome={outcome}, amount={amount}, "
-                    f"cards={p.hand_str()}, doubled={p.doubled}, chat_id={cid}")
+                    f"outcome={outcome}, multiplier={multiplier}, reward={reward}, "
+                    f"bet={eb}, total_pot={total_pot}, chat_id={cid}")
 
         actions: list[dict[str, Any]] = [
             {"type": "send_message", "text": "\n".join(lines), "parse_mode": "html"},
         ]
 
-        # Send individual "+amount" messages to winners via userbot
-        # (multi-player game — platform settlement may not support multiple winners)
+        # 向每位赢家发放奖励（userbot 发放）
         for pr in player_results:
-            if pr["amount"] > 0:
+            if pr["reward"] > 0:
                 actions.append({
                     "type": "send_message",
-                    "text": f"+{pr['amount']}",
+                    "text": f"🎉 {pr['name']} 赢得 {pr['reward']}！",
                     "send_via": "userbot_reply",
                 })
+                if ctx.log:
+                    await ctx.log("info",
+                        f"[ten_half] reward_sent: uid={pr['user_id']}, name={pr['name']}, "
+                        f"amount={pr['reward']}, chat_id={cid}")
 
-        # Find the primary winner for settlement metadata (highest amount)
-        winners = [pr for pr in player_results if pr["amount"] > 0]
+        # 结算元数据
+        winners = [pr for pr in player_results if pr["reward"] > 0]
         if winners:
-            primary = max(winners, key=lambda r: r["amount"])
+            primary = max(winners, key=lambda r: r["reward"])
             actions.append({
                 "type": "result",
                 "success": True,
                 "result": {
                     "dealer_name": g.dealer_name,
                     "dealer_value": dv,
+                    "total_pot": total_pot,
                     "players": player_results,
                 },
                 "settlement": {
                     "mode": "announce_only",
                     "winner_user_id": primary["user_id"],
                     "winner_name": primary["name"],
-                    "amount": primary["amount"],
+                    "amount": primary["reward"],
                     "amount_field": "prize",
                 },
             })
@@ -2044,6 +2091,7 @@ class TenHalfPlugin(Plugin):
                 "result": {
                     "dealer_name": g.dealer_name,
                     "dealer_value": dv,
+                    "total_pot": total_pot,
                     "players": player_results,
                 },
             })
@@ -2051,7 +2099,6 @@ class TenHalfPlugin(Plugin):
         actions.append({"type": "end_session"})
         self._games.pop(cid, None)
         return actions
-
 
 PLUGIN_CLASS = TenHalfPlugin
 
