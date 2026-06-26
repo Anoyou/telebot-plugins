@@ -293,7 +293,7 @@ class BlackjackPlugin(Plugin):
                 player_id=player_id,
                 player_name=player_name,
                 started_at=time.monotonic(),
-                trigger_message_id=_interaction_message_id(payload),
+                trigger_message_id=_payload_reply_to(payload).get("message_id") if event_type == "payment_confirmed" else _interaction_message_id(payload),
             )
             p_val, _ = _hand_value(player_cards)
             if ctx.log:

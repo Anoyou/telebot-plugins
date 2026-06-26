@@ -1,4 +1,7 @@
 # 更新日志
+## 1.0.16 (2026-06-26)
+- 修复 payment_confirmed 触发时 trigger_message_id 取错消息的问题：payment_confirmed 的 message_id 是转账通知（bot发的），参与者的"+数字"消息在 reply_to.message_id 里。
+
 ## 1.0.15 (2026-06-26)
 - session_scope 从 chat 改为 user，支持同一群内多名玩家同时开局互不干扰。
 - 每个玩家独立会话，A 开局的同时 B 可以正常转账开局和交互。
