@@ -3,6 +3,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '发送 {prefix}{command} 触发原 Pagermaid 自动点踩相关能力；可在配置页调整触发指令名和启用状态。命令只填写本体，不要包含系统前缀。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -25,7 +26,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="cai-byRBQ",
     display_name="cai-byRBQ",
-    version="1.0.4",
+    version="1.0.5",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",

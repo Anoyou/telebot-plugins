@@ -3,7 +3,7 @@
   "display_name": "jpmai-byRBQ",
   "description": "AI 生成艳情文案插件，支持完整 chat/completions URL 兼容、非标准响应文本提取和连通性测试",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -42,7 +42,8 @@
     "required": [
       "command",
       "enabled"
-    ]
+    ],
+    "x-usage-guide": "发送 {prefix}{command} 按原 Pagermaid 方式触发关键词 AI 回复能力；可在配置页调整触发指令名和启用状态。"
   },
   "category": "utility",
   "interaction_entries": [],

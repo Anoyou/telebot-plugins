@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅，玩家加入后按提示要牌、停牌或加倍；交互 Bot 承接高频操作，结算说明走平台受控通道。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -47,7 +48,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.4",
+    version="0.2.5",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

@@ -3,7 +3,7 @@
   "display_name": "彩票系统 Plus",
   "description": "群内彩票玩法：下注、开奖、奖池滚存、历史与统计，支持高可配置模板与预览",
   "author": "Anoyou",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -327,7 +327,8 @@
       "draw_numbers",
       "draw_hour",
       "draw_minute"
-    ]
+    ],
+    "x-usage-guide": "管理员和群友可使用 {prefix}{command} 购买彩票、查询奖池、历史和统计；交互规则可接收付款通知自动下注，配置页可调整别名、开奖周期和消息模板。"
   },
   "interaction_profile": "reward_pool"
 }

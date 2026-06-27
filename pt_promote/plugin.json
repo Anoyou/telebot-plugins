@@ -3,7 +3,7 @@
   "display_name": "PT 种子促销",
   "description": "在青娃PT置顶促销某个种子（消耗蝌蚪）",
   "author": "xiaoyou",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "commands": [
@@ -238,7 +238,8 @@
       "command",
       "cookie",
       "torrent_cooldown_seconds"
-    ]
+    ],
+    "x-usage-guide": "发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 free/2x、时长、竞价和奖励参数。"
   },
   "interaction_profile": "utility_trigger"
 }

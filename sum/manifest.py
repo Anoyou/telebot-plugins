@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '发送 {prefix}{command} 数量 总结最近群消息；也可配置快捷总结和定时任务。AI Provider、消息模板、词云和输出格式都可在配置页调整，并可通过插件预览查看摘要消息。',
     "x-category": "utility",
     "additionalProperties": False,
     "properties": {
@@ -159,7 +160,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.29",
+    version="1.1.30",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",

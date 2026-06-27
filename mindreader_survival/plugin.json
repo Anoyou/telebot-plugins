@@ -1,7 +1,7 @@
 {
   "name": "mindreader_survival",
   "key": "mindreader_survival",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "author": "Anoyou",
   "display_name": "读心生存赛",
   "description": "多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
@@ -66,7 +66,8 @@
       "total_rounds",
       "round_timeout",
       "option_word_pool"
-    ]
+    ],
+    "x-usage-guide": "管理员发送 {prefix}{command} 创建读心生存赛，玩家通过付款或关键词加入，每轮回复数字选择答案；最终存活者按规则瓜分奖池。"
   },
   "interaction_entries": [
     {

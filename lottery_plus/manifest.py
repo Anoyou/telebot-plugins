@@ -49,6 +49,7 @@ DRAW_TEMPLATE_DEFAULT = (
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员和群友可使用 {prefix}{command} 购买彩票、查询奖池、历史和统计；交互规则可接收付款通知自动下注，配置页可调整别名、开奖周期和消息模板。',
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
@@ -226,7 +227,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

@@ -65,6 +65,7 @@ TEMPLATE_PREVIEW_RENDERED = _safe_render(ROUND_MESSAGE_TEMPLATE_DEFAULT)
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 奖励金额 开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板，并在插件预览里查看最终消息。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -250,7 +251,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.14",
+    version="1.1.15",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

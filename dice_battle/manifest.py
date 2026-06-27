@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 发起骰子对战；也可以在交互中心绑定关键词或付款触发，挑战者和对手按提示掷骰比大小，奖励消息走 userbot_reply。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -33,7 +34,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_battle",
     display_name="骰子比大小",
-    version="1.0.7",
+    version="1.0.8",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

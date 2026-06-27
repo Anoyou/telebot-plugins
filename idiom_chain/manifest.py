@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 奖励金额 开启成语接龙；群友按上一条成语尾字继续回复，禁词和超时时间可在配置页调整。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -43,7 +44,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

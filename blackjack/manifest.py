@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员可发送 {prefix}{command} 下注金额 开启 21 点；也可以在交互中心绑定关键词或付款触发，玩家后续通过按钮或“要牌/停牌/加倍”操作，奖金和结算仍走 userbot/平台受控通道。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -33,7 +34,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.21",
+    version="1.0.22",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

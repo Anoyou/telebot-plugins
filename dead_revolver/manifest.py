@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="dead_revolver",
     display_name="死亡左轮",
-    version="1.0.1",
+    version="1.0.2",
     min_telepilot_version="0.33.0",
     author="builtin",
     description="群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
@@ -46,6 +46,7 @@ MANIFEST = Manifest(
     config_schema={
         "type": "object",
         "x-ui-mode": "single",
+        "x-usage-guide": '管理员发送 {prefix}dr 门票金额 创建死亡左轮大厅，玩家按规则付款或关键词加入，庄家发送 {prefix}dr_start 开局；交互 Bot 只承接游戏互动，资金确认和退款/奖励仍由 userbot/平台通道处理。',
         "additionalProperties": False,
         "properties": {},
     },

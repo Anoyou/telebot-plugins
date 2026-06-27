@@ -3,7 +3,7 @@
   "display_name": "话痨挑战",
   "description": "设定聊天规则，违反者自动扣分，全程被动监听",
   "author": "Anoyou",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -38,7 +38,8 @@
     },
     "required": [
       "command"
-    ]
+    ],
+    "x-usage-guide": "管理员发送 {prefix}{command} 创建话痨挑战，插件按当前聊天内成员发言统计规则自动记录和结算；配置页可调整触发指令名。"
   },
   "license": "MIT",
   "category": "automation",

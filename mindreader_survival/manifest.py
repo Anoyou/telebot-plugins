@@ -111,6 +111,7 @@ IN_PROGRESS_MESSAGE_TEMPLATE = (
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 创建读心生存赛，玩家通过付款或关键词加入，每轮回复数字选择答案；最终存活者按规则瓜分奖池。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -221,7 +222,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.1.4",
+    version="1.1.5",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",

@@ -3,7 +3,7 @@
   "display_name": "Bot 防广告守卫",
   "description": "针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
   "author": "Anoyou",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -122,7 +122,8 @@
       "violation_action",
       "mute_duration_seconds",
       "dry_run"
-    ]
+    ],
+    "x-usage-guide": "配置目标群和白名单 Bot 后启用功能总开关；插件会监听 incoming 消息，按开关删除非白名单 @bot、inline Bot、Bot 发言或入群服务消息。建议先开启演练模式确认命中范围。"
   },
   "license": "MIT"
 }

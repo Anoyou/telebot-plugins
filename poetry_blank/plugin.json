@@ -3,7 +3,7 @@
   "display_name": "诗词填空",
   "description": "古诗词填空抢答，答对获奖",
   "author": "Anoyou",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -46,7 +46,8 @@
     "required": [
       "command",
       "timeout"
-    ]
+    ],
+    "x-usage-guide": "管理员发送 {prefix}{command} 奖励金额 开启诗词填空，群友回复缺失字词抢答；插件按答对、超时或关闭返回结算结果。"
   },
   "license": "MIT",
   "category": "interactive",

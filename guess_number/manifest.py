@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 奖励金额 开启猜数字；群友在同一群内回复数字抢答，插件提示大了/小了并在答对、超时或关闭时结束会话。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -33,7 +34,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="guess_number",
     display_name="猜数字",
-    version="1.0.9",
+    version="1.0.10",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

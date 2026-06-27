@@ -3,7 +3,7 @@
   "display_name": "sar-byRBQ",
   "description": "# SAR - 贴纸自动回复插件 ## 功能描述 在指定群组中，当有人用贴纸回复你的消息时，自动...",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -42,7 +42,8 @@
     "required": [
       "command",
       "enabled"
-    ]
+    ],
+    "x-usage-guide": "发送 {prefix}{command} 按原 Pagermaid 方式触发贴纸自动回复；可在配置页调整触发指令名和启用状态。"
   },
   "category": "automation",
   "interaction_entries": [],

@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '配置目标群和白名单 Bot 后启用功能总开关；插件会监听 incoming 消息，按开关删除非白名单 @bot、inline Bot、Bot 发言或入群服务消息。建议先开启演练模式确认命中范围。',
     "x-category": "automation",
     "x-interaction-entries": [],
     "additionalProperties": False,
@@ -103,7 +104,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.5",
+    version="1.1.6",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",

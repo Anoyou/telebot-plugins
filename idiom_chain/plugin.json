@@ -3,7 +3,7 @@
   "display_name": "成语接龙",
   "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
   "author": "Anoyou",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -57,7 +57,8 @@
       "command",
       "timeout",
       "forbidden_words"
-    ]
+    ],
+    "x-usage-guide": "管理员发送 {prefix}{command} 奖励金额 开启成语接龙；群友按上一条成语尾字继续回复，禁词和超时时间可在配置页调整。"
   },
   "license": "MIT",
   "category": "interactive",

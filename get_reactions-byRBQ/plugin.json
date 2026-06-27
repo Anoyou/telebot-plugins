@@ -3,7 +3,7 @@
   "display_name": "get_reactions-byRBQ",
   "description": "表情获取辅助命令，用于测试环境是否支持自定义表情反应",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -43,7 +43,8 @@
     "required": [
       "command",
       "enabled"
-    ]
+    ],
+    "x-usage-guide": "发送 {prefix}{command} 按原 Pagermaid 方式读取或测试消息 reaction；可在配置页调整触发指令名和启用状态。需要 reaction 相关权限时请先确认账号能力。"
   },
   "category": "utility",
   "interaction_entries": [],

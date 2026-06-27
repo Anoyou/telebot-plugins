@@ -3,7 +3,7 @@
   "display_name": "share_plugins-byRBQ",
   "description": "分享插件，将现有插件以文件形式分享，支持列表查看和序号选择",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -42,7 +42,8 @@
     "required": [
       "command",
       "enabled"
-    ]
+    ],
+    "x-usage-guide": "发送 {prefix}{command} 按原 Pagermaid 方式查看插件列表并按序号分享插件文件；可在配置页调整触发指令名和启用状态。"
   },
   "category": "utility",
   "interaction_entries": [],

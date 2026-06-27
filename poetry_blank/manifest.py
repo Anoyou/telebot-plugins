@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 奖励金额 开启诗词填空，群友回复缺失字词抢答；插件按答对、超时或关闭返回结算结果。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -33,7 +34,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="poetry_blank",
     display_name="诗词填空",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
