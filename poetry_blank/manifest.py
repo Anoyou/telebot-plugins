@@ -34,7 +34,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="poetry_blank",
     display_name="诗词填空",
-    version="1.0.9",
+    version="1.0.10",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -58,7 +58,7 @@ MANIFEST = Manifest(
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                      'send_via': ['interaction_bot', 'userbot_reply']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',

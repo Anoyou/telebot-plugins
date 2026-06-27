@@ -3,7 +3,7 @@
   "display_name": "死亡左轮",
   "description": "群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
   "author": "Anoyou",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -68,8 +68,7 @@
         ],
         "send_via": [
           "interaction_bot",
-          "userbot_reply",
-          "bbot_notice"
+          "userbot_reply"
         ]
       },
       "settlement": {

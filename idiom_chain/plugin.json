@@ -3,7 +3,7 @@
   "display_name": "成语接龙",
   "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
   "author": "Anoyou",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -112,8 +112,7 @@
         ],
         "send_via": [
           "interaction_bot",
-          "userbot_reply",
-          "bbot_notice"
+          "userbot_reply"
         ]
       },
       "input_schema": {

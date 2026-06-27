@@ -48,7 +48,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.5",
+    version="0.2.6",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -72,7 +72,7 @@ MANIFEST = Manifest(
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                      'send_via': ['interaction_bot', 'userbot_reply']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'bet': {'type': 'integer',

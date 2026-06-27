@@ -3,7 +3,7 @@
   "display_name": "彩票系统 Plus",
   "description": "群内彩票玩法：下注、开奖、奖池滚存、历史与统计，支持高可配置模板与预览",
   "author": "Anoyou",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -73,8 +73,7 @@
         ],
         "send_via": [
           "interaction_bot",
-          "userbot_reply",
-          "bbot_notice"
+          "userbot_reply"
         ]
       },
       "input_schema": {

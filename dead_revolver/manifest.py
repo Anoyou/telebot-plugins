@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="dead_revolver",
     display_name="死亡左轮",
-    version="1.0.2",
+    version="1.0.3",
     min_telepilot_version="0.33.0",
     author="builtin",
     description="群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
@@ -24,7 +24,7 @@ MANIFEST = Manifest(
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message', 'result', 'end_session', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                      'send_via': ['interaction_bot', 'userbot_reply']},
   'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,

@@ -251,7 +251,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.15",
+    version="1.1.16",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -279,7 +279,7 @@ MANIFEST = Manifest(
                                   'end_session',
                                   'result',
                                   'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                      'send_via': ['interaction_bot', 'userbot_reply']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',

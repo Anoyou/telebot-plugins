@@ -45,7 +45,7 @@ INFO_OK_TEMPLATE_DEFAULT = (
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.17",
+    version="1.0.18",
     min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
@@ -66,7 +66,7 @@ MANIFEST = Manifest(
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message', 'end_session', 'result'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                      'send_via': ['interaction_bot', 'userbot_reply']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'torrent_id': {'type': 'string', 'title': '种子 ID', 'default': ''},

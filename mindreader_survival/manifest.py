@@ -222,7 +222,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.1.5",
+    version="1.1.6",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
@@ -245,7 +245,7 @@ MANIFEST = Manifest(
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                      'send_via': ['interaction_bot', 'userbot_reply']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'ticket_price': {'type': 'integer',

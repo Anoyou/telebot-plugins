@@ -128,7 +128,7 @@ CONFIG_SCHEMA = {
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.21",
+    version="1.1.22",
     min_telepilot_version="0.33.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
@@ -155,7 +155,7 @@ MANIFEST = Manifest(
                                   'end_session',
                                   'result',
                                   'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                      'send_via': ['interaction_bot', 'userbot_reply']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'total_amount': {'type': 'integer',

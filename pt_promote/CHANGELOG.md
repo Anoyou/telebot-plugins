@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.0.18 (2026-06-28)
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 `bbot_notice`。
+- 保留 `interaction_bot` 与 `userbot_reply` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
+
 
 
 ## 1.0.17 (2026-06-27)

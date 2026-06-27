@@ -3,7 +3,7 @@
   "display_name": "骰子比大小",
   "description": "群内骰子对战，两人各掷骰子比点数，支持下注",
   "author": "Anoyou",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -102,8 +102,7 @@
         ],
         "send_via": [
           "interaction_bot",
-          "userbot_reply",
-          "bbot_notice"
+          "userbot_reply"
         ]
       },
       "input_schema": {
