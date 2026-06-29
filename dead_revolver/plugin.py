@@ -62,6 +62,13 @@ def _payload_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _normalized_identity(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith("@"):
+        text = text[1:].strip()
+    return text.casefold()
+
+
 def _extract_chat_id(payload: dict[str, Any]) -> int | None:
     source = _payload_dict(payload, "source")
     return _int_payload(payload.get("chat_id") or source.get("chat_id"))
@@ -185,6 +192,7 @@ class DeadRevolverPlugin(Plugin):
         self._ctx: PluginContext | None = None
         self._self_tg_user_id: int | None = None
         self._self_tg_username: str | None = None
+        self._self_receiver_names: set[str] = set()
 
     # ── 生命周期 ────────────────────────────────
     async def on_startup(self, ctx: PluginContext) -> None:
@@ -194,9 +202,11 @@ class DeadRevolverPlugin(Plugin):
             me = await ctx.client.get_me()
             self._self_tg_user_id = int(getattr(me, "id", 0) or 0) or None
             self._self_tg_username = getattr(me, "username", None)
+            self._self_receiver_names = self._receiver_names_from_entity(me)
         except Exception:
             self._self_tg_user_id = None
             self._self_tg_username = None
+            self._self_receiver_names = set()
         await self._log("info", "死亡左轮插件已启动。")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
@@ -254,6 +264,12 @@ class DeadRevolverPlugin(Plugin):
         display_name = _extract_display_name(payload)
         source = _payload_dict(payload, "source")
         paid = _int_payload(payload.get("amount") or source.get("amount")) or 0
+        if not self._payment_receiver_matches_self(payload):
+            return [{
+                "type": "send_message",
+                "text": f"这笔付款没有转给{self._receiver_label()}，不会加入死亡左轮。",
+                "send_via": "interaction_bot",
+            }]
 
         async with self._lock_for(chat_id):
             gs = self._games.get(chat_id)
@@ -441,15 +457,9 @@ class DeadRevolverPlugin(Plugin):
         )
         if not has_payment_rule: return False
 
-        # 只接受转给当前 UserBot 的付款提示，避免误识别群内其他转账。
-        if self._self_tg_user_id is not None:
-            entities = getattr(event.message, "entities", None) or []
-            found_self = any(
-                getattr(getattr(ent, "user", None), "id", None) == self._self_tg_user_id
-                for ent in entities
-            )
-            if not found_self:
-                return False
+        receiver_name = receiver_match.group(1).strip()
+        if not self._transfer_notice_receiver_matches_self(event, receiver_name):
+            return False
 
         reply_id = getattr(event.message, "reply_to_msg_id", None)
         user_id: int | None = None
@@ -475,6 +485,12 @@ class DeadRevolverPlugin(Plugin):
             "message_text": text,
             "amount": paid,
             "payer_user_id": user_id,
+            "receiver_name": receiver_name,
+            "payment": {
+                "amount": paid,
+                "payer_name": payer_match.group(1).strip(),
+                "receiver_name": receiver_name,
+            },
             "source_message_id": reply_id,
         }
         actions = await self._ibot_payment(ctx, payload, gs.chat_id)
@@ -823,6 +839,80 @@ class DeadRevolverPlugin(Plugin):
             await del_msg(token, chat_id, msg_id)
         except Exception: pass
 
+    def _receiver_names_from_entity(self, entity: Any) -> set[str]:
+        names: set[str] = set()
+        username = getattr(entity, "username", None)
+        if username:
+            names.add(_normalized_identity(username))
+        first_name = str(getattr(entity, "first_name", "") or "").strip()
+        last_name = str(getattr(entity, "last_name", "") or "").strip()
+        for item in (first_name, last_name, f"{first_name} {last_name}".strip()):
+            if item:
+                names.add(_normalized_identity(item))
+        display_name = public_entity_display_name(
+            entity,
+            fallback_id=None,
+            default="",
+        )
+        if display_name:
+            names.add(_normalized_identity(display_name))
+        return {item for item in names if item}
+
+    def _receiver_label(self) -> str:
+        if self._self_tg_username:
+            return f"@{self._self_tg_username}"
+        if self._self_receiver_names:
+            return "当前 UserBot 收款人"
+        return "当前 UserBot 收款人（暂未读取到账号名）"
+
+    def _receiver_text_matches_self(self, value: Any) -> bool:
+        candidate = _normalized_identity(value)
+        return bool(candidate and candidate in self._self_receiver_names)
+
+    def _transfer_notice_receiver_matches_self(self, event: Any, receiver_name: str) -> bool:
+        if self._receiver_text_matches_self(receiver_name):
+            return True
+        if self._self_tg_user_id is None:
+            return False
+        entities = getattr(getattr(event, "message", None), "entities", None) or []
+        return any(
+            getattr(getattr(ent, "user", None), "id", None) == self._self_tg_user_id
+            for ent in entities
+        )
+
+    def _payment_receiver_matches_self(self, payload: dict[str, Any]) -> bool:
+        payment = _payload_dict(payload, "payment")
+        source = _payload_dict(payload, "source")
+        receiver = _payload_dict(payment, "receiver")
+        receiver_ids = [
+            receiver.get("user_id"),
+            payment.get("receiver_user_id"),
+            payload.get("receiver_user_id"),
+            source.get("receiver_user_id"),
+        ]
+        clean_ids = [item for item in (_int_payload(value) for value in receiver_ids) if item is not None]
+        if clean_ids:
+            return self._self_tg_user_id is not None and any(item == self._self_tg_user_id for item in clean_ids)
+
+        receiver_names = [
+            receiver.get("username"),
+            receiver.get("display_name"),
+            receiver.get("name"),
+            payment.get("receiver_username"),
+            payment.get("receiver_display_name"),
+            payment.get("receiver_name"),
+            payload.get("receiver_username"),
+            payload.get("receiver_display_name"),
+            payload.get("receiver_name"),
+            source.get("receiver_username"),
+            source.get("receiver_display_name"),
+            source.get("receiver_name"),
+        ]
+        clean_names = [item for item in receiver_names if str(item or "").strip()]
+        if clean_names:
+            return any(self._receiver_text_matches_self(item) for item in clean_names)
+        return False
+
     def _current_player(self, gs: GameState) -> Player | None:
         if gs.turn_index >= len(gs.turn_order): return None
         pid = gs.turn_order[gs.turn_index]
@@ -859,10 +949,11 @@ class DeadRevolverPlugin(Plugin):
             lines.append(f"  {p.player_id}. {name}{paid_tag}")
         if not gs.players:
             lines.append("  （暂无玩家）")
-        receiver_tag = f"@{self._self_tg_username}" if getattr(self, "_self_tg_username", None) else "收款人"
+        receiver_tag = self._receiver_label()
         lines.extend([
             "",
-            f"📌 通过对收款人（{receiver_tag}）的任意消息回复 +{gs.entry_fee} 即可参与。等待庄家开局（庄家发送：开始挑战！）或者倒计时结束自动开局。人数不够时将自动取消。",
+            f"📌 只接受转给 <b>{html.escape(receiver_tag)}</b> 的门票。请回复该收款人的任意消息发送 <b>+{gs.entry_fee}</b>；转给其他人不会报名。",
+            "等待庄家开局（庄家发送：开始挑战！）或者倒计时结束自动开局。人数不够时将自动取消。",
             f"⏰ {max(0, int(JOIN_TIMEOUT - (time.time() - gs.created_at)))} 秒后自动开始或取消",
         ])
         return "\n".join(lines)

@@ -68,6 +68,13 @@ plugin_module, PluginContext = _load_plugin_module()
 
 
 class DeadRevolverRuntimeTest(unittest.TestCase):
+    def _plugin_with_receiver(self):
+        plugin = plugin_module.DeadRevolverPlugin()
+        plugin._self_tg_user_id = 100
+        plugin._self_tg_username = "receiverbot"
+        plugin._self_receiver_names = {"receiverbot", "收款人"}
+        return plugin
+
     def test_cancel_turn_timer_does_not_cancel_current_timeout_task(self) -> None:
         async def run_case() -> bool:
             plugin = plugin_module.DeadRevolverPlugin()
@@ -118,6 +125,84 @@ class DeadRevolverRuntimeTest(unittest.TestCase):
             self.assertEqual(gs.guidance_msg_id, 12)
             self.assertEqual(gs.tracked_msg_ids, [12])
             self.assertEqual(len(sent), 1)
+
+        asyncio.run(run_case())
+
+    def test_lobby_copy_names_current_receiver_only(self) -> None:
+        plugin = self._plugin_with_receiver()
+        gs = plugin_module.GameState(game_id="g1", chat_id=100, host_user_id=1, entry_fee=10)
+
+        text = plugin._render_lobby(gs)
+
+        self.assertIn("@receiverbot", text)
+        self.assertIn("转给其他人不会报名", text)
+
+    def test_payment_event_rejects_wrong_receiver(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+            gs = plugin_module.GameState(
+                game_id="g1",
+                chat_id=100,
+                host_user_id=1,
+                entry_fee=10,
+                interaction_bot=True,
+            )
+            plugin._games[100] = gs
+
+            actions = await plugin._ibot_payment(
+                ctx,
+                {
+                    "actor": {"user_id": 10, "display_name": "玩家A"},
+                    "event_type": "payment_confirmed",
+                    "amount": 10,
+                    "payment": {
+                        "amount": 10,
+                        "payer_name": "玩家A",
+                        "receiver_user_id": 200,
+                        "receiver_name": "其他人",
+                    },
+                },
+                100,
+            )
+
+            self.assertEqual(len(gs.players), 0)
+            self.assertEqual(actions[0]["type"], "send_message")
+            self.assertIn("没有转给@receiverbot", actions[0]["text"])
+
+        asyncio.run(run_case())
+
+    def test_payment_event_accepts_current_receiver(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+            gs = plugin_module.GameState(
+                game_id="g1",
+                chat_id=100,
+                host_user_id=1,
+                entry_fee=10,
+                interaction_bot=True,
+            )
+            plugin._games[100] = gs
+
+            actions = await plugin._ibot_payment(
+                ctx,
+                {
+                    "actor": {"user_id": 10, "display_name": "玩家A"},
+                    "event_type": "payment_confirmed",
+                    "amount": 10,
+                    "payment": {
+                        "amount": 10,
+                        "payer_name": "玩家A",
+                        "receiver_user_id": 100,
+                        "receiver_name": "收款人",
+                    },
+                },
+                100,
+            )
+
+            self.assertEqual([p.user_id for p in gs.players], [10])
+            self.assertTrue(any("已报名死亡左轮" in action.get("text", "") for action in actions))
 
         asyncio.run(run_case())
 
