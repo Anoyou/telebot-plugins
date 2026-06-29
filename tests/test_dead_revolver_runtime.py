@@ -31,6 +31,7 @@ def _load_plugin_module():
             self.config = {}
             self.client = None
             self.redis = None
+            self.messages = None
 
     def register(cls):
         return cls
@@ -88,31 +89,20 @@ class DeadRevolverRuntimeTest(unittest.TestCase):
         self.assertTrue(asyncio.run(run_case()))
 
     def test_next_turn_guidance_deletes_previous_button_message(self) -> None:
-        deleted: list[int] = []
-        sent: list[dict] = []
+        class MessageOps:
+            def __init__(self) -> None:
+                self.actions: list[dict] = []
 
-        account_bot_service = types.ModuleType("app.services.account_bot_service")
+            async def send(self, **kwargs):
+                self.actions.append({"type": "send_message", **kwargs})
 
-        async def send_message(token, chat_id, text, reply_to_message_id=None, reply_markup=None):
-            sent.append({"token": token, "chat_id": chat_id, "text": text, "reply_markup": reply_markup})
-            return {"message_id": 12}
-
-        async def delete_message(token, chat_id, msg_id):
-            deleted.append(int(msg_id))
-
-        account_bot_service.send_message = send_message
-        account_bot_service.delete_message = delete_message
-        sys.modules.setdefault("app.services", types.ModuleType("app.services"))
-        sys.modules["app.services.account_bot_service"] = account_bot_service
+            async def delete(self, **kwargs):
+                self.actions.append({"type": "delete_message", **kwargs})
 
         async def run_case() -> None:
             plugin = plugin_module.DeadRevolverPlugin()
-
-            async def get_bot_token(ctx):
-                return "bot-token"
-
-            plugin._get_bot_token = get_bot_token
             ctx = PluginContext()
+            ctx.messages = MessageOps()
             gs = plugin_module.GameState(game_id="g1", chat_id=100, host_user_id=1, entry_fee=10)
             gs.interaction_bot = True
             gs.guidance_msg_id = 11
@@ -122,10 +112,13 @@ class DeadRevolverRuntimeTest(unittest.TestCase):
 
             await plugin._send_turn_guidance(ctx, gs, current, [current, other])
 
-            self.assertEqual(deleted, [11])
-            self.assertEqual(gs.guidance_msg_id, 12)
-            self.assertEqual(gs.tracked_msg_ids, [12])
-            self.assertEqual(len(sent), 1)
+            self.assertEqual([action["type"] for action in ctx.messages.actions], ["delete_message", "send_message"])
+            self.assertEqual(ctx.messages.actions[0]["message_id"], 11)
+            self.assertEqual(ctx.messages.actions[1]["chat_id"], 100)
+            self.assertIn("轮到 玩家A", ctx.messages.actions[1]["text"])
+            self.assertIn("inline_keyboard", ctx.messages.actions[1]["reply_markup"])
+            self.assertEqual(gs.guidance_msg_id, None)
+            self.assertEqual(gs.tracked_msg_ids, [])
 
         asyncio.run(run_case())
 

@@ -57,13 +57,10 @@ class ImportClient:
         self._sub2api_token_cache: tuple[str, float] | None = None
 
     def _client(self) -> httpx.AsyncClient:
-        kwargs: dict[str, Any] = {
-            "timeout": httpx.Timeout(float(self.timeout)),
-            "follow_redirects": True,
-        }
+        timeout_config = httpx.Timeout(timeout=float(self.timeout))
         if self.proxy_url:
-            kwargs["proxy"] = self.proxy_url
-        return httpx.AsyncClient(**kwargs)
+            return httpx.AsyncClient(timeout=timeout_config, follow_redirects=True, proxy=self.proxy_url)
+        return httpx.AsyncClient(timeout=timeout_config, follow_redirects=True)
 
     async def list_sub2api_accounts(self, cfg: Sub2APIConfig) -> list[dict[str, Any]]:
         if not cfg.base_url:

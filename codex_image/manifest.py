@@ -17,7 +17,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="codex_image",
     display_name="Codex 图片生成",
-    version="1.1.1",
+    version="1.1.3",
     author="TeleBoxOrg",
     description="通过 Codex API 调用 GPT 图片生成模型，支持纯文生图和参考图生成",
     usage="安装并配置 Codex Access Token 后，由账号主人或授权管理员使用命令触发图片生成；可回复图片作为参考图，普通交互结果由 userbot 回复或编辑。该插件不自动订阅群内普通消息。",
@@ -29,6 +29,7 @@ MANIFEST = Manifest(
     config_schema={
         "type": "object",
         "x-ui-mode": "single",
+        "x-usage-guide": "安装并配置 Codex Access Token 后，由账号主人或授权管理员使用 {prefix}{command} 提示词生成图片；回复图片后使用同一命令可带参考图生成；可用 --size、--ratio、--format 临时覆盖输出参数。该插件不自动订阅群内普通消息。",
         "additionalProperties": False,
         "properties": {
             "command": {
@@ -145,8 +146,8 @@ MANIFEST = Manifest(
             "usage_preview": {
                 "type": "string",
                 "title": "命令说明",
-                "description": "只读说明：,{command} 提示词 可文生图；回复图片后 ,{command} 提示词 可参考图生成；可用 --size/--ratio/--format 临时覆盖输出参数。",
-                "default": "文生图：,{command} [--size 尺寸] [--ratio 比例] [--format 格式] 提示词\n参考图：回复图片后 ,{command} 提示词\n别名参数：--比例、--格式",
+                "description": "只读说明：{prefix}{command} 提示词可文生图；回复图片后 {prefix}{command} 提示词可参考图生成；可用 --size/--ratio/--format 临时覆盖输出参数。",
+                "default": "文生图：{prefix}{command} [--size 尺寸] [--ratio 比例] [--format 格式] 提示词\n参考图：回复图片后 {prefix}{command} 提示词\n别名参数：--比例、--格式",
                 "readOnly": True,
                 "level": "account",
             },

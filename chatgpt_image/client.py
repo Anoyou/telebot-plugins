@@ -450,14 +450,15 @@ class ChatGPTWebImageClient:
         }
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
-        kwargs: dict[str, Any] = {
-            "headers": headers,
-            "timeout": httpx.Timeout(float(timeout or self.timeout)),
-            "follow_redirects": True,
-        }
+        timeout_config = httpx.Timeout(timeout=float(timeout or self.timeout))
         if self.proxy_url:
-            kwargs["proxy"] = self.proxy_url
-        return httpx.AsyncClient(**kwargs)
+            return httpx.AsyncClient(
+                headers=headers,
+                timeout=timeout_config,
+                follow_redirects=True,
+                proxy=self.proxy_url,
+            )
+        return httpx.AsyncClient(headers=headers, timeout=timeout_config, follow_redirects=True)
 
     def _headers(self, path: str, extra: dict[str, str] | None = None) -> dict[str, str]:
         headers = {

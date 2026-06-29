@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.0.9 (2026-06-30)
+- 按最新插件开发规范移除 `plugin.py` 中对 `app.db.*` 与 `app.services.*` 内部模块的直接 import。
+- 交互 Bot 路径改为通过标准 MessageOps/action 发送、编辑、删除按钮消息，并用受控 `userbot_reply` action 处理奖励和退款。
+- 旧转账通知 on_message 兜底默认关闭，付款报名由 TelePilot Event Bus 的 `payment_confirmed` 标准信封投递，避免插件跨层读取系统转账规则。
+
 ## 1.0.8 (2026-06-29)
 - 修复转账通知命中后无响应的问题：为 `payment_confirmed` Event Bus 订阅补充 `entry_key=join_paid_game`，避免事件被订阅匹配后因缺少入口而跳过插件调用。
 - 兼容 TelePilot Event Bus 付款 payload，从 `payment` 与 `reply_to` 中提取付款金额、付款人和玩家消息 ID，防止付款事件被静默忽略或误把通知 Bot 当作玩家。

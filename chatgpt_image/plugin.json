@@ -4,7 +4,7 @@
   "description": "实验性：按 chatgpt2api 的核心思路在 Telegram 内完成 ChatGPT 图片生成、编辑与 token 池管理。",
   "usage": "安装并配置 Token 池后，由账号主人或授权管理员使用命令触发：文生图命令生成图片，图片编辑命令在回复图片或最近图片上下文中编辑，管理命令查看模型、token 池和额度。该插件不自动订阅群内普通消息。",
   "author": "TelePilot Official",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "entry": "plugin.py",
   "category": "utility",
   "experimental": true,
@@ -24,12 +24,13 @@
   "config_schema": {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": "安装并配置 Token 池后，由账号主人或授权管理员使用 {prefix}{command} 提示词生成图片；回复图片后使用 {prefix}{edit_command} 提示词编辑图片；使用 {prefix}{admin_command} 管理模型、Token 池、额度、导入和代理。该插件不自动订阅群内普通消息。",
     "additionalProperties": false,
     "properties": {
       "command": {
         "type": "string",
         "title": "文生图命令",
-        "description": "Telegram 中触发文生图的命令名，不含系统前缀。例：draw；实际使用为 ,draw 提示词。",
+        "description": "Telegram 中触发文生图的命令名，不含系统前缀。例：draw；实际使用为 {prefix}{command} 提示词。",
         "default": "draw",
         "minLength": 1,
         "maxLength": 32,
@@ -39,7 +40,7 @@
       "edit_command": {
         "type": "string",
         "title": "图片编辑命令",
-        "description": "回复图片后触发图片编辑的命令名，不含系统前缀。例：edit；也支持 ,edit last 续改最近图片。",
+        "description": "回复图片后触发图片编辑的命令名，不含系统前缀。例：edit；也支持 {prefix}{edit_command} last 续改最近图片。",
         "default": "edit",
         "minLength": 1,
         "maxLength": 32,
@@ -332,7 +333,7 @@
         "type": "string",
         "title": "命令说明",
         "description": "兼容字段：保留给旧前端读取。请优先使用 usage_preview。",
-        "default": "文生图：,{command} [-m 模型] [-n 数量] [-s 风格] [--size 画幅] 提示词\n图片编辑：回复图片后 ,{edit_command} 提示词；或 ,{edit_command} last 提示词\n管理：,{admin_command} ping/models/status/version/refresh/token/import/proxy",
+        "default": "文生图：{prefix}{command} [-m 模型] [-n 数量] [-s 风格] [--size 画幅] 提示词\n图片编辑：回复图片后 {prefix}{edit_command} 提示词；或 {prefix}{edit_command} last 提示词\n管理：{prefix}{admin_command} ping/models/status/version/refresh/token/import/proxy",
         "readOnly": true,
         "level": "account"
       },
@@ -340,7 +341,7 @@
         "type": "string",
         "title": "命令说明",
         "description": "只读说明：所有主命令都可自定义，子命令固定为 ping、models、status、version、refresh、token、import、proxy。",
-        "default": "文生图：,{command} [-m 模型] [-n 数量] [-s 风格] [--size 画幅] 提示词\n图片编辑：回复图片后 ,{edit_command} 提示词；或 ,{edit_command} last 提示词\n管理：,{admin_command} ping/models/status/version/refresh/token/import/proxy",
+        "default": "文生图：{prefix}{command} [-m 模型] [-n 数量] [-s 风格] [--size 画幅] 提示词\n图片编辑：回复图片后 {prefix}{edit_command} 提示词；或 {prefix}{edit_command} last 提示词\n管理：{prefix}{admin_command} ping/models/status/version/refresh/token/import/proxy",
         "readOnly": true,
         "level": "account"
       }

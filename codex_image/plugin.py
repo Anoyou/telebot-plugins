@@ -124,6 +124,16 @@ def _compact_html_text(text: str, max_len: int = 160) -> str:
     return cleaned
 
 
+def _is_template_truthy(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict, tuple)):
+        return bool(value)
+    return bool(value)
+
+
 async def _edit_html(event: Any, text: str) -> None:
     """编辑消息并按 HTML 解析；模板写坏时退回纯文本。"""
     try:
@@ -625,9 +635,23 @@ def _extract_text_fallback_prompt(text: Any) -> str | None:
 
 def _render_message(template: str, values: dict[str, Any], *, limit: int = 4000) -> str:
     """渲染用户消息模板；只转义占位符值，保留模板里的 HTML 标签。"""
-    from app.services.llm_format import render_output
+    raw_template = template or DEFAULT_MESSAGE_TEMPLATE
 
-    text = render_output(template or DEFAULT_MESSAGE_TEMPLATE, values, escape_format="html")
+    def _replace_cond(match: re.Match[str]) -> str:
+        key = match.group(1)
+        body = match.group(2)
+        return body if _is_template_truthy(values.get(key)) else ""
+
+    expanded = re.sub(r"\{\?([a-zA-Z0-9_]+)\}([\s\S]*?)\{/\?\}", _replace_cond, raw_template)
+
+    def _replace_placeholder(match: re.Match[str]) -> str:
+        key = match.group(1)
+        value = values.get(key, "")
+        if isinstance(value, bool):
+            value = "true" if value else ""
+        return html.escape(str(value or ""), quote=False)
+
+    text = re.sub(r"\{(?!\?)([a-zA-Z0-9_]+)\}", _replace_placeholder, expanded)
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)] + "…"
@@ -648,23 +672,18 @@ def _image_ext_from_bytes(data: bytes, preferred_format: str = DEFAULT_IMAGE_FOR
 
 
 async def _update_account_config(ctx: PluginContext, key: str, value: Any) -> None:
-    """更新 account_feature.config 中的某个字段并持久化。"""
-    from sqlalchemy import select
+    """更新本次运行时配置。
 
-    from app.db.base import AsyncSessionLocal
-    from app.db.models.feature import AccountFeature
-
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(AccountFeature).where(
-                AccountFeature.account_id == ctx.account_id,
-                AccountFeature.feature_key == ctx.feature_key,
-            )
+    新版远程插件规范不允许插件直接导入数据库模型或 feature_service。
+    长期保存仍由 TelePilot 配置页负责。
+    """
+    ctx.config = {**(ctx.config or {}), key: value}
+    if ctx.log:
+        await ctx.log(
+            "warn",
+            "[codex_image] 配置已更新到本次运行时；远程插件不再直接持久化 account_feature.config。",
+            updated_key=key,
         )
-        af = result.scalar_one_or_none()
-        if af:
-            af.config = {**(af.config or {}), key: value}
-            await db.commit()
 
 
 # ─── Codex API 调用 ────────────────────────────────────
@@ -754,7 +773,7 @@ async def _call_codex_image(
     for stream_attempt in range(2):
         remaining_timeout = max(1.0, deadline - time.monotonic())
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(remaining_timeout)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=remaining_timeout)) as client:
                 async with client.stream("POST", CODEX_URL, json=payload, headers=headers) as resp:
                     if resp.status_code != 200:
                         body = await resp.aread()
@@ -947,7 +966,7 @@ async def _poll_codex_response(
         "Accept": "application/json",
     }
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(remaining_timeout)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=remaining_timeout)) as client:
             resp = await client.get(f"{CODEX_URL}/{response_id}", headers=headers)
 
             # HTTP 错误 → 返回 error 字段而不是静默吞掉
@@ -1150,9 +1169,7 @@ class CodexImagePlugin(Plugin):
             return
 
         await _update_account_config(ctx, "access_token", token_value)
-        # 更新运行时 config
-        ctx.config["access_token"] = token_value
-        await event.edit("✅ 已保存 Codex Access Token")
+        await event.edit("✅ Codex Access Token 已在本次运行时生效。请到插件配置页同步保存，重载后才会长期保留。")
 
     # ── 图片生成 ──────────────────────────────────────
 
@@ -1487,14 +1504,13 @@ class CodexImagePlugin(Plugin):
         self, ctx: PluginContext, reply_msg: Any
     ) -> dict[str, str | int | None]:
         """从回复消息中下载参考图，返回 {base64, mime_type, width, height}。"""
-        from app.worker.media import _download_with_retry
+        from app.worker.media import download_image_bytes
 
         client = ctx.client
         if not client:
             raise RuntimeError("客户端未初始化")
 
-        # 下载媒体（带 file_reference 过期重试）
-        media_bytes = await _download_with_retry(client, reply_msg)
+        media_bytes = await download_image_bytes(client, reply_msg)
         if not media_bytes:
             raise RuntimeError("未能获取参考图数据")
 

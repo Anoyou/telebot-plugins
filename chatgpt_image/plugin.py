@@ -1,6 +1,6 @@
 """ChatGPT2API。
 
-这是一个 TelePilot 原生插件版的 chatgpt2api-lite：token 池保存在插件配置中，
+这是一个 TelePilot 原生插件版的 chatgpt2api-lite：token 池从插件配置中读取，
 运行时按 token 轮询调用 ChatGPT Web 图片链路，并把结果发回 Telegram。
 """
 
@@ -41,7 +41,7 @@ from .token_pool import (
     parse_token_lines,
 )
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.2"
 DEFAULT_MODELS = [
     "gpt-image-2",
     "codex-gpt-image-2",
@@ -715,7 +715,7 @@ class ChatGPTImagePlugin(Plugin):
                 return "请在 add 后面填写 token，或粘贴 chatgpt.com/api/auth/session 返回的完整 JSON。"
             source = "chatgpt.com session JSON" if session_token else "Telegram 命令添加"
             added, total = await self._merge_token_entries(ctx, [TokenEntry(token=token, note=source) for token in tokens])
-            return f"已添加 {added} 个 token，当前共 {total} 个。"
+            return f"已在本次运行时添加 {added} 个 token，当前共 {total} 个。请到插件配置页同步保存 Token 池，重载后才会长期保留。"
         if action in {"del", "delete", "remove"}:
             if len(args) < 2:
                 return "请提供要删除的 token 序号、token:id 或完整 token。"
@@ -724,7 +724,7 @@ class ChatGPTImagePlugin(Plugin):
                 return "没有找到要删除的 token。"
             next_entries = [entry for entry in self._cfg.tokens if entry.token != state.token]
             await self._save_token_entries(ctx, next_entries)
-            return f"已删除 {state.token_id}，当前共 {len(next_entries)} 个。"
+            return f"已在本次运行时删除 {state.token_id}，当前共 {len(next_entries)} 个。请到插件配置页同步保存 Token 池，重载后才会长期保留。"
         return "token 子命令支持：list / add / del。"
 
     async def _import_command(self, ctx: PluginContext, args: list[str]) -> str:
@@ -770,7 +770,7 @@ class ChatGPTImagePlugin(Plugin):
             [TokenEntry(token=token, note=f"{source} 导入") for token in tokens],
         )
         await self._log(ctx, "info", f"{source} token 导入完成。", added=added, total=total)
-        return f"{source} 导入完成：新增 {added} 个，当前共 {total} 个。"
+        return f"{source} 导入完成：本次运行时新增 {added} 个，当前共 {total} 个。请到插件配置页同步保存 Token 池，重载后才会长期保留。"
 
     async def _merge_token_entries(self, ctx: PluginContext, entries: list[TokenEntry]) -> tuple[int, int]:
         current = list(self._cfg.tokens)
@@ -813,42 +813,13 @@ class ChatGPTImagePlugin(Plugin):
         return "跟随账号代理" if self._proxy_url else "跟随账号：直连"
 
     async def _save_account_config(self, ctx: PluginContext, updates: dict[str, Any]) -> None:
-        from sqlalchemy import select
-
-        from app.db.base import AsyncSessionLocal
-        from app.db.models.feature import AccountFeature, Feature
-        from app.services import feature_service
-
-        async with AsyncSessionLocal() as db:
-            feature = await db.get(Feature, ctx.feature_key)
-            row = (
-                await db.execute(
-                    select(AccountFeature).where(
-                        AccountFeature.account_id == ctx.account_id,
-                        AccountFeature.feature_key == ctx.feature_key,
-                    )
-                )
-            ).scalar_one_or_none()
-            current = dict(row.config or {}) if row is not None else {}
-            merged = {**current, **updates}
-            schema = (feature.manifest or {}).get("config_schema") if feature is not None else None
-            if schema:
-                defaults = {
-                    key: prop["default"]
-                    for key, prop in (schema.get("properties") or {}).items()
-                    if isinstance(prop, dict) and "default" in prop
-                }
-                validation = feature_service.validate_config_against_schema({**defaults, **merged}, schema)
-                if not validation.valid:
-                    raise ValueError("配置验证失败：" + "; ".join(f"{e.field}: {e.message}" for e in validation.errors))
-            await feature_service.set_account_feature(
-                db,
-                ctx.account_id,
-                ctx.feature_key,
-                enabled=True,
-                config=merged,
-            )
         ctx.config = {**ctx.config, **updates}
+        await self._log(
+            ctx,
+            "warn",
+            "ChatGPT token 池已更新到本次运行时配置；远程插件不再直接持久化 account_feature.config。",
+            updated_keys=sorted(updates),
+        )
 
     async def _log(self, ctx: PluginContext, level: str, message: str, **detail: Any) -> None:
         if ctx.log:
