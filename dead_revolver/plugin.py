@@ -22,6 +22,8 @@ JOIN_TIMEOUT = 60
 TURN_TIMEOUT = 30
 COURAGE_MULTIPLIER: dict[int, float] = {0: 1.00, 1: 1.10, 2: 1.25, 3: 1.45, 4: 1.70}
 REDIS_MSG_KEY_PREFIX = "dead_revolver:msg:"
+DEFAULT_START_KEYWORD = "开始挑战"
+LEGACY_START_COMMAND = "dr_start"
 
 
 def _courage_multiplier(courage: int) -> float:
@@ -90,6 +92,34 @@ def _extract_user_id(payload: dict[str, Any]) -> int | None:
 def _extract_display_name(payload: dict[str, Any]) -> str:
     actor = _payload_dict(payload, "actor")
     return str(payload.get("sender_name") or actor.get("display_name") or payload.get("payer_name") or "未知用户")
+
+
+def _extract_message_text(payload: dict[str, Any]) -> str:
+    source = _payload_dict(payload, "source")
+    trigger = _payload_dict(payload, "trigger")
+    event = _payload_dict(payload, "event")
+    value = (
+        payload.get("message_text")
+        or payload.get("text")
+        or source.get("message_text")
+        or source.get("text")
+        or trigger.get("message_text")
+        or trigger.get("text")
+        or event.get("message_text")
+        or event.get("text")
+    )
+    return str(value or "").strip()
+
+
+def _configured_start_keyword(*configs: dict[str, Any] | None) -> str:
+    for cfg in configs:
+        if not isinstance(cfg, dict):
+            continue
+        value = cfg.get("start_keyword") or cfg.get("start_command")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return DEFAULT_START_KEYWORD
 
 
 def _event_chat_id(event: Any) -> int | None:
@@ -173,6 +203,7 @@ class GameState:
     tracked_msg_ids: list[int] = field(default_factory=list)
     guidance_msg_id: int | None = None
     created_at: float = 0.0
+    start_keyword: str = DEFAULT_START_KEYWORD
 
 
 # ─────────────────────────────────────────────────────
@@ -193,11 +224,18 @@ class DeadRevolverPlugin(Plugin):
         self._self_tg_user_id: int | None = None
         self._self_tg_username: str | None = None
         self._self_receiver_names: set[str] = set()
+        self._start_keyword = DEFAULT_START_KEYWORD
 
     # ── 生命周期 ────────────────────────────────
     async def on_startup(self, ctx: PluginContext) -> None:
         self._ctx = ctx
-        self.commands = {"dr": self._cmd_create, "dr_start": self._cmd_start, "开始挑战": self._cmd_start}
+        self._start_keyword = _configured_start_keyword(getattr(ctx, "config", None) or {})
+        self.commands = {
+            "dr": self._cmd_create,
+            LEGACY_START_COMMAND: self._cmd_start,
+            DEFAULT_START_KEYWORD: self._cmd_start,
+            self._start_keyword: self._cmd_start,
+        }
         try:
             me = await ctx.client.get_me()
             self._self_tg_user_id = int(getattr(me, "id", 0) or 0) or None
@@ -228,7 +266,7 @@ class DeadRevolverPlugin(Plugin):
         chat_id = _extract_chat_id(payload)
         if chat_id is None: return []
         if event_type == "keyword":
-            return await self._ibot_create(ctx, payload, chat_id)
+            return await self._ibot_keyword(ctx, payload, chat_id)
         if event_type == "payment_confirmed":
             return await self._ibot_payment(ctx, payload, chat_id)
         if event_type == "callback_query":
@@ -237,11 +275,32 @@ class DeadRevolverPlugin(Plugin):
             await self._ibot_close(ctx, chat_id)
         return []
 
+    async def _ibot_keyword(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+        text = _extract_message_text(payload)
+        sender_id = _extract_user_id(payload)
+        configured_keyword = _configured_start_keyword(
+            _payload_dict(payload, "module_config"),
+            getattr(ctx, "config", None) or {},
+            {"start_keyword": self._start_keyword},
+        )
+        is_start_keyword = text in {LEGACY_START_COMMAND, DEFAULT_START_KEYWORD, configured_keyword}
+        async with self._lock_for(chat_id):
+            gs = self._games.get(chat_id)
+            if gs is not None and self._matches_start_keyword(gs, text):
+                error = await self._start_existing_game(ctx, gs, sender_id)
+                if error:
+                    return [{"type": "send_message", "text": error, "send_via": "interaction_bot"}]
+                return []
+        if is_start_keyword:
+            return [{"type": "send_message", "text": "当前没有进行中的死亡左轮游戏。", "send_via": "interaction_bot"}]
+        return await self._ibot_create(ctx, payload, chat_id)
+
     async def _ibot_create(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         sender_id = _extract_user_id(payload)
         if sender_id is None: return []
         module_config = _payload_dict(payload, "module_config")
         fee = _int_payload(module_config.get("entry_fee")) or 100
+        start_keyword = _configured_start_keyword(module_config, getattr(ctx, "config", None) or {}, {"start_keyword": self._start_keyword})
         msg_text = str(payload.get("message_text") or "").strip()
         parsed_fee = self._parse_fee(msg_text.split())
         if parsed_fee > 0: fee = parsed_fee
@@ -251,7 +310,8 @@ class DeadRevolverPlugin(Plugin):
             if existing and existing.phase in ("joining", "playing"):
                 return [{"type": "send_message", "text": "当前已有进行中的死亡左轮游戏。"}]
             game = GameState(game_id=secrets.token_hex(4), chat_id=chat_id, host_user_id=sender_id,
-                             entry_fee=fee, interaction_bot=True, created_at=time.time())
+                             entry_fee=fee, interaction_bot=True, created_at=time.time(),
+                             start_keyword=start_keyword)
             self._games[chat_id] = game
             game.timeout_task = asyncio.create_task(self._join_timeout(ctx, game))
         await self._log("info", f"死亡左轮游戏已创建（交互Bot）：{game.game_id} 门票 {fee}。",
@@ -349,6 +409,7 @@ class DeadRevolverPlugin(Plugin):
                           account_id: int, ctx: PluginContext) -> None:
         fee = self._parse_fee(args)
         if fee <= 0: await event.reply("请指定门票金额，例如：dr 100"); return
+        start_keyword = _configured_start_keyword(getattr(ctx, "config", None) or {}, {"start_keyword": self._start_keyword})
         chat_id = _event_chat_id(event)
         if chat_id is None: return
         async with self._lock_for(chat_id):
@@ -358,7 +419,7 @@ class DeadRevolverPlugin(Plugin):
             sender_id = _event_sender_id(event)
             if sender_id is None: return
             game = GameState(game_id=secrets.token_hex(4), chat_id=chat_id, host_user_id=sender_id,
-                             entry_fee=fee, created_at=time.time())
+                             entry_fee=fee, created_at=time.time(), start_keyword=start_keyword)
             msg = await event.reply(self._render_lobby(game))
             game.game_message_id = msg.id
             try: await client.pin_message(chat_id, msg.id)
@@ -375,12 +436,10 @@ class DeadRevolverPlugin(Plugin):
         async with self._lock_for(chat_id):
             gs = self._games.get(chat_id)
             if gs is None: await event.reply("当前没有进行中的死亡左轮游戏。"); return
-            if gs.phase != "joining": await event.reply("游戏已经开始或已结束。"); return
             sender_id = _event_sender_id(event)
-            if sender_id != gs.host_user_id: await event.reply("只有庄家可以开始游戏。"); return
-            if len(gs.players) < 2: await event.reply("至少需要 2 名玩家才能开始。"); return
-            if gs.timeout_task and not gs.timeout_task.done(): gs.timeout_task.cancel()
-            await self._start_game(ctx, gs)
+            error = await self._start_existing_game(ctx, gs, sender_id)
+            if error:
+                await event.reply(error)
 
     # ── on_message ───────────────────────────────
     async def on_message(self, ctx: PluginContext, event: events.NewMessage.Event) -> None:
@@ -394,6 +453,20 @@ class DeadRevolverPlugin(Plugin):
         if gs is None: return
 
         if gs.interaction_bot:
+            if self._matches_start_keyword(gs, text):
+                error: str | None = None
+                start_gs: GameState | None = None
+                async with self._lock_for(chat_id):
+                    gs2 = self._games.get(chat_id)
+                    if gs2 is not None and self._matches_start_keyword(gs2, text):
+                        start_gs = gs2
+                        error = await self._start_existing_game(ctx, gs2, sender_id)
+                if error and start_gs is not None:
+                    msg_id = await self._send_bot_msg(ctx, start_gs, error)
+                    if msg_id is None:
+                        try: await ctx.client.send_message(chat_id, error)
+                        except Exception: pass
+                return
             handled = await self._userbot_transfer(ctx, event, gs, text, sender_id)
             if not handled:
                 async with self._lock_for(chat_id):
@@ -405,6 +478,12 @@ class DeadRevolverPlugin(Plugin):
         async with self._lock_for(chat_id):
             gs2 = self._games.get(chat_id)
             if gs2 is None: return
+            if self._matches_start_keyword(gs2, text):
+                error = await self._start_existing_game(ctx, gs2, sender_id)
+                if error:
+                    try: await ctx.client.send_message(chat_id, error)
+                    except Exception: pass
+                return
             if text.startswith("+"):
                 await self._userbot_join(ctx, event, gs2, sender_id, text)
                 return
@@ -533,6 +612,22 @@ class DeadRevolverPlugin(Plugin):
         if target is None or not target.alive: return
         self._cancel_turn_timer(gs)
         await self._fire_shot(ctx, gs, current, target if target_id != current.player_id else None)
+
+    def _matches_start_keyword(self, gs: GameState, text: str) -> bool:
+        value = str(text or "").strip()
+        return value in {LEGACY_START_COMMAND, DEFAULT_START_KEYWORD, gs.start_keyword}
+
+    async def _start_existing_game(self, ctx: PluginContext, gs: GameState, sender_id: int | None) -> str | None:
+        if gs.phase != "joining":
+            return "游戏已经开始或已结束。"
+        if sender_id != gs.host_user_id:
+            return "只有庄家可以开始游戏。"
+        if len(gs.players) < 2:
+            return "至少需要 2 名玩家才能开始。"
+        if gs.timeout_task and not gs.timeout_task.done():
+            gs.timeout_task.cancel()
+        await self._start_game(ctx, gs)
+        return None
 
     # ── 定时器 ───────────────────────────────────
     def _cancel_turn_timer(self, gs: GameState) -> None:
@@ -949,11 +1044,12 @@ class DeadRevolverPlugin(Plugin):
             lines.append(f"  {p.player_id}. {name}{paid_tag}")
         if not gs.players:
             lines.append("  （暂无玩家）")
-        receiver_tag = self._receiver_label()
+        start_keyword = html.escape(gs.start_keyword or self._start_keyword or DEFAULT_START_KEYWORD)
         lines.extend([
             "",
-            f"📌 只接受转给 <b>{html.escape(receiver_tag)}</b> 的门票。请回复该收款人的任意消息发送 <b>+{gs.entry_fee}</b>；转给其他人不会报名。",
-            "等待庄家开局（庄家发送：开始挑战！）或者倒计时结束自动开局。人数不够时将自动取消。",
+            "📌 参与方式",
+            f"• 转账 {gs.entry_fee} → 自动报名",
+            f"• 庄家发送{start_keyword} 开始（需至少 2 人）",
             f"⏰ {max(0, int(JOIN_TIMEOUT - (time.time() - gs.created_at)))} 秒后自动开始或取消",
         ])
         return "\n".join(lines)

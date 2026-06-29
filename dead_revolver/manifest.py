@@ -5,8 +5,8 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}dr 门票金额 创建死亡左轮大厅；玩家必须把门票转给当前 UserBot 收款人，转给其他人不会报名。庄家发送 '
- '{prefix}dr_start 或“开始挑战”开局；交互 Bot 只承接游戏互动，资金确认和退款/奖励仍由 userbot/平台通道处理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
+USAGE = ('管理员发送 {prefix}dr 门票金额 创建死亡左轮大厅；玩家转账门槛金额自动报名。庄家发送配置的开局关键词（默认“开始挑战”，兼容 '
+ '{prefix}dr_start）开局；交互 Bot 只承接游戏互动，资金确认和退款/奖励仍由 userbot/平台通道处理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
  'interaction_bot；付款确认来自 external_payment_notice/userbot，插件会二次校验收款人。输出只使用 interaction_bot 或 userbot_reply 受控通道。')
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
@@ -25,7 +25,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dead_revolver",
     display_name="死亡左轮",
-    version="1.0.6",
+    version="1.0.7",
     min_telepilot_version="0.33.0",
     author="builtin",
     description="群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
@@ -33,7 +33,7 @@ MANIFEST = Manifest(
     interaction_profile="session_game",
     interaction_entries=[{'key': 'join_paid_game',
   'title': '转账加入游戏',
-  'description': '用户向当前 UserBot 收款人转账命中后自动加入当前等待中的死亡左轮游戏。',
+  'description': '用户转账门槛金额并通过收款人校验后自动加入当前等待中的死亡左轮游戏。',
   'interaction_profile': 'session_game',
   'launch_mode': 'bridge',
   'session_scope': 'chat',
@@ -50,7 +50,14 @@ MANIFEST = Manifest(
                                                 'title': '门票金额',
                                                 'description': '每个玩家的入场费，发送 dr <金额> 或用此默认值',
                                                 'default': 100,
-                                                'minimum': 1}},
+                                                'minimum': 1},
+                                  'start_keyword': {'type': 'string',
+                                                    'title': '开局关键词',
+                                                    'description': '庄家发送该关键词开始游戏，默认保留“开始挑战”，并兼容 dr_start。',
+                                                    'default': '开始挑战',
+                                                    'minLength': 1,
+                                                    'maxLength': 32,
+                                                    'pattern': '^\\S+$'}},
                    'required': ['entry_fee']},
   'dispatch_modes': ['public_keyword'],
   'message_channels': {'public_keyword': 'interaction_bot'},
@@ -64,9 +71,19 @@ MANIFEST = Manifest(
     config_schema={
         "type": "object",
         "x-ui-mode": "single",
-        "x-usage-guide": '管理员发送 {prefix}dr 门票金额 创建死亡左轮大厅；玩家必须把门票转给当前 UserBot 收款人，转给其他人不会报名。庄家发送 {prefix}dr_start 或“开始挑战”开局；交互 Bot 只承接游戏互动，资金确认和退款/奖励仍由 userbot/平台通道处理。',
+        "x-usage-guide": '管理员发送 {prefix}dr 门票金额 创建死亡左轮大厅；玩家转账门槛金额自动报名。庄家发送配置的开局关键词（默认“开始挑战”，兼容 {prefix}dr_start）开局；交互 Bot 只承接游戏互动，资金确认和退款/奖励仍由 userbot/平台通道处理。',
         "additionalProperties": False,
-        "properties": {},
+        "properties": {
+            "start_keyword": {
+                "type": "string",
+                "title": "开局关键词",
+                "description": "庄家发送该关键词开始游戏，默认保留“开始挑战”，并兼容 dr_start。",
+                "default": "开始挑战",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^\\S+$",
+            }
+        },
     },
 )
 

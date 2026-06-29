@@ -128,14 +128,47 @@ class DeadRevolverRuntimeTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
-    def test_lobby_copy_names_current_receiver_only(self) -> None:
+    def test_lobby_copy_uses_participation_block(self) -> None:
         plugin = self._plugin_with_receiver()
-        gs = plugin_module.GameState(game_id="g1", chat_id=100, host_user_id=1, entry_fee=10)
+        gs = plugin_module.GameState(
+            game_id="g1",
+            chat_id=100,
+            host_user_id=1,
+            entry_fee=10,
+            start_keyword="开局",
+        )
 
         text = plugin._render_lobby(gs)
 
-        self.assertIn("@receiverbot", text)
-        self.assertIn("转给其他人不会报名", text)
+        self.assertIn("📌 参与方式", text)
+        self.assertIn("• 转账 10 → 自动报名", text)
+        self.assertIn("• 庄家发送开局 开始（需至少 2 人）", text)
+        self.assertNotIn("+10 快速加入", text)
+        self.assertNotIn("转给其他人不会报名", text)
+
+    def test_interaction_create_uses_configured_start_keyword(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+
+            actions = await plugin._ibot_create(
+                ctx,
+                {
+                    "actor": {"user_id": 1, "display_name": "庄家"},
+                    "event_type": "keyword",
+                    "chat_id": 100,
+                    "message_text": "dr",
+                    "module_config": {"entry_fee": 10, "start_keyword": "开局"},
+                },
+                100,
+            )
+
+            self.assertEqual(plugin._games[100].start_keyword, "开局")
+            self.assertIn("• 庄家发送开局 开始（需至少 2 人）", actions[0]["text"])
+            plugin._games[100].timeout_task.cancel()
+            await asyncio.sleep(0)
+
+        asyncio.run(run_case())
 
     def test_payment_event_rejects_wrong_receiver(self) -> None:
         async def run_case() -> None:
