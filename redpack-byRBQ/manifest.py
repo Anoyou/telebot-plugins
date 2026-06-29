@@ -125,10 +125,28 @@ CONFIG_SCHEMA = {
     "required": ["command"]
 }
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = ('管理员发送 {prefix}{command} 口令 总额 个数 创建文字或图片口令红包；群友直接发送正确口令领取，插件自动回复 +金额 并在领完后发送结算榜单。事件订阅：管理员命令走 '
+ 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 '
+ 'interaction_bot 或 userbot_reply 受控通道。')
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.22",
+    version="1.1.23",
     min_telepilot_version="0.33.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
@@ -176,5 +194,10 @@ MANIFEST = Manifest(
   'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

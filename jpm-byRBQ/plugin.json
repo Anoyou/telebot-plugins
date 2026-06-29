@@ -3,7 +3,7 @@
   "display_name": "jpm-byRBQ",
   "description": "关键词触发回复插件，支持多关键词、频率限制、锚点消息系统",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -47,5 +47,19 @@
   },
   "category": "automation",
   "interaction_entries": [],
-  "min_telepilot_version": "0.33.0"
+  "min_telepilot_version": "0.33.0",
+  "usage": "发送 {prefix}{command} 按原 Pagermaid 方式触发贴纸自动回复能力；可在配置页调整触发指令名和启用状态。事件订阅：账号主人或授权管理员通过 userbot 命令触发；输出通过平台 MessageOps 受控发送，并可在日志 Trace 中排查。",
+  "event_subscriptions": [
+    {
+      "events": [
+        "command"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "owner_only",
+      "description": "账号主人或授权管理员通过 UserBot 命令触发。"
+    }
+  ],
+  "capabilities": {}
 }

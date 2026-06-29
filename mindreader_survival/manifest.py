@@ -219,10 +219,28 @@ CONFIG_SCHEMA = {
 
 # ── Manifest ─────────────────────────────────────────────────
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = ('管理员发送 {prefix}{command} 创建读心生存赛，玩家通过付款或关键词加入，每轮回复数字选择答案；最终存活者按规则瓜分奖池。事件订阅：管理员命令走 '
+ 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 '
+ 'interaction_bot 或 userbot_reply 受控通道。')
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.1.6",
+    version="1.1.7",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
@@ -271,5 +289,10 @@ MANIFEST = Manifest(
     config_schema=CONFIG_SCHEMA,
 )
 
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

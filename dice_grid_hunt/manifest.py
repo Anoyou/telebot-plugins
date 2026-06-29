@@ -248,10 +248,29 @@ CONFIG_SCHEMA = {
 }
 
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = ('管理员发送 {prefix}{command} 奖励金额 开启九宫格骰子竞猜；群友回复 1-9 '
+ '抢答，配置页可调整题面、进行中、答对、超时和奖励模板，并在插件预览里查看最终消息。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
+ 'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
+ '受控通道。')
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.16",
+    version="1.1.17",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -299,5 +318,10 @@ MANIFEST = Manifest(
     config_schema=CONFIG_SCHEMA,
 )
 
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

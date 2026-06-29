@@ -3,7 +3,7 @@
   "display_name": "群消息总结",
   "description": "调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
   "author": "Anoyou",
-  "version": "1.1.30",
+  "version": "1.1.31",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -162,5 +162,19 @@
     ],
     "x-usage-guide": "发送 {prefix}{command} 数量 总结最近群消息；也可配置快捷总结和定时任务。AI Provider、消息模板、词云和输出格式都可在配置页调整，并可通过插件预览查看摘要消息。"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "usage": "发送 {prefix}{command} 数量 总结最近群消息；也可配置快捷总结和定时任务。AI Provider、消息模板、词云和输出格式都可在配置页调整，并可通过插件预览查看摘要消息。事件订阅：账号主人或授权管理员通过 userbot 命令触发；快捷总结和定时总结由平台配置驱动。AI、词云和文件输出都通过平台受控能力执行。",
+  "event_subscriptions": [
+    {
+      "events": [
+        "command"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "owner_only",
+      "description": "账号主人或授权管理员通过 UserBot 命令触发。"
+    }
+  ],
+  "capabilities": {}
 }

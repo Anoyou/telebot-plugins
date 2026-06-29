@@ -4,10 +4,28 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = ('管理员发送 {prefix}dr 门票金额 创建死亡左轮大厅，玩家按规则付款或关键词加入，庄家发送 {prefix}dr_start 开局；交互 Bot '
+ '只承接游戏互动，资金确认和退款/奖励仍由 userbot/平台通道处理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 '
+ 'external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。')
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'callback_query', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="dead_revolver",
     display_name="死亡左轮",
-    version="1.0.3",
+    version="1.0.4",
     min_telepilot_version="0.33.0",
     author="builtin",
     description="群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
@@ -51,5 +69,10 @@ MANIFEST = Manifest(
         "properties": {},
     },
 )
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

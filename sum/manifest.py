@@ -157,10 +157,20 @@ CONFIG_SCHEMA = {
 }
 
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = ('发送 {prefix}{command} 数量 总结最近群消息；也可配置快捷总结和定时任务。AI '
+ 'Provider、消息模板、词云和输出格式都可在配置页调整，并可通过插件预览查看摘要消息。事件订阅：账号主人或授权管理员通过 userbot '
+ '命令触发；快捷总结和定时总结由平台配置驱动。AI、词云和文件输出都通过平台受控能力执行。')
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.30",
+    version="1.1.31",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
@@ -170,5 +180,10 @@ MANIFEST = Manifest(
     config_schema=CONFIG_SCHEMA,
 )
 
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]
