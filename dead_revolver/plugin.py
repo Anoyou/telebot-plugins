@@ -184,16 +184,19 @@ class DeadRevolverPlugin(Plugin):
         self._locks: dict[int, asyncio.Lock] = {}
         self._ctx: PluginContext | None = None
         self._self_tg_user_id: int | None = None
+        self._self_tg_username: str | None = None
 
     # ── 生命周期 ────────────────────────────────
     async def on_startup(self, ctx: PluginContext) -> None:
         self._ctx = ctx
-        self.commands = {"dr": self._cmd_create, "dr_start": self._cmd_start}
+        self.commands = {"dr": self._cmd_create, "dr_start": self._cmd_start, "开始挑战": self._cmd_start}
         try:
             me = await ctx.client.get_me()
             self._self_tg_user_id = int(getattr(me, "id", 0) or 0) or None
+            self._self_tg_username = getattr(me, "username", None)
         except Exception:
             self._self_tg_user_id = None
+            self._self_tg_username = None
         await self._log("info", "死亡左轮插件已启动。")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
@@ -438,6 +441,16 @@ class DeadRevolverPlugin(Plugin):
         )
         if not has_payment_rule: return False
 
+        # 只接受转给当前 UserBot 的付款提示，避免误识别群内其他转账。
+        if self._self_tg_user_id is not None:
+            entities = getattr(event.message, "entities", None) or []
+            found_self = any(
+                getattr(getattr(ent, "user", None), "id", None) == self._self_tg_user_id
+                for ent in entities
+            )
+            if not found_self:
+                return False
+
         reply_id = getattr(event.message, "reply_to_msg_id", None)
         user_id: int | None = None
         if reply_id:
@@ -445,6 +458,9 @@ class DeadRevolverPlugin(Plugin):
                 replied = await ctx.client.get_messages(gs.chat_id, ids=reply_id)
                 user_id = getattr(replied, "sender_id", None)
             except Exception: pass
+        # 通知消息没有 reply_id 时回退到发送者，避免付款报名漏记。
+        if user_id is None:
+            user_id = sender_id
         if user_id is None: return False
 
         payload: dict[str, Any] = {
@@ -504,8 +520,16 @@ class DeadRevolverPlugin(Plugin):
 
     # ── 定时器 ───────────────────────────────────
     def _cancel_turn_timer(self, gs: GameState) -> None:
-        if gs.turn_timer and not gs.turn_timer.done():
-            gs.turn_timer.cancel()
+        task = gs.turn_timer
+        if task is None:
+            return
+        if task.done():
+            gs.turn_timer = None
+            return
+        if task is asyncio.current_task():
+            return
+        task.cancel()
+        gs.turn_timer = None
 
     def _start_turn_timer(self, ctx: PluginContext, gs: GameState) -> None:
         self._cancel_turn_timer(gs)
@@ -613,6 +637,7 @@ class DeadRevolverPlugin(Plugin):
     # ── 发送引导 ─────────────────────────────────
     async def _send_turn_guidance(self, ctx: PluginContext, gs: GameState, current: Player,
                                   alive: list[Player], *, start: bool = False) -> None:
+        await self._delete_guidance_message(ctx, gs)
         if start:
             txt = f"🔫 <b>游戏开始！</b>（第 1 轮，弹巢 {_bullet_count(gs.round_num, len(alive))} 发实弹）\n"
         else:
@@ -670,12 +695,11 @@ class DeadRevolverPlugin(Plugin):
         gs.phase = "ended"
         self._cancel_turn_timer(gs)
         refund_players = [p for p in gs.players if p.paid > 0]
-        refund_lines: list[str] = []
+        refund_count = len(refund_players)
+        total_refund = sum(p.paid for p in refund_players)
+        cancel_text = self._render_lobby(gs) + f"\n\n⚠️ {reason}"
         if refund_players:
-            refund_lines.append("\n📋 <b>需退款的玩家</b>")
-            for p in refund_players: refund_lines.append(f"  {html.escape(p.display_name)}：{p.paid}")
-            refund_lines.append("请手动退还以上玩家的门票费用。")
-        cancel_text = self._render_lobby(gs) + f"\n\n⚠️ {reason}" + "\n".join(refund_lines)
+            cancel_text += f"\n📋 正在自动退还 {refund_count} 名玩家的门票费用（共 {total_refund}）…"
 
         if gs.interaction_bot:
             lobby_id = await self._resolve_lobby_id(ctx, gs)
@@ -683,8 +707,15 @@ class DeadRevolverPlugin(Plugin):
             if token:
                 try: await self._bot_api(token, "sendMessage", {"chat_id": gs.chat_id, "text": f"⚠️ {html.escape(reason)}", "parse_mode": "HTML"})
                 except Exception: pass
+                for p in refund_players:
+                    try:
+                        params: dict[str, Any] = {"chat_id": gs.chat_id, "text": f"+{p.paid}"}
+                        if p.message_id:
+                            params["reply_to_message_id"] = p.message_id
+                        await self._bot_api(token, "sendMessage", params)
+                    except Exception: pass
                 if refund_players:
-                    try: await self._bot_api(token, "sendMessage", {"chat_id": gs.chat_id, "text": "\n".join(refund_lines), "parse_mode": "HTML"})
+                    try: await self._bot_api(token, "sendMessage", {"chat_id": gs.chat_id, "text": f"✅ 已自动退还 {refund_count} 名玩家的门票费用。", "parse_mode": "HTML"})
                     except Exception: pass
                 await self._cleanup_messages(ctx, gs, token, lobby_id)
         else:
@@ -744,6 +775,22 @@ class DeadRevolverPlugin(Plugin):
             await edit_message(token, gs.chat_id, msg_id, txt)
         except Exception: pass
 
+    async def _delete_guidance_message(self, ctx: PluginContext, gs: GameState) -> None:
+        msg_id = gs.guidance_msg_id
+        if msg_id is None:
+            return
+        token = await self._get_bot_token(ctx)
+        if not token:
+            return
+        try:
+            from app.services.account_bot_service import delete_message as del_msg
+            await del_msg(token, gs.chat_id, msg_id)
+        except Exception:
+            return
+        if gs.guidance_msg_id == msg_id:
+            gs.guidance_msg_id = None
+        gs.tracked_msg_ids = [mid for mid in gs.tracked_msg_ids if mid != msg_id]
+
     async def _cleanup_messages(self, ctx: PluginContext, gs: GameState, token: str, lobby_id: int | None) -> None:
         from app.services.account_bot_service import delete_message as del_msg
         for mid in gs.tracked_msg_ids:
@@ -797,7 +844,6 @@ class DeadRevolverPlugin(Plugin):
     def _render_lobby(self, gs: GameState) -> str:
         lines = [
             "🔫 <b>死亡左轮</b>",
-            f"游戏 ID：<code>{gs.game_id}</code>",
             f"门票：{gs.entry_fee}",
             "",
             "📋 <b>玩法规则</b>",
@@ -813,13 +859,11 @@ class DeadRevolverPlugin(Plugin):
             lines.append(f"  {p.player_id}. {name}{paid_tag}")
         if not gs.players:
             lines.append("  （暂无玩家）")
+        receiver_tag = f"@{self._self_tg_username}" if getattr(self, "_self_tg_username", None) else "收款人"
         lines.extend([
             "",
-            "📌 <b>参与方式</b>",
-            f"• 转账 <b>{gs.entry_fee}</b> 到此群 → 自动报名（精确金额，多转少转均无效）",
-            f"• 或发送 <b>+{gs.entry_fee}</b> 快速加入",
-            "• 庄家发送 <b>dr_start</b> 开始（需至少 2 人）",
-            f"• {max(0, int(JOIN_TIMEOUT - (time.time() - gs.created_at)))} 秒后自动开始或取消",
+            f"📌 通过对收款人（{receiver_tag}）的任意消息回复 +{gs.entry_fee} 即可参与。等待庄家开局（庄家发送：开始挑战！）或者倒计时结束自动开局。人数不够时将自动取消。",
+            f"⏰ {max(0, int(JOIN_TIMEOUT - (time.time() - gs.created_at)))} 秒后自动开始或取消",
         ])
         return "\n".join(lines)
 
