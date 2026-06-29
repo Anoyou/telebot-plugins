@@ -388,6 +388,29 @@ class TenHalfPlugin(Plugin):
         except Exception:
             pass
 
+    async def _send_ix_actions(self, ctx: PluginContext, cid: int, actions: list[dict[str, Any]]) -> None:
+        """Send interaction actions from background timeout tasks."""
+        if not ctx.client:
+            return
+        for action in actions:
+            if not isinstance(action, dict) or action.get("type") != "send_message":
+                continue
+            text = str(action.get("text") or "").strip()
+            if not text:
+                continue
+            kwargs: dict[str, Any] = {}
+            if action.get("parse_mode"):
+                kwargs["parse_mode"] = action.get("parse_mode")
+            if action.get("reply_markup"):
+                kwargs["reply_markup"] = action.get("reply_markup")
+            reply_to = action.get("reply_to_message_id")
+            if reply_to:
+                kwargs["reply_to"] = reply_to
+            try:
+                await ctx.client.send_message(cid, text, **kwargs)
+            except Exception:
+                pass
+
     # ── 生命周期 ─────────────────────────────────────
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -559,7 +582,8 @@ class TenHalfPlugin(Plugin):
                     f"[ten_half] dealer_question_timeout: defaulting to bot dealer, "
                     f"chat_id={cid}")
             if g.via_interaction:
-                await self._begin_game_ix(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
+                actions = await self._ix_begin(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
+                await self._send_ix_actions(ctx, cid, actions)
             else:
                 await self._begin_game(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
 
