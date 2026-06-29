@@ -146,6 +146,7 @@ class TenHalfGame:
     via_interaction: bool = False
     finished: bool = False
     lobby_msg_id: int | None = None
+    player_message_ids: dict[int, int] = field(default_factory=dict)
 
     # ── 庄家辅助 ─────────────────────────────────────
     @property
@@ -364,6 +365,15 @@ class TenHalfPlugin(Plugin):
     def _track_task(self, t: asyncio.Task) -> None:
         """Alias for _track — tracks asyncio.Task for cleanup."""
         self._track(t)
+
+    @staticmethod
+    def _remember_player_message(g: TenHalfGame, uid: int, mid: int | None) -> None:
+        if uid and mid:
+            g.player_message_ids[int(uid)] = int(mid)
+
+    @staticmethod
+    def _player_reply_message(g: TenHalfGame, uid: int) -> int | None:
+        return g.player_message_ids.get(int(uid))
 
     async def _send(self, ctx: PluginContext, cid: int, text: str, *,
                     parse_mode: str = "html", reply_to: int | None = None) -> None:
@@ -882,17 +892,27 @@ class TenHalfPlugin(Plugin):
         except Exception:
             pass
 
-        # Send individual reward messages to each winner (reply to their message)
+        # Send individual reward messages via userbot fallback. Background timeout
+        # tasks cannot return actions to TelePilot's delivery executor.
         for p in g.players:
-            eb = g.bet * (2 if p.doubled else 1)
             outcome = self._compare(p, dv, db, dn, dfs)
             if outcome.startswith("win"):
-                reward = eb * 2 if outcome == "win_nat" else int(eb * 1.5) if outcome == "win_5s" else eb
-                actions.append({
-                    "type": "send_message",
-                    "text": f"🎉 {p.name} +{reward}",
-                    "send_via": "userbot_reply",
-                })
+                mult = 2.0 if outcome == "win_nat" else 1.5 if outcome == "win_5s" else 1.0
+                reward = int(total_pot * mult * 0.9)
+                reply_to = self._player_reply_message(g, p.user_id)
+                try:
+                    if ctx.client:
+                        await ctx.client.send_message(
+                            cid,
+                            f"+{reward}",
+                            **({"reply_to": reply_to} if reply_to else {}),
+                        )
+                except Exception:
+                    pass
+                if ctx.log:
+                    await ctx.log("info",
+                        f"[ten_half] reward_sent: uid={p.user_id}, name={p.name}, "
+                        f"amount={reward}, chat_id={cid}, background=True")
         self._games.pop(cid, None)
 
     # ═══════════════════════════════════════════════════
@@ -1344,6 +1364,7 @@ class TenHalfPlugin(Plugin):
 
         async with self._lock(cid):
             g = self._games.get(cid)
+            created_by_payment = False
 
             # 没有活跃大厅 → 用转账金额作为底注自动创建大厅
             if not g or g.finished or g.phase != "lobby":
@@ -1360,6 +1381,7 @@ class TenHalfPlugin(Plugin):
                     via_interaction=True,
                 )
                 self._games[cid] = g
+                created_by_payment = True
                 if ctx.log:
                     await ctx.log("info",
                         f"[ten_half] lobby_created_by_payment: chat_id={cid}, "
@@ -1393,6 +1415,7 @@ class TenHalfPlugin(Plugin):
             # 加入成功
             cnt = len(g.lobby_players) + 1
             g.lobby_players.append((payer_id, payer_name))
+            self._remember_player_message(g, payer_id, mid)
 
             if ctx.log:
                 await ctx.log("info",
@@ -1405,8 +1428,8 @@ class TenHalfPlugin(Plugin):
                 "reply_to_message_id": mid,
             }]
 
-            # 仅大厅刚创建时发大厅公告
-            if cnt == 1:
+            # 仅付款直接创建大厅时发大厅公告；关键词开局已有公告，不重复刷屏。
+            if created_by_payment and cnt == 1:
                 lobby_text = (
                     f"🃏 <b>十点半开局！</b>\n"
                     f"💰 底注: {amount}\n\n"
@@ -1525,6 +1548,7 @@ class TenHalfPlugin(Plugin):
             return [{"type": "send_message", "text": "⚠️ 人数已满。", "reply_to_message_id": mid}]
 
         g.lobby_players.append((aid, aname))
+        self._remember_player_message(g, aid, mid)
         cnt = len(g.lobby_players)
         result: list[dict[str, Any]] = [{
             "type": "send_message",
@@ -2058,7 +2082,8 @@ class TenHalfPlugin(Plugin):
         for w in winners:
             actions.append({
                 "type": "send_message",
-                "text": f"🎉 {w['name']} +{w['reward']}",
+                "text": f"+{w['reward']}",
+                "reply_to_message_id": self._player_reply_message(g, int(w["user_id"])),
                 "send_via": "userbot_reply",
             })
             if ctx.log:
