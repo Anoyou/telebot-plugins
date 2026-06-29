@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -238,6 +239,55 @@ class DeadRevolverRuntimeTest(unittest.TestCase):
             self.assertTrue(any("已报名死亡左轮" in action.get("text", "") for action in actions))
 
         asyncio.run(run_case())
+
+    def test_payment_event_accepts_event_bus_payload(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+            gs = plugin_module.GameState(
+                game_id="g1",
+                chat_id=100,
+                host_user_id=1,
+                entry_fee=10,
+                interaction_bot=True,
+            )
+            plugin._games[100] = gs
+
+            actions = await plugin._ibot_payment(
+                ctx,
+                {
+                    "event_type": "payment_confirmed",
+                    "source": {
+                        "type": "payment_confirmed",
+                        "channel": "external_payment_notice",
+                        "chat_id": 100,
+                        "message_id": 70,
+                    },
+                    "actor": {"user_id": None, "display_name": "玩家A"},
+                    "player": {"user_id": None, "display_name": "玩家A"},
+                    "reply_to": {"user_id": 10, "display_name": "玩家A", "message_id": 55, "text": "+10"},
+                    "payment": {"amount": 10, "payer_name": "玩家A", "receiver_name": "收款人"},
+                    "message_id": 70,
+                },
+                100,
+            )
+
+            self.assertEqual([p.user_id for p in gs.players], [10])
+            self.assertEqual(gs.players[0].message_id, 55)
+            self.assertTrue(any("已报名死亡左轮" in action.get("text", "") for action in actions))
+
+        asyncio.run(run_case())
+
+    def test_payment_event_subscription_declares_entry_key(self) -> None:
+        data = json.loads((ROOT / "dead_revolver" / "plugin.json").read_text(encoding="utf-8"))
+        payment_subscriptions = [
+            item
+            for item in data["event_subscriptions"]
+            if "payment_confirmed" in item.get("events", [])
+        ]
+
+        self.assertTrue(payment_subscriptions)
+        self.assertTrue(all(item.get("entry_key") == "join_paid_game" for item in payment_subscriptions))
 
 
 if __name__ == "__main__":

@@ -94,6 +94,84 @@ def _extract_display_name(payload: dict[str, Any]) -> str:
     return str(payload.get("sender_name") or actor.get("display_name") or payload.get("payer_name") or "未知用户")
 
 
+def _extract_payment_user_id(payload: dict[str, Any]) -> int | None:
+    payment = _payload_dict(payload, "payment")
+    player = _payload_dict(payload, "player")
+    reply_to = _payload_dict(payload, "reply_to")
+    actor = _payload_dict(payload, "actor")
+    event = _payload_dict(payload, "event")
+    for value in (
+        payload.get("payer_user_id"),
+        payment.get("payer_user_id"),
+        payment.get("payer", {}).get("user_id") if isinstance(payment.get("payer"), dict) else None,
+        player.get("user_id"),
+        reply_to.get("user_id"),
+        reply_to.get("sender_user_id"),
+        event.get("reply_to_user_id"),
+        actor.get("user_id"),
+        payload.get("user_id"),
+    ):
+        user_id = _int_payload(value)
+        if user_id is not None:
+            return user_id
+    return None
+
+
+def _extract_payment_display_name(payload: dict[str, Any]) -> str:
+    payment = _payload_dict(payload, "payment")
+    player = _payload_dict(payload, "player")
+    reply_to = _payload_dict(payload, "reply_to")
+    actor = _payload_dict(payload, "actor")
+    for value in (
+        payload.get("payer_name"),
+        payment.get("payer_name"),
+        payment.get("payer_display_name"),
+        payment.get("payer", {}).get("display_name") if isinstance(payment.get("payer"), dict) else None,
+        player.get("display_name"),
+        reply_to.get("display_name"),
+        actor.get("display_name"),
+        payload.get("sender_name"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "未知用户"
+
+
+def _extract_payment_amount(payload: dict[str, Any]) -> int:
+    payment = _payload_dict(payload, "payment")
+    source = _payload_dict(payload, "source")
+    event = _payload_dict(payload, "event")
+    for value in (
+        payload.get("amount"),
+        payload.get("payment_amount"),
+        payment.get("amount"),
+        source.get("amount"),
+        event.get("amount"),
+    ):
+        amount = _int_payload(value)
+        if amount is not None:
+            return amount
+    return 0
+
+
+def _extract_payment_source_message_id(payload: dict[str, Any]) -> int | None:
+    payment = _payload_dict(payload, "payment")
+    reply_to = _payload_dict(payload, "reply_to")
+    for value in (
+        payload.get("payer_message_id"),
+        payment.get("reply_to_message_id"),
+        reply_to.get("message_id"),
+        payload.get("source_message_id"),
+        payment.get("source_message_id"),
+        payload.get("message_id"),
+    ):
+        message_id = _int_payload(value)
+        if message_id is not None:
+            return message_id
+    return None
+
+
 def _extract_message_text(payload: dict[str, Any]) -> str:
     source = _payload_dict(payload, "source")
     trigger = _payload_dict(payload, "trigger")
@@ -319,11 +397,10 @@ class DeadRevolverPlugin(Plugin):
         return [{"type": "send_message", "text": self._render_lobby(game), "pin": True, "save_message_id_key": _interaction_msg_key(ctx.account_id, chat_id)}]
 
     async def _ibot_payment(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
-        user_id = _extract_user_id(payload)
+        user_id = _extract_payment_user_id(payload)
         if user_id is None: return []
-        display_name = _extract_display_name(payload)
-        source = _payload_dict(payload, "source")
-        paid = _int_payload(payload.get("amount") or source.get("amount")) or 0
+        display_name = _extract_payment_display_name(payload)
+        paid = _extract_payment_amount(payload)
         if not self._payment_receiver_matches_self(payload):
             return [{
                 "type": "send_message",
@@ -339,7 +416,7 @@ class DeadRevolverPlugin(Plugin):
             if paid != gs.entry_fee:
                 return [{"type": "send_message", "text": f"转账金额不符，本局门票为 {gs.entry_fee}，请转账恰好此金额报名。"}]
             player = Player(player_id=_next_player_id(gs.players), user_id=user_id, display_name=display_name,
-                            paid=paid, message_id=_int_payload(payload.get("source_message_id")) or _int_payload(payload.get("message_id")))
+                            paid=paid, message_id=_extract_payment_source_message_id(payload))
             gs.players.append(player)
 
         lobby = self._render_lobby(gs)

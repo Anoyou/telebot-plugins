@@ -14,10 +14,12 @@ EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
  {'events': ['message', 'callback_query', 'session_close'],
   'source': ['interaction_bot'],
+  'entry_key': 'join_paid_game',
   'scope': 'rule_bound',
   'description': '交互规则命中后由交互 Bot 投递会话事件。'},
  {'events': ['payment_confirmed'],
   'source': ['external_payment_notice', 'userbot'],
+  'entry_key': 'join_paid_game',
   'scope': 'rule_bound',
   'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
 CAPABILITIES = {}
@@ -25,7 +27,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dead_revolver",
     display_name="死亡左轮",
-    version="1.0.7",
+    version="1.0.8",
     min_telepilot_version="0.33.0",
     author="builtin",
     description="群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
