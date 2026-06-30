@@ -787,14 +787,23 @@ class TenHalfPlugin(Plugin):
         self,
         ctx: PluginContext,
         actions: list[dict[str, Any] | None],
-    ) -> None:
+    ) -> bool:
         clean = [action for action in actions if isinstance(action, dict)]
         if not clean:
-            return
+            return False
         messages = getattr(ctx, "messages", None)
         apply = getattr(messages, "apply", None)
-        if callable(apply):
+        if not callable(apply):
+            if ctx.log:
+                await ctx.log("warn", "[ten_half] background_actions_unavailable: ctx.messages.apply missing")
+            return False
+        try:
             await apply(clean, entry_key="start_ten_half")
+            return True
+        except Exception as exc:  # noqa: BLE001
+            if ctx.log:
+                await ctx.log("warn", f"[ten_half] background_actions_failed: {exc}")
+            return False
 
     @staticmethod
     def _start_controller_uid(g: TenHalfGame) -> int:
@@ -845,13 +854,21 @@ class TenHalfPlugin(Plugin):
             g.awaiting_start_confirmation = True
             controller_uid = self._start_controller_uid(g)
             g.status_note = f"30 秒内没有新玩家加入，{g.dealer_name} 可以选择直接开局或继续等待。"
+            if ctx.log:
+                await ctx.log(
+                    "info",
+                    f"[ten_half] idle_start_prompt: controller={controller_uid}, "
+                    f"players={len(g.lobby_players)}/{g.max_players}, chat_id={cid}",
+                )
             action = await self._main_action(
                 ctx,
                 g,
                 self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
                 reply_markup=_kb_start_decision(controller_uid),
             )
-        await self._emit_background_actions(ctx, [action])
+        delivered = await self._emit_background_actions(ctx, [action])
+        if ctx.log and not delivered:
+            await ctx.log("warn", f"[ten_half] idle_start_prompt_not_delivered: chat_id={cid}")
 
     def _game_limits_from_payload(self, ctx: PluginContext, payload: dict[str, Any]) -> dict[str, int]:
         return {
@@ -1145,6 +1162,7 @@ class TenHalfPlugin(Plugin):
     async def _lobby_timeout_task(self, cid: int, sa: float, ctx: PluginContext) -> None:
         g0 = self._games.get(cid)
         await asyncio.sleep(g0.lobby_timeout if g0 and g0.started_at == sa else self._lobby_timeout)
+        actions: list[dict[str, Any] | None] = []
         async with self._lock(cid):
             g = self._games.get(cid)
             if not g or g.phase != "lobby" or g.finished or g.started_at != sa:
@@ -1158,12 +1176,41 @@ class TenHalfPlugin(Plugin):
                     await self._send(ctx, cid, "⏰ 没人加入，十点半游戏取消。")
                 return
             if g.via_interaction:
-                # Interaction-visible messages must be returned as standard
-                # actions from on_interaction. A background task only mutates
-                # state here; otherwise it would send via the userbot client.
-                g.status_note = "大厅等待已结束，请等待下一次交互刷新牌桌。"
+                if len(g.lobby_players) < 2:
+                    g.finished = True
+                    self._games.pop(cid, None)
+                    g.status_note = "大厅等待已结束，参与人数不足 2 人，牌局已取消。"
+                    actions.append(await self._main_action(
+                        ctx,
+                        g,
+                        self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
+                        reply_markup=None,
+                    ))
+                    actions.append({"type": "end_session"})
+                    if ctx.log:
+                        await ctx.log("info", f"[ten_half] lobby_timeout_cancel: players={len(g.lobby_players)}, chat_id={cid}")
+                elif g.dealer_locked:
+                    if ctx.log:
+                        await ctx.log(
+                            "info",
+                            f"[ten_half] lobby_timeout_begin: dealer={g.dealer_name}, "
+                            f"players={len(g.lobby_players)}/{g.max_players}, chat_id={cid}",
+                        )
+                    actions.extend(await self._ix_begin(cid, g, g.dealer_id, g.dealer_name, ctx))
+                else:
+                    if ctx.log:
+                        await ctx.log(
+                            "info",
+                            f"[ten_half] lobby_timeout_ask_dealer: "
+                            f"players={len(g.lobby_players)}/{g.max_players}, chat_id={cid}",
+                        )
+                    actions.extend(await self._enter_ask_dealer(ctx, cid, g))
             else:
                 await self._ask_dealer(cid, g, ctx)
+        if actions:
+            delivered = await self._emit_background_actions(ctx, actions)
+            if ctx.log and not delivered:
+                await ctx.log("warn", f"[ten_half] lobby_timeout_actions_not_delivered: chat_id={cid}")
 
     async def _ask_dealer(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
         """向第一个加入的玩家询问是否当庄家 (userbot 流)。"""

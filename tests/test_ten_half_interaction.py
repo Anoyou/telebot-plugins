@@ -255,6 +255,78 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario_fast())
 
+    def test_interaction_idle_prompt_emits_background_start_buttons(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario_fast() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            ctx = PluginContext(messages=messages)
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                max_players=5,
+                phase="lobby",
+                via_interaction=True,
+                dealer_id=111,
+                dealer_name="玩家A",
+                dealer_locked=True,
+                started_at=123.0,
+                main_message_id=900,
+            )
+            game.lobby_players = [(111, "玩家A"), (222, "玩家B")]
+            plugin._games[-100123] = game
+
+            with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                await plugin._idle_start_prompt_task(-100123, 123.0, 0, ctx)
+
+            self.assertTrue(game.awaiting_start_confirmation)
+            self.assertEqual(len(messages.applied), 1)
+            self.assertEqual(messages.applied[0]["entry_key"], "start_ten_half")
+            actions = messages.applied[0]["actions"]
+            self.assertEqual(actions[0]["type"], "edit_message")
+            self.assertEqual(actions[0]["message_id"], 900)
+            self.assertIn("th:start_now:111", str(actions[0]["reply_markup"]))
+
+        asyncio.run(scenario_fast())
+
+    def test_interaction_lobby_timeout_auto_begins_when_min_players_and_dealer_locked(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario_fast() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            ctx = PluginContext(messages=messages)
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                max_players=5,
+                phase="lobby",
+                via_interaction=True,
+                dealer_id=111,
+                dealer_name="玩家A",
+                dealer_locked=True,
+                started_at=123.0,
+                main_message_id=900,
+            )
+            game.lobby_players = [(111, "玩家A"), (222, "玩家B")]
+            plugin._games[-100123] = game
+
+            with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                await plugin._lobby_timeout_task(-100123, 123.0, ctx)
+
+            self.assertEqual(game.phase, "dealer_turn")
+            self.assertEqual(len(game.players), 1)
+            self.assertEqual(len(messages.applied), 1)
+            actions = messages.applied[0]["actions"]
+            self.assertEqual(actions[0]["type"], "edit_message")
+            self.assertIn("庄家先行动", actions[0]["text"])
+            self.assertIn("th:hit:111", str(actions[0]["reply_markup"]))
+
+        asyncio.run(scenario_fast())
+
     def test_bot_dealer_stand_advances_to_player_turn(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
