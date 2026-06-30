@@ -21,12 +21,13 @@ def _load_plugin_module():
         pass
 
     class PluginContext:
-        def __init__(self, account_id=1, feature_key="ten_half", log=None, config=None, client=None):
+        def __init__(self, account_id=1, feature_key="ten_half", log=None, config=None, client=None, redis=None):
             self.account_id = account_id
             self.feature_key = feature_key
             self.log = log
             self.config = config or {}
             self.client = client
+            self.redis = redis
 
     def register(cls):
         return cls
@@ -69,15 +70,22 @@ def keyword_payload() -> dict:
     }
 
 
-def payment_payload(*, payer_id: int = 111, payer_name: str = "玩家A") -> dict:
+def payment_payload(
+    *,
+    payer_id: int = 111,
+    payer_name: str = "玩家A",
+    amount: int = 100,
+    notice_message_id: int = 701,
+    reply_message_id: int = 700,
+) -> dict:
     return {
         "event": {"type": "payment_confirmed", "chat_id": -100123},
-        "source": {"type": "payment_confirmed", "chat_id": -100123, "message_id": 701},
+        "source": {"type": "payment_confirmed", "chat_id": -100123, "message_id": notice_message_id},
         "actor": {"user_id": 456, "display_name": "通知Bot"},
-        "reply_to": {"message_id": 700, "user_id": payer_id, "display_name": payer_name},
+        "reply_to": {"message_id": reply_message_id, "user_id": payer_id, "display_name": payer_name},
         "payer_user_id": payer_id,
         "payer_name": payer_name,
-        "amount": 100,
+        "amount": amount,
     }
 
 
@@ -90,6 +98,18 @@ class FakeClient:
         return types.SimpleNamespace(id=len(self.sent))
 
 
+class FakeRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def set(self, key, value, ex=None):
+        self.store[key] = str(value)
+        return True
+
+
 class TenHalfInteractionTest(unittest.TestCase):
     def test_payment_join_existing_keyword_lobby_does_not_duplicate_lobby_message(self) -> None:
         async def scenario() -> None:
@@ -100,16 +120,109 @@ class TenHalfInteractionTest(unittest.TestCase):
                 start_actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
                 self.assertEqual(len(start_actions), 1)
                 self.assertIn("十点半开局", start_actions[0]["text"])
+                self.assertIn("当前牌桌 ID", start_actions[0]["text"])
+                self.assertIn("save_message_id_key", start_actions[0])
 
                 join_actions = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
                 self.assertEqual(len(join_actions), 1)
-                self.assertIn("加入成功", join_actions[0]["text"])
+                self.assertIn("加入牌局成功", join_actions[0]["text"])
+                self.assertIn("牌桌 ID", join_actions[0]["text"])
                 self.assertNotIn("十点半开局", join_actions[0]["text"])
 
                 game = plugin._games[-100123]
                 self.assertEqual(game.player_message_ids[111], 700)
             finally:
                 await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_payment_join_edits_saved_main_and_deletes_previous_join_notice(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis)
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
+
+                first = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
+                self.assertEqual([a["type"] for a in first], ["send_message", "edit_message"])
+                self.assertEqual(first[1]["message_id"], 900)
+                self.assertIn("玩家A", first[1]["text"])
+
+                redis.store[plugin_module._join_notice_key(1, -100123)] = "910"
+                second = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    payment_payload(
+                        payer_id=222,
+                        payer_name="玩家B",
+                        notice_message_id=711,
+                        reply_message_id=710,
+                    ),
+                )
+                self.assertEqual([a["type"] for a in second], ["delete_message", "send_message", "edit_message"])
+                self.assertEqual(second[0]["message_id"], 910)
+                self.assertEqual(second[2]["message_id"], 900)
+                self.assertIn("玩家A、玩家B", second[1]["text"])
+                self.assertIn("玩家A、玩家B", second[2]["text"])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_wrong_player_callback_returns_answer_callback(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="playing", via_interaction=True)
+            game.main_message_id = 900
+            game.players = [
+                plugin_module.PlayerHand(user_id=111, name="玩家A", cards=[plugin_module.Card("♠️", "5")]),
+                plugin_module.PlayerHand(user_id=222, name="玩家B", cards=[plugin_module.Card("♥️", "6")]),
+            ]
+            game.current_player_idx = 0
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                {
+                    "source": {
+                        "type": "callback_query",
+                        "chat_id": -100123,
+                        "message_id": 900,
+                        "callback_query_id": "cb-1",
+                        "callback_data": "th:hit:111",
+                    },
+                    "actor": {"user_id": 222, "display_name": "玩家B"},
+                },
+            )
+            self.assertEqual(actions, [{
+                "type": "answer_callback",
+                "callback_query_id": "cb-1",
+                "text": "还没轮到你。",
+                "show_alert": False,
+            }])
+
+        asyncio.run(scenario())
+
+    def test_interaction_begin_deals_one_card_to_each_player_and_dealer_two(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, via_interaction=True)
+            game.lobby_players = [(111, "庄家候选"), (222, "玩家B"), (333, "玩家C")]
+            game.main_message_id = 900
+
+            actions = await plugin._ix_begin(-100123, game, 111, "庄家候选", ctx)
+            self.assertEqual(game.phase, "dealer_turn")
+            self.assertEqual(len(game.dealer_cards), 2)
+            self.assertEqual([len(p.cards) for p in game.players], [1, 1])
+            self.assertEqual(actions[0]["type"], "edit_message")
+            self.assertIn("1张", actions[0]["text"])
+            self.assertIn("庄家先行动", actions[0]["text"])
 
         asyncio.run(scenario())
 

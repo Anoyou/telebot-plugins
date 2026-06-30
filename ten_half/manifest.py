@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅，玩家加入后按提示要牌、停牌或加倍；交互 Bot 承接高频操作，结算说明走平台受控通道。',
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；交互 Bot 承接选庄、要牌、停牌、加倍和主消息编辑，结算发奖走 userbot_reply 受控通道。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -46,9 +46,10 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅，玩家加入后按提示要牌、停牌或加倍；交互 Bot 承接高频操作，结算说明走平台受控通道。事件订阅：管理员命令走 '
- 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 '
- 'interaction_bot 或 userbot_reply 受控通道。')
+USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；交互 Bot '
+ '承接选庄、要牌、停牌、加倍和主消息编辑，结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
+ 'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
+ '受控通道。')
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -66,12 +67,12 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.9",
+    version="0.2.10",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="经典十点半纸牌游戏：支持多人对战、加倍、五小等规则",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat"],
 
     category="interactive",
     interaction_profile="session_game",
@@ -89,7 +90,14 @@ MANIFEST = Manifest(
                      'close_on': ['winner', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'no_session', 'end_session', 'result', 'settlement'],
+  'result_contract': {'actions': ['send_message',
+                                  'edit_message',
+                                  'delete_message',
+                                  'answer_callback',
+                                  'no_session',
+                                  'end_session',
+                                  'result',
+                                  'settlement'],
                       'send_via': ['interaction_bot', 'userbot_reply']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
