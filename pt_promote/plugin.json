@@ -3,7 +3,7 @@
   "display_name": "PT 种子促销",
   "description": "在青娃PT置顶促销某个种子（消耗蝌蚪）",
   "author": "xiaoyou",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "commands": [
@@ -28,7 +28,6 @@
       "launch_mode": "hybrid",
       "session_scope": "user",
       "events": [
-        "payment_confirmed",
         "keyword",
         "message",
         "session_close"
@@ -95,7 +94,6 @@
         "admin_command": "userbot_reply",
         "public_keyword": "interaction_bot"
       },
-      "money_channel": "userbot_reply",
       "participant_policy": "notify_only"
     }
   ],
@@ -241,7 +239,7 @@
     "x-usage-guide": "发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 free/2x、时长、竞价和奖励参数。"
   },
   "interaction_profile": "utility_trigger",
-  "usage": "发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 free/2x、时长、竞价和奖励参数。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
+  "usage": "发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 free/2x、时长、竞价和奖励参数。事件订阅：管理员命令走 userbot；群内关键词和会话消息走 interaction_bot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
   "event_subscriptions": [
     {
       "events": [
@@ -263,17 +261,6 @@
       ],
       "scope": "rule_bound",
       "description": "交互规则命中后由交互 Bot 投递会话事件。"
-    },
-    {
-      "events": [
-        "payment_confirmed"
-      ],
-      "source": [
-        "external_payment_notice",
-        "userbot"
-      ],
-      "scope": "rule_bound",
-      "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
     }
   ],
   "capabilities": {}

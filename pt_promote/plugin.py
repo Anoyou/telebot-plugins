@@ -622,7 +622,7 @@ class PTPromotePlugin(Plugin):
             return None
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         event_type = str(payload.get("event_type") or event.get("type") or "")
-        if event_type not in {"keyword", "payment_confirmed", "message"}:
+        if event_type not in {"keyword", "message"}:
             return []
 
         args = _interaction_args_from_payload(payload)

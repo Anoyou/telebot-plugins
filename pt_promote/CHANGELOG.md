@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.0.20 (2026-06-30)
+- 移除 PT 种子促销的付款确认触发声明：`interaction_entries` 与 `event_subscriptions` 不再包含 `payment_confirmed`。
+- 删除交互入口中的 `money_channel` 元数据，明确该插件只通过管理员命令或交互 Bot 关键词/会话消息触发。
+- 运行时不再接受 `payment_confirmed` 事件，避免无付款需求的促销插件被误配置成付款入口。
+
 ## 1.0.19 (2026-06-29)
 - 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
