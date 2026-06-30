@@ -144,7 +144,7 @@ class TenHalfGame:
     lobby_timeout: int = 60
     idle_start_seconds: int = 15
     game_id: str = field(default_factory=lambda: secrets.token_hex(3).upper())
-    # lobby -> ask_dealer -> playing -> dealer_turn -> finished
+    # lobby -> playing -> dealer_turn -> finished
     phase: str = "lobby"
     dealer_id: int = 0          # 0 = bot 庄家
     dealer_name: str = "🤖 庄家"
@@ -821,6 +821,16 @@ class TenHalfPlugin(Plugin):
         g.lobby_version += 1
         g.awaiting_start_confirmation = False
 
+    def _lock_first_dealer(self, g: TenHalfGame, uid: int, name: str) -> None:
+        if g.dealer_locked:
+            return
+        g.dealer_id = uid
+        g.dealer_name = name
+        g.dealer_locked = True
+        g.ask_dealer_uid = 0
+        g.ask_dealer_name = ""
+        g.status_note = f"{name} 作为首位加入玩家，已自动成为本局庄家。"
+
     def _schedule_turn_timeout(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
         g.turn_timeout_version += 1
         self._track_task(asyncio.create_task(
@@ -1149,20 +1159,17 @@ class TenHalfPlugin(Plugin):
                 lobby_timeout=self._lobby_timeout,
                 phase="lobby", started_at=time.monotonic(),
                 via_interaction=True,
-                dealer_id=host_id if host_id > 0 else 0,
-                dealer_name=self._receiver_label(ctx, None, None) or host_name or "本群 userbot",
-                dealer_locked=True,
                 host_user_id=host_id,
                 host_name=host_name,
             )
-            g.payment_receiver_name = g.dealer_name
-            g.status_note = f"{g.dealer_name} 已默认当庄，等待玩家转账加入。"
+            g.payment_receiver_name = self._receiver_label(ctx, None, g)
+            g.status_note = "首位成功加入的玩家将自动成为本局庄家。"
             self._games[cid] = g
 
         if ctx.log:
             await ctx.log("info",
                 f"[ten_half] game_start: chat_id={cid}, bet={bet}, "
-                f"lobby_timeout={g.lobby_timeout}, via_interaction=True, dealer=userbot")
+                f"lobby_timeout={g.lobby_timeout}, via_interaction=True, dealer=first_player")
 
         action = await self._main_action(
             ctx,
@@ -1187,7 +1194,7 @@ class TenHalfPlugin(Plugin):
         ))
 
     # ═══════════════════════════════════════════════════
-    # 大厅 / 选庄
+    # 大厅
     # ═══════════════════════════════════════════════════
     async def _lobby_timeout_task(self, cid: int, sa: float, ctx: PluginContext) -> None:
         g0 = self._games.get(cid)
@@ -1228,15 +1235,19 @@ class TenHalfPlugin(Plugin):
                         )
                     actions.extend(await self._ix_begin(cid, g, g.dealer_id, g.dealer_name, ctx))
                 else:
+                    first_id, first_name = g.lobby_players[0]
+                    self._lock_first_dealer(g, first_id, first_name)
                     if ctx.log:
                         await ctx.log(
                             "info",
-                            f"[ten_half] lobby_timeout_ask_dealer: "
+                            f"[ten_half] lobby_timeout_begin: dealer={g.dealer_name}, "
                             f"players={len(g.lobby_players)}/{g.max_players}, chat_id={cid}",
                         )
-                    actions.extend(await self._enter_ask_dealer(ctx, cid, g))
+                    actions.extend(await self._ix_begin(cid, g, g.dealer_id, g.dealer_name, ctx))
             else:
-                await self._ask_dealer(cid, g, ctx)
+                first_id, first_name = g.lobby_players[0]
+                self._lock_first_dealer(g, first_id, first_name)
+                await self._begin_game(cid, g, dealer_id=g.dealer_id, dealer_name=g.dealer_name, ctx=ctx)
         if actions:
             delivered = await self._emit_background_actions(ctx, actions)
             if ctx.log and not delivered:
@@ -1591,11 +1602,14 @@ class TenHalfPlugin(Plugin):
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
-        # 总底注池
-        total_pot = sum(g.bet * (2 if p.doubled else 1) for p in g.players)
+        # 总底注池 = 庄家基础入场金额 + 所有闲家有效下注（含加倍）
+        dealer_bet = g.bet if g.dealer_id else 0
+        total_pot = dealer_bet + sum(g.bet * (2 if p.doubled else 1) for p in g.players)
         lines = ["🏆 <b>结算</b>\n"]
         lines.append(f"💰 总底注池: {total_pot}\n")
         lines.append(f"庄家 {g.dealer_name}: {g.dealer_hand_str(reveal=True)}\n")
+        winners: list[dict[str, Any]] = []
+        losers: list[PlayerHand] = []
         for p in g.players:
             eb = g.bet * (2 if p.doubled else 1)
             outcome = self._compare(p, dv, db, dn, dfs)
@@ -1605,11 +1619,28 @@ class TenHalfPlugin(Plugin):
             if reward > 0:
                 display += f" → 获得 {reward}"
             lines.append(f"👤 {p.name}: {p.hand_str()} → {display}")
+            if reward > 0:
+                winners.append({"user_id": p.user_id, "name": p.name, "reward": reward})
+            elif outcome == "lose":
+                losers.append(p)
             if ctx.log:
                 await ctx.log("info",
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
                     f"outcome={outcome}, multiplier={mult}, reward={reward}, "
                     f"bet={eb}, total_pot={total_pot}, chat_id={cid}")
+        dealer_reward = (
+            int(total_pot * 0.9)
+            if not winners and g.players and len(losers) == len(g.players) and g.dealer_id
+            else 0
+        )
+        if dealer_reward > 0:
+            winners.append({"user_id": g.dealer_id, "name": g.dealer_name, "reward": dealer_reward})
+            lines.append(f"🎰 {g.dealer_name}: 通吃 → 获得 {dealer_reward}")
+            if ctx.log:
+                await ctx.log("info",
+                    f"[ten_half] dealer_reward: uid={g.dealer_id}, name={g.dealer_name}, "
+                    f"amount={dealer_reward}, bet={dealer_bet}, total_pot={total_pot}, "
+                    f"chat_id={cid}, background=True")
         msgs.append("\n".join(lines))
 
         # Send all messages via ctx.client
@@ -1622,25 +1653,21 @@ class TenHalfPlugin(Plugin):
 
         # Send individual reward messages via userbot fallback. Background timeout
         # tasks cannot return actions to TelePilot's delivery executor.
-        for p in g.players:
-            outcome = self._compare(p, dv, db, dn, dfs)
-            if outcome.startswith("win"):
-                mult = 2.0 if outcome in ("win_nat", "win_5s") else 1.0
-                reward = int(total_pot * mult * 0.9)
-                reply_to = self._player_reply_message(g, p.user_id)
-                try:
-                    if ctx.client:
-                        await ctx.client.send_message(
-                            cid,
-                            f"+{reward}",
-                            **({"reply_to": reply_to} if reply_to else {}),
-                        )
-                except Exception:
-                    pass
-                if ctx.log:
-                    await ctx.log("info",
-                        f"[ten_half] reward_sent: uid={p.user_id}, name={p.name}, "
-                        f"amount={reward}, chat_id={cid}, background=True")
+        for winner in winners:
+            reply_to = self._player_reply_message(g, int(winner["user_id"]))
+            try:
+                if ctx.client:
+                    await ctx.client.send_message(
+                        cid,
+                        f"+{winner['reward']}",
+                        **({"reply_to": reply_to} if reply_to else {}),
+                    )
+            except Exception:
+                pass
+            if ctx.log:
+                await ctx.log("info",
+                    f"[ten_half] reward_sent: uid={winner['user_id']}, name={winner['name']}, "
+                    f"amount={winner['reward']}, chat_id={cid}, background=True")
         self._games.pop(cid, None)
 
     # ═══════════════════════════════════════════════════
@@ -1966,7 +1993,9 @@ class TenHalfPlugin(Plugin):
         )
 
         if cnt >= self._max_players:
-            await self._ask_dealer(cid, g, ctx)
+            first_id, first_name = g.lobby_players[0]
+            self._lock_first_dealer(g, first_id, first_name)
+            await self._begin_game(cid, g, dealer_id=g.dealer_id, dealer_name=g.dealer_name, ctx=ctx)
 
     # ═══════════════════════════════════════════════════
     # on_interaction（交互 bot 流）
@@ -2143,6 +2172,8 @@ class TenHalfPlugin(Plugin):
 
             g.lobby_players.append((payer_id, payer_name))
             self._remember_player_message(g, payer_id, mid)
+            if len(g.lobby_players) == 1:
+                self._lock_first_dealer(g, payer_id, payer_name)
             self._touch_lobby(g)
             cnt = len(g.lobby_players)
 
@@ -2163,26 +2194,15 @@ class TenHalfPlugin(Plugin):
                 actions.extend(await self._ix_begin(cid, g, g.dealer_id, g.dealer_name, ctx))
                 return actions
 
-            if cnt >= 2 and not g.dealer_locked and not g.ask_dealer_uid:
-                actions.extend(await self._enter_ask_dealer(ctx, cid, g))
-                return actions
-
-            if cnt >= g.max_players and not g.dealer_locked and not g.ask_dealer_uid:
-                actions.extend(await self._enter_ask_dealer(ctx, cid, g))
-                return actions
-
             if g.dealer_locked:
                 self._schedule_idle_start_prompt(cid, g, ctx)
 
-            asking_dealer = bool(g.ask_dealer_uid and not g.dealer_locked)
             main_update = await self._main_action(
                 ctx,
                 g,
-                self._build_ask_dealer_text(g) if asking_dealer else self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
+                self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
                 reply_markup=(
-                    _kb_dealer(g.ask_dealer_uid)
-                    if asking_dealer
-                    else _kb_start_decision(self._start_controller_uid(g))
+                    _kb_start_decision(self._start_controller_uid(g))
                     if g.awaiting_start_confirmation
                     else _kb_join(g.bet)
                 ),
@@ -2199,7 +2219,7 @@ class TenHalfPlugin(Plugin):
         """Handle callback_query events from inline keyboard buttons.
 
         Callback data format: th:<action>:<id>
-        Actions: join, dealer_yes, dealer_no, hit, stand, double
+        Actions: join, hit, stand, double; dealer_yes/dealer_no are stale-button compatibility only.
         """
         callback_data = _ie_callback_data(payload)
         if not callback_data:
@@ -2283,6 +2303,8 @@ class TenHalfPlugin(Plugin):
 
         g.lobby_players.append((aid, aname))
         self._remember_player_message(g, aid, mid)
+        if len(g.lobby_players) == 1:
+            self._lock_first_dealer(g, aid, aname)
         self._touch_lobby(g)
         cnt = len(g.lobby_players)
         if is_callback:
@@ -2297,18 +2319,15 @@ class TenHalfPlugin(Plugin):
 
         if cnt >= g.max_players and g.dealer_locked:
             result.extend(await self._ix_begin(g.chat_id, g, g.dealer_id, g.dealer_name, ctx, payload=payload))
-        elif cnt >= 2 and not g.dealer_locked and not g.ask_dealer_uid:
-            result.extend(await self._enter_ask_dealer(ctx, g.chat_id, g))
         else:
             if g.dealer_locked:
                 self._schedule_idle_start_prompt(g.chat_id, g, ctx)
-            asking_dealer = bool(g.ask_dealer_uid and not g.dealer_locked)
             result.append(
                 await self._main_action(
                     ctx,
                     g,
-                    self._build_ask_dealer_text(g) if asking_dealer else self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
-                    reply_markup=_kb_dealer(g.ask_dealer_uid) if asking_dealer else _kb_join(g.bet),
+                    self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
+                    reply_markup=_kb_join(g.bet),
                 )
             )
         return result
@@ -2350,46 +2369,12 @@ class TenHalfPlugin(Plugin):
         self, g: TenHalfGame, action: str, aid: int, aname: str,
         ctx: PluginContext, payload: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """Handle dealer_yes / dealer_no button press."""
-        if g.phase not in ("ask_dealer", "lobby") or not g.ask_dealer_uid or g.dealer_locked:
-            return [_answer_action(payload, "当前不在选庄阶段。")]
-
-        if aid != g.ask_dealer_uid:
-            return [_answer_action(payload, "点点点！啥你都点！", show_alert=True)]
-
+        """Reject stale dealer-choice buttons from older lobby messages."""
         if ctx.log:
-            choice = "dealer_yes" if action == "dealer_yes" else "dealer_no"
             await ctx.log("info",
-                f"[ten_half] dealer_choice: uid={aid}, name={aname}, "
-                f"choice={choice}, chat_id={g.chat_id}")
-
-        if action == "dealer_yes":
-            g.dealer_id = aid
-            g.dealer_name = aname
-            answer = _answer_action(payload, "你已成为本局庄家。", show_alert=False)
-        else:  # dealer_no
-            g.dealer_id = 0
-            g.dealer_name = "🤖 庄家"
-            answer = _answer_action(payload, "本局由机器人当庄。", show_alert=False)
-
-        g.dealer_locked = True
-        self._touch_lobby(g)
-        actions: list[dict[str, Any]] = [answer]
-        if len(g.lobby_players) >= g.max_players:
-            actions.extend(await self._ix_begin(g.chat_id, g, g.dealer_id, g.dealer_name, ctx, payload=payload))
-            return actions
-
-        g.status_note = f"{g.dealer_name} 已确定为庄家，继续等待后续玩家加入。"
-        self._schedule_idle_start_prompt(g.chat_id, g, ctx)
-        actions.append(
-            await self._main_action(
-                ctx,
-                g,
-                self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
-                reply_markup=_kb_join(g.bet),
-            )
-        )
-        return actions
+                f"[ten_half] stale_dealer_choice: uid={aid}, name={aname}, "
+                f"action={action}, chat_id={g.chat_id}")
+        return [_answer_action(payload, "当前不需要选庄，首位加入玩家自动当庄。", show_alert=True)]
 
     async def _ix_player_action(
         self, g: TenHalfGame, action: str, aid: int, mid: int | None,
@@ -2480,7 +2465,7 @@ class TenHalfPlugin(Plugin):
                     return result
                 return []
 
-            # 新交互流程只接受按钮 callback 执行选庄、要牌、停牌和加倍；
+            # 新交互流程只接受按钮 callback 执行要牌、停牌和加倍；
             # 消息事件仅用于大厅加入提示，避免 userbot 命令路径滑回旧文字玩法。
             if g.via_interaction:
                 return []
@@ -2925,8 +2910,9 @@ class TenHalfPlugin(Plugin):
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
-        # 总底注池 = 所有玩家的有效下注（含加倍）
-        total_pot = sum(g.bet * (2 if p.doubled else 1) for p in g.players)
+        # 总底注池 = 庄家基础入场金额 + 所有闲家有效下注（含加倍）
+        dealer_bet = g.bet if g.dealer_id else 0
+        total_pot = dealer_bet + sum(g.bet * (2 if p.doubled else 1) for p in g.players)
 
         # ── 结算明细 ──
         lines = [
@@ -2986,6 +2972,34 @@ class TenHalfPlugin(Plugin):
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
                     f"outcome={outcome}, multiplier={multiplier}, reward={reward}, "
                     f"loss={loss}, bet={eb}, total_pot={total_pot}, chat_id={cid}")
+
+        dealer_reward = (
+            int(total_pot * 0.9)
+            if not winners and g.players and len(losers) == len(g.players) and g.dealer_id
+            else 0
+        )
+        if dealer_reward > 0:
+            dealer_result = {
+                "user_id": g.dealer_id,
+                "name": g.dealer_name,
+                "outcome": "dealer_win",
+                "multiplier": 1.0,
+                "reward": dealer_reward,
+                "loss": 0,
+                "bet": dealer_bet,
+            }
+            winners.append(dealer_result)
+            player_results.append(dealer_result)
+            lines.extend([
+                "",
+                f"🎰 庄家 <b>{_html(g.dealer_name)}</b> 通吃 → 获得 <b>{dealer_reward}</b>",
+            ])
+            if ctx and ctx.log:
+                await ctx.log(
+                    "info",
+                    f"[ten_half] dealer_reward: uid={g.dealer_id}, name={g.dealer_name}, "
+                    f"amount={dealer_reward}, bet={dealer_bet}, total_pot={total_pot}, chat_id={cid}",
+                )
 
         actions: list[dict[str, Any]] = []
 

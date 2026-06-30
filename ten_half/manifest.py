@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，默认账号 userbot 当庄，主消息和后续选庄/要牌/停牌/加倍都由交互 Bot 按钮承接；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；结算发奖走 userbot_reply 受控通道。',
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后加入牌局，首位成功加入的玩家自动成为庄家，userbot 仅作为收款和发奖通道；主消息和后续要牌/停牌/加倍都由交互 Bot 按钮承接；结算发奖走 userbot_reply 受控通道。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -46,8 +46,8 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，默认账号 userbot 当庄，主消息和后续选庄/要牌/停牌/加倍都由交互 Bot '
- '按钮承接；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
+USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后加入牌局，首位成功加入的玩家自动成为庄家，userbot 仅作为收款和发奖通道；主消息和后续要牌/停牌/加倍都由交互 Bot '
+ '按钮承接；结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
  'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
  '受控通道。')
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
@@ -69,7 +69,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.22",
+    version="0.2.23",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
