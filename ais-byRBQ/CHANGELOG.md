@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.7 (2026-06-30)
+- 修复 legacy 帮助、配置和 MCP 提示中的 `,ais` 示例不会跟随 TelePilot 当前命令前缀的问题；兼容层发送文本前会统一转换为当前前缀。
+
 ## 1.0.6 (2026-06-29)
 - 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。

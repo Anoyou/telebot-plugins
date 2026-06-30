@@ -12,6 +12,19 @@ from typing import Any, Callable
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
+def _current_command_prefix() -> str:
+    try:
+        from app.worker.command import current_command_prefix
+
+        return str(current_command_prefix(fallback=",") or ",")
+    except Exception:  # pragma: no cover - standalone compatibility
+        return ","
+
+
+def _normalize_legacy_command_examples(text: str) -> str:
+    return text.replace(",ais", f"{_current_command_prefix()}ais")
+
+
 @dataclass
 class _ListenerSpec:
     func: Callable[..., Any]
@@ -187,6 +200,7 @@ class _CompatClient:
         return types.SimpleNamespace(id=0)
 
     async def send_message(self, chat_id: int, text: str, **kwargs):
+        text = _normalize_legacy_command_examples(text)
         return await self._c.send_message(chat_id, text, **kwargs)
 
     async def send_photo(self, chat_id: int, photo: Any, **kwargs):
@@ -213,11 +227,13 @@ class _CompatClient:
         return await self._c.get_messages(chat_id, message_ids)
 
     async def edit_message_caption(self, chat_id: int, message_id: int, caption: str, **kwargs):
+        caption = _normalize_legacy_command_examples(caption)
         if hasattr(self._c, "edit_message_caption"):
             return await self._c.edit_message_caption(chat_id, message_id, caption, **kwargs)
         return await self._c.edit_message(chat_id, message_id, caption, **kwargs)
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, **kwargs):
+        text = _normalize_legacy_command_examples(text)
         if hasattr(self._c, "edit_message_text"):
             return await self._c.edit_message_text(chat_id, message_id, text, **kwargs)
         return await self._c.edit_message(chat_id, message_id, text, **kwargs)
@@ -278,6 +294,7 @@ class _CompatMessage:
         return getattr(self._e, "reactions", None)
 
     async def edit(self, text: str, **kwargs):
+        text = _normalize_legacy_command_examples(text)
         if hasattr(self._e, "edit"):
             return await self._e.edit(text, **kwargs)
         if hasattr(self._e, "reply"):
@@ -290,6 +307,7 @@ class _CompatMessage:
         return None
 
     async def reply(self, text: str, **kwargs):
+        text = _normalize_legacy_command_examples(text)
         if hasattr(self._e, "reply"):
             return await self._e.reply(text, **kwargs)
         return await self.edit(text, **kwargs)

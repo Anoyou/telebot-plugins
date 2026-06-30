@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 try:
@@ -377,10 +378,11 @@ class GuessNumberPlugin(Plugin):
         # 没有游戏 → 开始新游戏
         prize = self._parse_prize(args)
         if prize <= 0:
-            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            prefix = current_command_prefix(fallback=",")
+            await event.reply(f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
             return
 
-        # 解析范围：默认 1-100，可 ,guess 奖励 1 1000 自定义
+        # 解析范围：默认 1-100，可用“指令 奖励 1 1000”自定义。
         low, high = 1, 100
         max_attempts = 0  # 0 = 不限制
         game_args = args[1:]

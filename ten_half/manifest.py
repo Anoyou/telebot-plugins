@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；交互 Bot 承接选庄、要牌、停牌、加倍和主消息编辑，结算发奖走 userbot_reply 受控通道。',
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，默认账号 userbot 当庄，主消息和后续选庄/要牌/停牌/加倍都由交互 Bot 按钮承接；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；结算发奖走 userbot_reply 受控通道。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -37,7 +37,7 @@ CONFIG_SCHEMA = {
             "type": "integer",
             "title": "最大玩家数",
             "default": 5,
-            "minimum": 1,
+            "minimum": 2,
             "maximum": 10,
         },
     },
@@ -46,8 +46,8 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；交互 Bot '
- '承接选庄、要牌、停牌、加倍和主消息编辑，结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
+USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，默认账号 userbot 当庄，主消息和后续选庄/要牌/停牌/加倍都由交互 Bot '
+ '按钮承接；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
  'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
  '受控通道。')
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
@@ -55,10 +55,12 @@ EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'scope': 'owner_only',
   'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
  {'events': ['message', 'callback_query', 'session_close'],
+  'entry_key': 'start_ten_half',
   'source': ['interaction_bot'],
   'scope': 'rule_bound',
   'description': '交互规则命中后由交互 Bot 投递会话事件。'},
  {'events': ['payment_confirmed'],
+  'entry_key': 'start_ten_half',
   'source': ['external_payment_notice', 'userbot'],
   'scope': 'rule_bound',
   'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
@@ -67,7 +69,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.13",
+    version="0.2.15",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -118,7 +120,7 @@ MANIFEST = Manifest(
                                   'max_players': {'type': 'integer',
                                                   'title': '最大玩家数',
                                                   'default': 5,
-                                                  'minimum': 1,
+                                                  'minimum': 2,
                                                   'maximum': 10}}},
   'settlement': {'mode': 'announce_only'},
   'dispatch_modes': ['admin_command', 'public_keyword'],

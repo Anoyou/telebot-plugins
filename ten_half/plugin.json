@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.2.13",
+  "version": "0.2.15",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -53,7 +53,7 @@
         "type": "integer",
         "title": "最大玩家数",
         "default": 5,
-        "minimum": 1,
+        "minimum": 2,
         "maximum": 10
       }
     },
@@ -63,7 +63,7 @@
       "lobby_timeout",
       "max_players"
     ],
-    "x-usage-guide": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；交互 Bot 承接选庄、要牌、停牌、加倍和主消息编辑，结算发奖走 userbot_reply 受控通道。"
+    "x-usage-guide": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，默认账号 userbot 当庄，主消息和后续选庄/要牌/停牌/加倍都由交互 Bot 按钮承接；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；结算发奖走 userbot_reply 受控通道。"
   },
   "license": "MIT",
   "category": "interactive",
@@ -175,7 +175,7 @@
       "participant_policy": "paid_pool"
     }
   ],
-  "usage": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；交互 Bot 承接选庄、要牌、停牌、加倍和主消息编辑，结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
+  "usage": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，默认账号 userbot 当庄，主消息和后续选庄/要牌/停牌/加倍都由交互 Bot 按钮承接；玩家精确转账底注给账号 userbot 后由 payment_confirmed 加入牌局；结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
   "event_subscriptions": [
     {
       "events": [
@@ -193,6 +193,7 @@
         "callback_query",
         "session_close"
       ],
+      "entry_key": "start_ten_half",
       "source": [
         "interaction_bot"
       ],
@@ -203,6 +204,7 @@
       "events": [
         "payment_confirmed"
       ],
+      "entry_key": "start_ten_half",
       "source": [
         "external_payment_notice",
         "userbot"

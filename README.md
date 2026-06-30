@@ -6,24 +6,24 @@ TelePilot 远程插件仓库。
 
 | 插件 | 指令 | 说明 |
 |------|------|------|
-| [blackjack](./blackjack/) | `,bj` | 经典21点纸牌游戏 |
-| [guess_number](./guess_number/) | `,guess 金额` | 群内猜数字 |
-| [dice_battle](./dice_battle/) | `,dice` | 骰子比大小，支持对战 |
-| [idiom_chain](./idiom_chain/) | `,cy 金额` | 成语接龙，支持禁词规则 |
-| [poetry_blank](./poetry_blank/) | `,poetry 金额` | 古诗词填空抢答 |
-| [chatter_challenge](./chatter_challenge/) | `,chat` | 话痨挑战，违反规则自动扣分 |
-| [dice_grid_hunt](./dice_grid_hunt/) | `,dicegrid 金额` | 九宫格骰子图片竞猜 |
-| [lottery_plus](./lottery_plus/) | `,lotto` | 群内彩票下注与开奖 |
-| [mindreader_survival](./mindreader_survival/) | `,mind` | 多人读心生存赛 |
-| [ten_half](./ten_half/) | `,10d` | 多人十点半纸牌游戏 |
-| [game24](./game24/) | `,24d` | 官方可选 24 点竞速答题，支持交互 Bot 调度 |
+| [blackjack](./blackjack/) | `{prefix}bj` | 经典21点纸牌游戏 |
+| [guess_number](./guess_number/) | `{prefix}guess 金额` | 群内猜数字 |
+| [dice_battle](./dice_battle/) | `{prefix}dice` | 骰子比大小，支持对战 |
+| [idiom_chain](./idiom_chain/) | `{prefix}cy 金额` | 成语接龙，支持禁词规则 |
+| [poetry_blank](./poetry_blank/) | `{prefix}poetry 金额` | 古诗词填空抢答 |
+| [chatter_challenge](./chatter_challenge/) | `{prefix}chat` | 话痨挑战，违反规则自动扣分 |
+| [dice_grid_hunt](./dice_grid_hunt/) | `{prefix}dicegrid 金额` | 九宫格骰子图片竞猜 |
+| [lottery_plus](./lottery_plus/) | `{prefix}lotto` | 群内彩票下注与开奖 |
+| [mindreader_survival](./mindreader_survival/) | `{prefix}mind` | 多人读心生存赛 |
+| [ten_half](./ten_half/) | `{prefix}10d` | 多人十点半纸牌游戏 |
+| [game24](./game24/) | `{prefix}24d` | 官方可选 24 点竞速答题，支持交互 Bot 调度 |
 | [math10](./math10/) | 交互规则启动 | 官方可选 10 以内算数题，支持交互 Bot 调度 |
 | [chatgpt_image](./chatgpt_image/) | 插件配置 | 官方可选 ChatGPT2API 图片生成/编辑与 token 池 |
 | [codex_image](./codex_image/) | 插件配置 | 官方可选 Codex 图片生成 |
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
-| [sum](./sum/) | `,sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
+| [sum](./sum/) | `{prefix}sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
 | [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
-| [quick_qa](./quick_qa/) | `,quickqa` | 快问快答积分淘汰赛，支持 URL + AI 生成题库 |
+| [quick_qa](./quick_qa/) | `{prefix}quickqa` | 快问快答积分淘汰赛，支持 URL + AI 生成题库 |
 
 ## byRBQ 迁移插件（Pagermaid → TelePilot）
 

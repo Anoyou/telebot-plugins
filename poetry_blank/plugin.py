@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 try:
@@ -533,7 +534,8 @@ class PoetryBlankPlugin(Plugin):
             return
         prize = self._parse_prize(args)
         if prize <= 0:
-            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            prefix = current_command_prefix(fallback=",")
+            await event.reply(f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
             return
 
         lock = self._get_lock(chat_id)
