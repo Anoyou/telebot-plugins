@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.2.1"
+PLUGIN_VERSION = "1.2.2"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -20,6 +20,7 @@ DEFAULT_MAX_PLAYERS = 30
 DEFAULT_MAX_SOURCE_CHARS = 60000
 DEFAULT_AI_QUESTION_COUNT = 24
 DEFAULT_AI_TIMEOUT_SECONDS = 600
+MIN_AI_TIMEOUT_SECONDS = 300
 AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手。
 你会收到一个网页的纯文本内容。请只基于原文整理适合群聊快问快答的三选一题库。
 要求：
@@ -215,8 +216,9 @@ CONFIG_SCHEMA = {
         "ai_timeout_seconds": {
             "type": "integer",
             "title": "AI 请求超时（秒）",
+            "description": "建议至少 600 秒；低于 300 秒的旧配置会按 600 秒执行。",
             "default": DEFAULT_AI_TIMEOUT_SECONDS,
-            "minimum": 20,
+            "minimum": MIN_AI_TIMEOUT_SECONDS,
             "maximum": 1800,
         },
         "max_source_chars": {

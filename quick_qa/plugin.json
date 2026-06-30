@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "interactive",
@@ -352,8 +352,9 @@
       "ai_timeout_seconds": {
         "type": "integer",
         "title": "AI 请求超时（秒）",
+        "description": "建议至少 600 秒；低于 300 秒的旧配置会按 600 秒执行。",
         "default": 600,
-        "minimum": 20,
+        "minimum": 300,
         "maximum": 1800
       },
       "max_source_chars": {

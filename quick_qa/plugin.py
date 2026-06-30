@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.2.1"
+PLUGIN_VERSION = "1.2.2"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -45,6 +45,7 @@ DEFAULT_MAX_PLAYERS = 30
 DEFAULT_MAX_SOURCE_CHARS = 60000
 DEFAULT_AI_QUESTION_COUNT = 24
 DEFAULT_AI_TIMEOUT_SECONDS = 600
+MIN_AI_TIMEOUT_SECONDS = 300
 
 AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手。
 你会收到一个网页的纯文本内容。请只基于原文整理适合群聊快问快答的三选一题库。
@@ -165,6 +166,13 @@ def _bool(value: Any, default: bool = False) -> bool:
 def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     parsed = _int(value, default)
     return min(max(parsed, minimum), maximum)
+
+
+def _ai_timeout_seconds(config: dict[str, Any] | None) -> int:
+    raw = _int((config or {}).get("ai_timeout_seconds"), DEFAULT_AI_TIMEOUT_SECONDS)
+    if raw < MIN_AI_TIMEOUT_SECONDS:
+        return DEFAULT_AI_TIMEOUT_SECONDS
+    return min(raw, 1800)
 
 
 def _safe_text(value: Any, *, limit: int = 120) -> str:
@@ -1285,7 +1293,7 @@ class QuickQAPlugin(Plugin):
         if len(source_text) < 200:
             raise RuntimeError("网页正文太短，无法整理题库")
         question_count = _clamp_int((ctx.config or {}).get("ai_question_count"), DEFAULT_AI_QUESTION_COUNT, 3, 80)
-        ai_timeout = _clamp_int((ctx.config or {}).get("ai_timeout_seconds"), DEFAULT_AI_TIMEOUT_SECONDS, 20, 1800)
+        ai_timeout = _ai_timeout_seconds(ctx.config or {})
         await _progress_log(
             ctx,
             "info",

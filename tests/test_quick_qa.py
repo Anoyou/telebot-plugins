@@ -175,7 +175,11 @@ class QuickQATest(unittest.TestCase):
                 )
 
         class FakeAI:
+            def __init__(self):
+                self.calls = []
+
             async def complete(self, *_args, **_kwargs):
+                self.calls.append(_kwargs)
                 return types.SimpleNamespace(
                     text=(
                         '{"title":"配置框架","summary":"通用配置页动作",'
@@ -194,7 +198,8 @@ class QuickQATest(unittest.TestCase):
                 config={"allowed_source_hosts": "example.com"},
             )
             ctx.http = FakeHTTP()
-            ctx.ai = FakeAI()
+            fake_ai = FakeAI()
+            ctx.ai = fake_ai
             result = await plugin.on_config_action(
                 ctx,
                 "generate_knowledge_base",
@@ -210,7 +215,8 @@ class QuickQATest(unittest.TestCase):
                                     {"question": "旧题", "options": ["A", "B", "C"], "answer_index": 0}
                                 ],
                             }
-                        ]
+                        ],
+                        "ai_timeout_seconds": 90,
                     },
                 },
             )
@@ -221,6 +227,7 @@ class QuickQATest(unittest.TestCase):
             self.assertEqual(items[1]["title"], "配置页")
             self.assertTrue(items[1]["enabled"])
             self.assertEqual(len(items[1]["questions"]), 3)
+            self.assertEqual(fake_ai.calls[0]["timeout_seconds"], plugin_module.DEFAULT_AI_TIMEOUT_SECONDS)
 
         asyncio.run(scenario())
 
