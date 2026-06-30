@@ -289,6 +289,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(actions[0]["chat_id"], -100123)
             self.assertEqual(actions[0]["message_id"], 900)
             self.assertIn("th:start_now:111", str(actions[0]["reply_markup"]))
+            self.assertIn("15 秒无人加入", actions[0]["text"])
 
         asyncio.run(scenario_fast())
 
@@ -318,14 +319,14 @@ class TenHalfInteractionTest(unittest.TestCase):
             with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
                 await plugin._lobby_timeout_task(-100123, 123.0, ctx)
 
-            self.assertEqual(game.phase, "dealer_turn")
+            self.assertEqual(game.phase, "playing")
             self.assertEqual(len(game.players), 1)
             self.assertEqual(len(messages.applied), 1)
             actions = messages.applied[0]["actions"]
             self.assertEqual(actions[0]["type"], "edit_message")
             self.assertEqual(actions[0]["chat_id"], -100123)
-            self.assertIn("庄家先行动", actions[0]["text"])
-            self.assertIn("th:hit:111", str(actions[0]["reply_markup"]))
+            self.assertIn("轮到 玩家B 行动", actions[0]["text"])
+            self.assertIn("th:hit:222", str(actions[0]["reply_markup"]))
 
         asyncio.run(scenario_fast())
 
@@ -589,8 +590,8 @@ class TenHalfInteractionTest(unittest.TestCase):
                 )
 
                 self.assertEqual(game.dealer_id, 999)
-                self.assertEqual(game.phase, "dealer_turn")
-                self.assertTrue(any("th:hit:999" in str(action.get("reply_markup")) for action in actions))
+                self.assertEqual(game.phase, "playing")
+                self.assertTrue(any("th:hit:111" in str(action.get("reply_markup")) for action in actions))
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -620,24 +621,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                         payment_payload(payer_id=222, payer_name="玩家B", notice_message_id=711, reply_message_id=710),
                     )
 
-                dealer_actions = await plugin.on_interaction(
-                    ctx,
-                    "start_ten_half",
-                    {
-                        "source": {
-                            "type": "callback_query",
-                            "chat_id": -100123,
-                            "message_id": 900,
-                            "callback_query_id": "cb-dealer-stand",
-                            "callback_data": "th:stand:999",
-                        },
-                        "actor": {"user_id": 999, "display_name": "owner"},
-                    },
-                )
-                self.assertEqual(game.phase, "playing")
-                self.assertTrue(any("th:stand:111" in str(action.get("reply_markup")) for action in dealer_actions))
-
-                await plugin.on_interaction(
+                p1_actions = await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
                     {
@@ -651,7 +635,10 @@ class TenHalfInteractionTest(unittest.TestCase):
                         "actor": {"user_id": 111, "display_name": "玩家A"},
                     },
                 )
-                final_actions = await plugin.on_interaction(
+                self.assertEqual(game.phase, "playing")
+                self.assertTrue(any("th:stand:222" in str(action.get("reply_markup")) for action in p1_actions))
+
+                dealer_actions = await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
                     {
@@ -663,6 +650,23 @@ class TenHalfInteractionTest(unittest.TestCase):
                             "callback_data": "th:stand:222",
                         },
                         "actor": {"user_id": 222, "display_name": "玩家B"},
+                    },
+                )
+                self.assertEqual(game.phase, "dealer_turn")
+                self.assertTrue(any("th:stand:999" in str(action.get("reply_markup")) for action in dealer_actions))
+
+                final_actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    {
+                        "source": {
+                            "type": "callback_query",
+                            "chat_id": -100123,
+                            "message_id": 900,
+                            "callback_query_id": "cb-dealer-stand",
+                            "callback_data": "th:stand:999",
+                        },
+                        "actor": {"user_id": 999, "display_name": "owner"},
                     },
                 )
 
@@ -719,12 +723,13 @@ class TenHalfInteractionTest(unittest.TestCase):
             game.main_message_id = 900
 
             actions = await plugin._ix_begin(-100123, game, 111, "庄家候选", ctx)
-            self.assertEqual(game.phase, "dealer_turn")
+            self.assertEqual(game.phase, "playing")
             self.assertEqual(len(game.dealer_cards), 2)
             self.assertEqual([len(p.cards) for p in game.players], [1, 1])
             self.assertEqual(actions[0]["type"], "edit_message")
-            self.assertIn("1张", actions[0]["text"])
-            self.assertIn("庄家先行动", actions[0]["text"])
+            self.assertIn("玩家先行动", actions[0]["text"])
+            self.assertIn("轮到 玩家B 行动", actions[0]["text"])
+            self.assertIn("👉 <b>玩家B</b>", actions[0]["text"])
 
         asyncio.run(scenario())
 
@@ -743,6 +748,79 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(reward["text"], "+90")
             self.assertEqual(reward["reply_to_message_id"], 700)
             self.assertEqual(actions[-1]["type"], "end_session")
+
+        asyncio.run(scenario())
+
+    def test_multiple_five_small_players_all_receive_double_reward(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100)
+            player_a = plugin_module.PlayerHand(user_id=111, name="玩家A")
+            player_b = plugin_module.PlayerHand(user_id=222, name="玩家B")
+            five_small = [
+                plugin_module.Card("♠️", "A"),
+                plugin_module.Card("♥️", "A"),
+                plugin_module.Card("♦️", "A"),
+                plugin_module.Card("♣️", "A"),
+                plugin_module.Card("♠️", "A"),
+            ]
+            player_a.cards = list(five_small)
+            player_b.cards = list(five_small)
+            game.players = [player_a, player_b]
+            game.dealer_cards = [plugin_module.Card("♦️", "4"), plugin_module.Card("♣️", "5")]
+            game.player_message_ids = {111: 700, 222: 710}
+
+            actions = await plugin._ix_settle(-100123, game, PluginContext())
+            rewards = [action for action in actions if action.get("send_via") == "userbot_reply"]
+
+            self.assertEqual([action["text"] for action in rewards], ["+360", "+360"])
+            self.assertEqual({action["reply_to_message_id"] for action in rewards}, {700, 710})
+
+        asyncio.run(scenario())
+
+    def test_hit_resets_player_turn_timeout_version(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            ctx = PluginContext(messages=messages)
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                phase="playing",
+                via_interaction=True,
+                started_at=123.0,
+                turn_timeout=8,
+                dealer_id=222,
+                dealer_name="庄家",
+                main_message_id=900,
+            )
+            player = plugin_module.PlayerHand(user_id=111, name="玩家A")
+            player.cards = [plugin_module.Card("♠️", "A")]
+            game.players = [player]
+            game.dealer_cards = [plugin_module.Card("♦️", "4"), plugin_module.Card("♣️", "5")]
+            game.deck = [plugin_module.Card("♥️", "A")]
+            plugin._games[-100123] = game
+
+            await plugin._ix_advance(-100123, game, ctx)
+            first_version = game.turn_timeout_version
+            await plugin._ix_hit(-100123, game, ctx)
+            second_version = game.turn_timeout_version
+
+            self.assertEqual(first_version + 1, second_version)
+            with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                await plugin._turn_timeout_task(-100123, 0, 123.0, ctx, first_version)
+            self.assertFalse(player.stood)
+            self.assertEqual(messages.applied, [])
+
+            with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                await plugin._turn_timeout_task(-100123, 0, 123.0, ctx, second_version)
+            self.assertTrue(player.stood)
+            self.assertEqual(game.phase, "dealer_turn")
+            self.assertEqual(messages.applied[0]["actions"][0]["type"], "edit_message")
+            self.assertIn("轮到庄家", messages.applied[0]["actions"][0]["text"])
 
         asyncio.run(scenario())
 
@@ -786,13 +864,12 @@ class TenHalfInteractionTest(unittest.TestCase):
 
             self.assertGreater(len(actions), 1)
             self.assertEqual(actions[0]["type"], "answer_callback")
-            self.assertIn("结算", actions[0]["text"])
+            self.assertIn("庄家回合", actions[0]["text"])
             self.assertEqual(actions[1]["type"], "edit_message")
             self.assertEqual(actions[1]["message_id"], 900)
-            self.assertIn("十点半结算", actions[1]["text"])
-            self.assertTrue(any(action.get("send_via") == "userbot_reply" for action in actions))
-            self.assertEqual(actions[-1]["type"], "end_session")
-            self.assertNotIn(-100123, plugin._games)
+            self.assertIn("轮到庄家", actions[1]["text"])
+            self.assertIn("th:stand:222", str(actions[1]["reply_markup"]))
+            self.assertIn(-100123, plugin._games)
 
         asyncio.run(scenario())
 

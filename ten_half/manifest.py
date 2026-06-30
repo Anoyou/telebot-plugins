@@ -22,8 +22,8 @@ CONFIG_SCHEMA = {
         "timeout": {
             "type": "integer",
             "title": "每回合限时（秒）",
-            "default": 30,
-            "minimum": 10,
+            "default": 8,
+            "minimum": 5,
             "maximum": 120,
         },
         "lobby_timeout": {
@@ -69,7 +69,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.20",
+    version="0.2.21",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -109,8 +109,8 @@ MANIFEST = Manifest(
                                           'minimum': 1},
                                   'timeout': {'type': 'integer',
                                               'title': '每回合限时（秒）',
-                                              'default': 30,
-                                              'minimum': 10,
+                                              'default': 8,
+                                              'minimum': 5,
                                               'maximum': 120},
                                   'lobby_timeout': {'type': 'integer',
                                                     'title': '大厅等待时间（秒）',
