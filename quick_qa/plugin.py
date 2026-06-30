@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.2.0"
+PLUGIN_VERSION = "1.2.1"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -44,7 +44,7 @@ DEFAULT_MIN_PLAYERS = 2
 DEFAULT_MAX_PLAYERS = 30
 DEFAULT_MAX_SOURCE_CHARS = 60000
 DEFAULT_AI_QUESTION_COUNT = 24
-DEFAULT_AI_TIMEOUT_SECONDS = 90
+DEFAULT_AI_TIMEOUT_SECONDS = 600
 
 AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手。
 你会收到一个网页的纯文本内容。请只基于原文整理适合群聊快问快答的三选一题库。
@@ -192,6 +192,13 @@ def _dict(value: Any) -> dict[str, Any]:
 
 def _list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+async def _progress_log(ctx: PluginContext, level: str, message: str, **detail: Any) -> None:
+    writer = getattr(ctx, "log", None)
+    if writer is None:
+        return
+    await writer(level, message, plugin_key="quick_qa", **detail)
 
 
 def _source(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1255,6 +1262,7 @@ class QuickQAPlugin(Plugin):
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("只支持 http/https URL")
+        await _progress_log(ctx, "info", "已读取 URL，开始检查来源域名", step="validate_url", host=parsed.hostname or "")
         self._check_runtime_host_allowlist(ctx, parsed.hostname or "")
         http_client = getattr(ctx, "http", None)
         if http_client is None:
@@ -1263,11 +1271,13 @@ class QuickQAPlugin(Plugin):
         complete = getattr(ai_client, "complete", None) if ai_client is not None else None
         if complete is None:
             raise RuntimeError("当前插件没有 ctx.ai，请确认 ai_text 权限和 AI Provider 已配置")
+        await _progress_log(ctx, "info", "开始抓取网页内容", step="fetch_url", url=url)
         response = await http_client.get(url)
         status = _int(getattr(response, "status_code", 0), 0)
         if status < 200 or status >= 300:
             raise RuntimeError(f"网页请求失败：HTTP {status}")
         raw_text = str(getattr(response, "text", "") or "")
+        await _progress_log(ctx, "info", "网页内容抓取完成，开始清洗正文", step="clean_source", status=status, raw_chars=len(raw_text))
         source_text = _clean_html_to_text(raw_text)
         max_chars = _clamp_int((ctx.config or {}).get("max_source_chars"), DEFAULT_MAX_SOURCE_CHARS, 1000, 300000)
         if len(source_text) > max_chars:
@@ -1275,6 +1285,16 @@ class QuickQAPlugin(Plugin):
         if len(source_text) < 200:
             raise RuntimeError("网页正文太短，无法整理题库")
         question_count = _clamp_int((ctx.config or {}).get("ai_question_count"), DEFAULT_AI_QUESTION_COUNT, 3, 80)
+        ai_timeout = _clamp_int((ctx.config or {}).get("ai_timeout_seconds"), DEFAULT_AI_TIMEOUT_SECONDS, 20, 1800)
+        await _progress_log(
+            ctx,
+            "info",
+            "正文清洗完成，开始调用 AI 整理题库",
+            step="call_ai",
+            source_chars=len(source_text),
+            question_count=question_count,
+            timeout_seconds=ai_timeout,
+        )
         system_prompt = str((ctx.config or {}).get("question_generation_prompt") or AI_SYSTEM_PROMPT)
         user_prompt = (
             f"来源 URL：{url}\n"
@@ -1290,9 +1310,10 @@ class QuickQAPlugin(Plugin):
             model=(ctx.config or {}).get("telepilot_model") or None,
             provider_tag="long_context",
             max_tokens=6000,
-            timeout_seconds=_clamp_int((ctx.config or {}).get("ai_timeout_seconds"), DEFAULT_AI_TIMEOUT_SECONDS, 20, 600),
+            timeout_seconds=ai_timeout,
             source="plugin:quick_qa",
         )
+        await _progress_log(ctx, "info", "AI 已返回，开始解析题库 JSON", step="parse_ai_result")
         data = _extract_json_object(str(getattr(result, "text", "") or ""))
         questions = [_question_from_dict(item) for item in _list(data.get("questions"))]
         valid_questions = [q for q in questions if q is not None]
@@ -1308,6 +1329,14 @@ class QuickQAPlugin(Plugin):
             "questions": [_question_to_json(q) for q in valid_questions[:question_count]],
             "created_at": time.time(),
         }
+        await _progress_log(
+            ctx,
+            "info",
+            "题库草稿生成完成",
+            step="draft_ready",
+            title=title,
+            question_count=len(draft["questions"]),
+        )
         return draft
 
     def _check_runtime_host_allowlist(self, ctx: PluginContext, host: str) -> None:
