@@ -1158,6 +1158,8 @@ class TenHalfPlugin(Plugin):
                     f"🕒 {g.idle_start_seconds} 秒无人加入可由庄家提前开局，"
                     f"{g.lobby_timeout} 秒后自动开局。"
                 )
+        if g.finished and g.status_note:
+            lines.extend(["", _html(g.status_note)])
         return "\n".join(lines)
 
     def _build_join_notice_text(self, g: TenHalfGame, *, payer_name: str, amount: int) -> str:
@@ -1379,6 +1381,7 @@ class TenHalfPlugin(Plugin):
             g,
             self._build_lobby_text(g, g.payment_receiver_name or g.dealer_name),
             reply_to_message_id=int(getattr(event, "id", 0) or 0) or None,
+            force_send=True,
         )
         await self._emit_background_actions(ctx, [
             {
@@ -1412,10 +1415,19 @@ class TenHalfPlugin(Plugin):
                 self._games.pop(cid, None)
                 if g.via_interaction:
                     g.status_note = "没人加入，牌局已取消。"
+                    actions.append(await self._main_action(
+                        ctx,
+                        g,
+                        self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
+                        reply_markup=None,
+                    ))
+                    actions.append({"type": "end_session"})
+                    if ctx.log:
+                        await ctx.log("info", f"[ten_half] lobby_timeout_cancel: players=0, chat_id={cid}")
                 else:
                     await self._send(ctx, cid, "⏰ 没人加入，十点半游戏取消。")
-                return
-            if g.via_interaction:
+                    return
+            elif g.via_interaction:
                 if len(g.lobby_players) < 2:
                     g.finished = True
                     self._games.pop(cid, None)
@@ -2310,6 +2322,7 @@ class TenHalfPlugin(Plugin):
                 self._build_lobby_text(g, g.payment_receiver_name),
                 reply_markup=reply_markup,
                 reply_to_message_id=_ie_mid(payload),
+                force_send=True,
             )
         ]
 

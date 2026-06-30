@@ -645,7 +645,9 @@ class TenHalfInteractionTest(unittest.TestCase):
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             messages = FakeMessages()
-            ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, messages=messages)
+            redis = FakeRedis()
+            ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, messages=messages, redis=redis)
+            redis.store[plugin_module._main_msg_key(1, -100123)] = "599"
             client = FakeCommandClient()
             event = FakeCommandEvent()
             await plugin.on_startup(ctx)
@@ -669,8 +671,60 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(action["type"], "send_message")
                 self.assertEqual(action["send_via"], "interaction_bot")
                 self.assertEqual(action["reply_to_message_id"], 600)
+                self.assertEqual(action["replace_saved_message_id_key"], plugin_module._main_msg_key(1, -100123))
                 self.assertIn("十点半开局", action["text"])
                 self.assertNotIn("🎰 庄家", action["text"])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_keyword_start_force_sends_new_lobby_message_when_old_main_exists(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, redis=redis)
+            redis.store[plugin_module._main_msg_key(1, -100123)] = "599"
+            await plugin.on_startup(ctx)
+            try:
+                actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+
+                self.assertEqual(len(actions), 1)
+                action = actions[0]
+                self.assertEqual(action["type"], "send_message")
+                self.assertEqual(action["reply_to_message_id"], 600)
+                self.assertEqual(action["save_message_id_key"], plugin_module._main_msg_key(1, -100123))
+                self.assertEqual(action["replace_saved_message_id_key"], plugin_module._main_msg_key(1, -100123))
+                self.assertIn("十点半开局", action["text"])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_lobby_timeout_without_players_updates_message_and_ends_session(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            redis = FakeRedis()
+            ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, messages=messages, redis=redis)
+            redis.store[plugin_module._main_msg_key(1, -100123)] = "599"
+            await plugin.on_startup(ctx)
+            try:
+                with patch("asyncio.sleep", fast_sleep):
+                    await plugin._cmd(FakeCommandClient(), FakeCommandEvent(), ["100"], 1, ctx)
+                    tasks = list(plugin._tasks)
+                    if tasks:
+                        await asyncio.gather(*tasks)
+
+                self.assertNotIn(-100123, plugin._games)
+                self.assertGreaterEqual(len(messages.applied), 2)
+                timeout_actions = messages.applied[-1]["actions"]
+                self.assertEqual([a["type"] for a in timeout_actions], ["edit_message", "end_session"])
+                self.assertEqual(timeout_actions[0]["message_id"], 599)
+                self.assertIn("没人加入，牌局已取消", timeout_actions[0]["text"])
             finally:
                 await plugin.on_shutdown(ctx)
 
