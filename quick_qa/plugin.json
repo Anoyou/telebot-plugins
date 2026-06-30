@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "interactive",
@@ -49,7 +49,7 @@
     "**.hk",
     "**.tw"
   ],
-  "usage": "管理员使用 {prefix}quickqa kb import <URL> [标题] 抓取公开网页，并通过 TelePilot AI 生成三选一题库草稿；草稿确认保存后可在游戏开局时由随机玩家按钮多选题库。玩家通过转账门槛金额报名，每人默认 20 积分，答对加分、答错扣分，扣完出局；剩最后一人或题库用完时通过平台 settlement 公告奖励。",
+  "usage": "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。玩家通过转账门槛金额报名，每人默认 20 积分，答对加分、答错扣分，扣完出局；剩最后一人或题库用完时通过平台 settlement 公告奖励。",
   "event_subscriptions": [
     {
       "events": [
@@ -84,7 +84,7 @@
         "userbot"
       ],
       "scope": "owner_only",
-      "description": "账号主人或授权管理员通过 UserBot 命令管理题库和大厅。"
+      "description": "账号主人或授权管理员通过 UserBot 命令管理大厅；题库主路径在 Web 配置页维护。"
     }
   ],
   "capabilities": {},
@@ -184,7 +184,7 @@
     "type": "object",
     "x-ui-mode": "single",
     "x-category": "interactive",
-    "x-usage-guide": "管理员使用 {prefix}quickqa kb import <URL> [标题] 抓取公开网页，并通过 TelePilot AI 生成三选一题库草稿；草稿确认保存后可在游戏开局时由随机玩家按钮多选题库。玩家通过转账门槛金额报名，每人默认 20 积分，答对加分、答错扣分，扣完出局；剩最后一人或题库用完时通过平台 settlement 公告奖励。",
+    "x-usage-guide": "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。玩家通过转账门槛金额报名，每人默认 20 积分，答对加分、答错扣分，扣完出局；剩最后一人或题库用完时通过平台 settlement 公告奖励。",
     "additionalProperties": false,
     "properties": {
       "command": {
@@ -200,7 +200,7 @@
         "type": "string",
         "title": "使用说明（只读）",
         "readOnly": true,
-        "default": "{prefix}quickqa 100 创建报名大厅\n{prefix}quickqa start 开始选择题库\n{prefix}quickqa kb import <URL> [标题] 生成题库草稿\n{prefix}quickqa kb save <草稿ID> 保存题库\n{prefix}quickqa kb list 查看题库"
+        "default": "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n{prefix}quickqa 100 创建报名大厅\n{prefix}quickqa start 开始选择题库\n{prefix}quickqa kb list 查看题库"
       },
       "entry_fee": {
         "type": "integer",
@@ -343,8 +343,8 @@
       },
       "knowledge_bases_json": {
         "type": "string",
-        "title": "手工题库 JSON（可选）",
-        "description": "可手工填入题库数组；命令保存的题库会写入插件本地数据文件，不需要同步填这里。",
+        "title": "题库数据 JSON",
+        "description": "由 TelePilot Web 配置页的题库管理器维护；管理员无需手工编辑 JSON。",
         "default": "[]",
         "x-ui-widget": "textarea"
       }

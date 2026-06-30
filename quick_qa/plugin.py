@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.0.1"
+PLUGIN_VERSION = "1.1.0"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -428,6 +428,7 @@ def _clean_html_to_text(raw: str) -> str:
     text = re.sub(r"(?is)</h[1-6]\s*>", "\n", text)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = html.unescape(text)
+    text = text.replace("\xa0", " ")
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
     text = re.sub(r"\n\s+", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -827,7 +828,7 @@ class QuickQAPlugin(Plugin):
             return [_answer_action(payload, text, show_alert=True)] if _callback_query_id(payload) else [_send_action(text)]
         kbs = self._available_kbs(ctx)
         if not kbs:
-            text = "还没有可用题库。请先用 quickqa kb import <URL> 生成并保存题库。"
+            text = "还没有可用题库。请先在 TelePilot Web 配置页添加 URL，获取并整理为题库后保存配置。"
             return [_answer_action(payload, text, show_alert=True)] if _callback_query_id(payload) else [_send_action(text)]
         selector = random.choice(list(game.players.values()))
         game.selector_user_id = selector.user_id
@@ -1466,7 +1467,7 @@ class QuickQAPlugin(Plugin):
         if not kbs:
             return (
                 "当前还没有题库。\n"
-                f"导入示例：{_code(_command_prefix() + self._command + ' kb import https://example.com 题库名')}"
+                "请在 TelePilot Web 配置页的题库管理里添加 URL，并保存配置。"
             )
         lines = ["<b>已保存题库</b>"]
         for kb in kbs:
@@ -1487,12 +1488,11 @@ class QuickQAPlugin(Plugin):
         prefix = _command_prefix()
         return (
             "<b>快问快答</b>\n"
+            "题库：在 TelePilot Web 配置页添加 URL，获取并整理后保存配置\n"
             f"{_code(prefix + self._command + ' 100')} 创建报名大厅\n"
             f"{_code(prefix + self._command + ' start')} 达到人数后开始选择题库\n"
             f"{_code(prefix + self._command + ' cancel')} 取消当前局\n"
-            f"{_code(prefix + self._command + ' kb list')} 查看题库\n"
-            f"{_code(prefix + self._command + ' kb import <URL> [标题]')} 抓取网页并让 AI 生成题库\n"
-            f"{_code(prefix + self._command + ' kb save <草稿ID>')} 保存 AI 题库草稿"
+            f"{_code(prefix + self._command + ' kb list')} 查看题库"
         )
 
     def _cfg_start_keyword(self, ctx: PluginContext, payload: dict[str, Any]) -> str:
