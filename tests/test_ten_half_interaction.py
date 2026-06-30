@@ -344,6 +344,56 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_callback_after_timeout_auto_stand_settles_instead_of_empty_ack(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                phase="playing",
+                via_interaction=True,
+            )
+            game.main_message_id = 900
+            game.status_note = "玩家A 超时，自动停牌。"
+            player = plugin_module.PlayerHand(user_id=111, name="玩家A")
+            player.cards = [plugin_module.Card("♠️", "9"), plugin_module.Card("♥️", "A")]
+            player.stood = True
+            game.players = [player]
+            game.dealer_id = 222
+            game.dealer_name = "庄家"
+            game.dealer_cards = [plugin_module.Card("♦️", "9"), plugin_module.Card("♣️", "10")]
+            game.current_player_idx = 1
+            game.player_message_ids[111] = 700
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                {
+                    "source": {
+                        "type": "callback_query",
+                        "chat_id": -100123,
+                        "message_id": 900,
+                        "callback_query_id": "cb-timeout",
+                        "callback_data": "th:stand:111",
+                    },
+                    "actor": {"user_id": 111, "display_name": "玩家A"},
+                },
+            )
+
+            self.assertGreater(len(actions), 1)
+            self.assertEqual(actions[0]["type"], "answer_callback")
+            self.assertIn("结算", actions[0]["text"])
+            self.assertEqual(actions[1]["type"], "edit_message")
+            self.assertEqual(actions[1]["message_id"], 900)
+            self.assertIn("十点半结算", actions[1]["text"])
+            self.assertTrue(any(action.get("send_via") == "userbot_reply" for action in actions))
+            self.assertEqual(actions[-1]["type"], "end_session")
+            self.assertNotIn(-100123, plugin._games)
+
+        asyncio.run(scenario())
+
     def test_background_dealer_play_sends_reward_without_actions_name_error(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()

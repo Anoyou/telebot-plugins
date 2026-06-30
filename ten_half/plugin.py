@@ -1990,7 +1990,12 @@ class TenHalfPlugin(Plugin):
                 return [_answer_action(payload, "游戏不在进行中。")]
             return [_send_action("⚠️ 游戏不在进行中。", reply_to_message_id=mid)]
         if g.current_player_idx >= len(g.players):
-            return []
+            g.status_note = g.status_note or "本局玩家回合已结束，正在结算。"
+            actions: list[dict[str, Any]] = []
+            if payload:
+                actions.append(_answer_action(payload, "本局已进入结算。"))
+            actions.extend(await self._ix_settle(g.chat_id, g, ctx))
+            return actions
 
         cur = g.players[g.current_player_idx]
         if aid != cur.user_id:
@@ -2072,7 +2077,8 @@ class TenHalfPlugin(Plugin):
             # ── 游戏中 (text fallback alongside buttons) ──
             if g.phase == "playing":
                 if g.current_player_idx >= len(g.players):
-                    return []
+                    g.status_note = g.status_note or "本局玩家回合已结束，正在结算。"
+                    return await self._ix_settle(cid, g, ctx)
                 cur = g.players[g.current_player_idx]
 
                 if aid != cur.user_id:
