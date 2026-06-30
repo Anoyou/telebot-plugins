@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.32 (2026-06-30)
+- 补充默认 `summary_config.json` 配置文件，远程插件库安装后可带上群消息总结的基础 AI 配置、回复模式和消息模板。
+
 ## 1.1.31 (2026-06-29)
 - 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。

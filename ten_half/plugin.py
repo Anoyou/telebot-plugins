@@ -1954,7 +1954,7 @@ class TenHalfPlugin(Plugin):
             return [_answer_action(payload, "当前不在选庄阶段。")]
 
         if aid != g.ask_dealer_uid:
-            return [_answer_action(payload, "还没轮到你。")]
+            return [_answer_action(payload, "点点点！啥你都点！问你了吗！")]
 
         if ctx.log:
             choice = "dealer_yes" if action == "dealer_yes" else "dealer_no"

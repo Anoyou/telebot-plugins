@@ -273,6 +273,41 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_wrong_player_dealer_choice_returns_custom_answer_callback(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="ask_dealer", via_interaction=True)
+            game.main_message_id = 900
+            game.lobby_players = [(111, "玩家A"), (222, "玩家B")]
+            game.ask_dealer_uid = 111
+            game.ask_dealer_name = "玩家A"
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                {
+                    "source": {
+                        "type": "callback_query",
+                        "chat_id": -100123,
+                        "message_id": 900,
+                        "callback_query_id": "cb-dealer",
+                        "callback_data": "th:dealer_yes:111",
+                    },
+                    "actor": {"user_id": 222, "display_name": "玩家B"},
+                },
+            )
+
+            self.assertEqual(actions, [{
+                "type": "answer_callback",
+                "callback_query_id": "cb-dealer",
+                "text": "点点点！啥你都点！问你了吗！",
+                "show_alert": False,
+            }])
+
+        asyncio.run(scenario())
+
     def test_interaction_begin_deals_one_card_to_each_player_and_dealer_two(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()

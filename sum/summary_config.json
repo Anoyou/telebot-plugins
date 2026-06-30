@@ -1,0 +1,15 @@
+{
+  "seq": 0,
+  "tasks": [],
+  "aiConfig": {
+    "default_prompt": "请总结以下群聊消息的主要内容，提取关键话题和重要信息：",
+    "default_spoiler": false,
+    "default_timeout": 60000,
+    "reply_mode": true,
+    "max_output_length": 0,
+    "telepilot_provider": "",
+    "telepilot_model": "",
+    "message_template": "📊 群组总结\n来源: {chat_display}\n时间: {time}\n数量: {message_count}\n\n{summary}"
+  },
+  "defaultPushTarget": ""
+}
