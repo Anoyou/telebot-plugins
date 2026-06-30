@@ -395,6 +395,46 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_stale_turn_button_returns_expired_without_action(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="playing", via_interaction=True)
+            game.main_message_id = 900
+            game.action_version = 2
+            game.players = [
+                plugin_module.PlayerHand(user_id=111, name="玩家A", cards=[plugin_module.Card("♠️", "5")]),
+            ]
+            game.current_player_idx = 0
+            game.deck = [plugin_module.Card("♥️", "A")]
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                {
+                    "source": {
+                        "type": "callback_query",
+                        "chat_id": -100123,
+                        "message_id": 900,
+                        "callback_query_id": "cb-stale",
+                        "callback_data": "th:hit:111:1",
+                    },
+                    "actor": {"user_id": 111, "display_name": "玩家A"},
+                },
+            )
+
+            self.assertEqual(actions, [{
+                "type": "answer_callback",
+                "callback_query_id": "cb-stale",
+                "text": "按钮已过期，请看最新牌桌。",
+                "show_alert": False,
+            }])
+            self.assertEqual(len(game.players[0].cards), 1)
+            self.assertEqual(game.phase, "playing")
+
+        asyncio.run(scenario())
+
     def test_wrong_player_dealer_choice_returns_custom_answer_callback(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()

@@ -172,6 +172,7 @@ class TenHalfGame:
     awaiting_start_confirmation: bool = False
     lobby_version: int = 0
     turn_timeout_version: int = 0
+    action_version: int = 0
     player_message_ids: dict[int, int] = field(default_factory=dict)
 
     # ── 庄家辅助 ─────────────────────────────────────
@@ -549,14 +550,15 @@ def _kb_start_decision(uid: int) -> dict[str, Any]:
     }
 
 
-def _kb_turn(uid: int, *, can_double: bool = True) -> dict[str, Any]:
+def _kb_turn(uid: int, *, can_double: bool = True, action_version: int | None = None) -> dict[str, Any]:
     """Player turn action buttons."""
+    suffix = f":{action_version}" if action_version is not None else ""
     row: list[dict[str, str]] = [
-        {"text": "🃏 要牌", "callback_data": f"th:hit:{uid}"},
-        {"text": "🛑 停牌", "callback_data": f"th:stand:{uid}"},
+        {"text": "🃏 要牌", "callback_data": f"th:hit:{uid}{suffix}"},
+        {"text": "🛑 停牌", "callback_data": f"th:stand:{uid}{suffix}"},
     ]
     if can_double:
-        row.append({"text": "💰 加倍", "callback_data": f"th:double:{uid}"})
+        row.append({"text": "💰 加倍", "callback_data": f"th:double:{uid}{suffix}"})
     return {"inline_keyboard": [row]}
 
 
@@ -830,6 +832,10 @@ class TenHalfPlugin(Plugin):
                 g.turn_timeout_version,
             ),
         ))
+
+    def _turn_keyboard(self, g: TenHalfGame, uid: int, *, can_double: bool = True) -> dict[str, Any]:
+        g.action_version += 1
+        return _kb_turn(uid, can_double=can_double, action_version=g.action_version)
 
     def _schedule_idle_start_prompt(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
         if (
@@ -1520,7 +1526,7 @@ class TenHalfPlugin(Plugin):
 
         p = g.players[g.current_player_idx]
         can_double = len(p.cards) == 2
-        markup = _kb_turn(p.user_id, can_double=can_double)
+        markup = self._turn_keyboard(g, p.user_id, can_double=can_double)
         self._schedule_turn_timeout(cid, g, ctx)
         if ctx.log:
             await ctx.log("info",
@@ -2200,7 +2206,7 @@ class TenHalfPlugin(Plugin):
             return []
 
         parts = callback_data.split(":")
-        if len(parts) != 3 or parts[0] != "th":
+        if len(parts) not in (3, 4) or parts[0] != "th":
             return []
 
         action = parts[1]
@@ -2208,6 +2214,12 @@ class TenHalfPlugin(Plugin):
             cb_id = int(parts[2])
         except (ValueError, TypeError):
             return []
+        cb_version: int | None = None
+        if len(parts) == 4:
+            try:
+                cb_version = int(parts[3])
+            except (ValueError, TypeError):
+                return []
 
         aid, aname = _ie_actor(payload)
         mid = _ie_mid(payload)
@@ -2243,7 +2255,7 @@ class TenHalfPlugin(Plugin):
                     await ctx.log("info",
                         f"[ten_half] player_action_input: uid={aid}, name={aname}, "
                         f"action={action} (callback), chat_id={cid}")
-                return await self._ix_player_action(g, action, aid, mid, ctx, payload)
+                return await self._ix_player_action(g, action, aid, mid, ctx, payload, cb_version=cb_version)
 
         return []
 
@@ -2382,8 +2394,19 @@ class TenHalfPlugin(Plugin):
     async def _ix_player_action(
         self, g: TenHalfGame, action: str, aid: int, mid: int | None,
         ctx: PluginContext, payload: dict[str, Any] | None = None,
+        cb_version: int | None = None,
     ) -> list[dict[str, Any]]:
         """Handle hit/stand/double button press."""
+        if cb_version is not None and cb_version != g.action_version:
+            if ctx.log:
+                await ctx.log(
+                    "info",
+                    f"[ten_half] stale_action_button: uid={aid}, action={action}, "
+                    f"button_version={cb_version}, current_version={g.action_version}, "
+                    f"phase={g.phase}, chat_id={g.chat_id}",
+                )
+            return [_answer_action(payload or {}, "按钮已过期，请看最新牌桌。", show_alert=False)] if payload else []
+
         if g.phase == "dealer_turn":
             if g.dealer_is_bot:
                 return [_answer_action(payload or {}, "机器人庄家正在行动。")] if payload else []
@@ -2642,7 +2665,7 @@ class TenHalfPlugin(Plugin):
                 ctx,
                 g,
                 self._build_ix_state_text(g),
-                reply_markup=_kb_turn(g.dealer_id, can_double=False),
+                reply_markup=self._turn_keyboard(g, g.dealer_id, can_double=False),
             )
         )
         return actions
@@ -2717,7 +2740,7 @@ class TenHalfPlugin(Plugin):
                     ctx,
                     g,
                     self._build_ix_state_text(g),
-                    reply_markup=_kb_turn(g.dealer_id, can_double=False),
+                    reply_markup=self._turn_keyboard(g, g.dealer_id, can_double=False),
                 )
             )
             return actions
@@ -2736,7 +2759,7 @@ class TenHalfPlugin(Plugin):
                 ctx,
                 g,
                 self._build_ix_state_text(g),
-                reply_markup=_kb_turn(p.user_id, can_double=can_double),
+                reply_markup=self._turn_keyboard(g, p.user_id, can_double=can_double),
             )
         )
         return actions
@@ -2787,7 +2810,7 @@ class TenHalfPlugin(Plugin):
                     ctx,
                     g,
                     self._build_ix_state_text(g),
-                    reply_markup=_kb_turn(p.user_id, can_double=len(p.cards) == 2),
+                    reply_markup=self._turn_keyboard(g, p.user_id, can_double=len(p.cards) == 2),
                 )
             )
         return actions
