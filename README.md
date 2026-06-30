@@ -23,6 +23,7 @@ TelePilot 远程插件仓库。
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
 | [sum](./sum/) | `,sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
 | [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
+| [quick_qa](./quick_qa/) | `,quickqa` | 快问快答积分淘汰赛，支持 URL + AI 生成题库 |
 
 ## byRBQ 迁移插件（Pagermaid → TelePilot）
 
