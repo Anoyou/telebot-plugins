@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -234,12 +234,93 @@ CONFIG_SCHEMA = {
             "minLength": 20,
             "maxLength": 6000,
         },
+        "knowledge_bases": {
+            "type": "array",
+            "title": "题库",
+            "description": "可添加多组题库；启用的题库会在开局时供随机玩家选择，一个或多个题库可同时使用。",
+            "default": [],
+            "level": "account",
+            "x-ui-widget": "config-list",
+            "x-ui-summary": "{questions.length} 题 · {summary}",
+            "x-ui-title-field": "title",
+            "x-ui-description-field": "url",
+            "x-ui-enabled-field": "enabled",
+            "x-ui-reorderable": True,
+            "x-ui-add-label": "手动添加题库",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "enabled": {
+                        "type": "boolean",
+                        "title": "启用",
+                        "default": True,
+                    },
+                    "kb_id": {
+                        "type": "string",
+                        "title": "题库 ID",
+                        "default": "",
+                        "readOnly": True,
+                    },
+                    "title": {
+                        "type": "string",
+                        "title": "题库标题",
+                        "default": "",
+                    },
+                    "url": {
+                        "type": "string",
+                        "title": "来源 URL",
+                        "default": "",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "title": "摘要",
+                        "default": "",
+                        "x-ui-widget": "textarea",
+                    },
+                    "questions": {
+                        "type": "array",
+                        "title": "题目 JSON",
+                        "description": "通常由 AI 自动生成；手工编辑时保持 question/options/answer_index/explanation 结构。",
+                        "default": [],
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "question": {"type": "string", "title": "题目"},
+                                "options": {
+                                    "type": "array",
+                                    "title": "三个选项",
+                                    "items": {"type": "string"},
+                                },
+                                "answer_index": {
+                                    "type": "integer",
+                                    "title": "正确选项序号",
+                                    "minimum": 0,
+                                    "maximum": 2,
+                                },
+                                "explanation": {"type": "string", "title": "解释"},
+                            },
+                            "required": ["question", "options", "answer_index"],
+                        },
+                    },
+                    "created_at": {
+                        "type": "number",
+                        "title": "创建时间",
+                        "default": 0,
+                        "x-ui-hidden": True,
+                    },
+                },
+                "required": ["enabled", "title", "questions"],
+            },
+        },
         "knowledge_bases_json": {
             "type": "string",
-            "title": "题库数据 JSON",
-            "description": "由 TelePilot Web 配置页的题库管理器维护；管理员无需手工编辑 JSON。",
+            "title": "旧版题库数据 JSON",
+            "description": "兼容旧版本配置；新版本请使用结构化题库列表。",
             "default": "[]",
             "x-ui-widget": "textarea",
+            "x-ui-hidden": True,
         },
     },
     "required": [
@@ -261,9 +342,38 @@ CONFIG_SCHEMA = {
         "ai_timeout_seconds",
         "max_source_chars",
         "question_generation_prompt",
-        "knowledge_bases_json",
+        "knowledge_bases",
     ],
 }
+
+CONFIG_ACTIONS = [
+    {
+        "key": "generate_knowledge_base",
+        "title": "获取并整理为题库",
+        "description": "填入公开 URL 后，插件会通过受控 HTTP 抓取网页正文，并调用 TelePilot AI 整理成三选一题库。",
+        "placement": "field:knowledge_bases",
+        "submit_label": "生成题库",
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "title": "来源 URL",
+                    "description": "支持 http/https；可用题库来源域名白名单限制可抓取范围。",
+                    "default": "",
+                },
+                "title": {
+                    "type": "string",
+                    "title": "标题提示（可选）",
+                    "description": "留空时由 AI 根据网页内容判断题库标题。",
+                    "default": "",
+                },
+            },
+            "required": ["url"],
+        },
+    }
+]
 
 
 MANIFEST = Manifest(
@@ -304,6 +414,7 @@ MANIFEST = Manifest(
     event_subscriptions=EVENT_SUBSCRIPTIONS,
     capabilities={},
     interaction_profile="session_game",
+    config_actions=CONFIG_ACTIONS,
     interaction_entries=[
         {
             "key": "join_quick_qa",

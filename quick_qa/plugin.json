@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "interactive",
@@ -50,6 +50,36 @@
     "**.tw"
   ],
   "usage": "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。玩家通过转账门槛金额报名，每人默认 20 积分，答对加分、答错扣分，扣完出局；剩最后一人或题库用完时通过平台 settlement 公告奖励。",
+  "config_actions": [
+    {
+      "key": "generate_knowledge_base",
+      "title": "获取并整理为题库",
+      "description": "填入公开 URL 后，插件会通过受控 HTTP 抓取网页正文，并调用 TelePilot AI 整理成三选一题库。",
+      "placement": "field:knowledge_bases",
+      "submit_label": "生成题库",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "来源 URL",
+            "description": "支持 http/https；可用题库来源域名白名单限制可抓取范围。",
+            "default": ""
+          },
+          "title": {
+            "type": "string",
+            "title": "标题提示（可选）",
+            "description": "留空时由 AI 根据网页内容判断题库标题。",
+            "default": ""
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    }
+  ],
   "event_subscriptions": [
     {
       "events": [
@@ -341,12 +371,109 @@
         "minLength": 20,
         "maxLength": 6000
       },
+      "knowledge_bases": {
+        "type": "array",
+        "title": "题库",
+        "description": "可添加多组题库；启用的题库会在开局时供随机玩家选择，一个或多个题库可同时使用。",
+        "default": [],
+        "level": "account",
+        "x-ui-widget": "config-list",
+        "x-ui-summary": "{questions.length} 题 · {summary}",
+        "x-ui-title-field": "title",
+        "x-ui-description-field": "url",
+        "x-ui-enabled-field": "enabled",
+        "x-ui-reorderable": true,
+        "x-ui-add-label": "手动添加题库",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "title": "启用",
+              "default": true
+            },
+            "kb_id": {
+              "type": "string",
+              "title": "题库 ID",
+              "default": "",
+              "readOnly": true
+            },
+            "title": {
+              "type": "string",
+              "title": "题库标题",
+              "default": ""
+            },
+            "url": {
+              "type": "string",
+              "title": "来源 URL",
+              "default": ""
+            },
+            "summary": {
+              "type": "string",
+              "title": "摘要",
+              "default": "",
+              "x-ui-widget": "textarea"
+            },
+            "questions": {
+              "type": "array",
+              "title": "题目 JSON",
+              "description": "通常由 AI 自动生成；手工编辑时保持 question/options/answer_index/explanation 结构。",
+              "default": [],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "question": {
+                    "type": "string",
+                    "title": "题目"
+                  },
+                  "options": {
+                    "type": "array",
+                    "title": "三个选项",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "answer_index": {
+                    "type": "integer",
+                    "title": "正确选项序号",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "explanation": {
+                    "type": "string",
+                    "title": "解释"
+                  }
+                },
+                "required": [
+                  "question",
+                  "options",
+                  "answer_index"
+                ]
+              }
+            },
+            "created_at": {
+              "type": "number",
+              "title": "创建时间",
+              "default": 0,
+              "x-ui-hidden": true
+            }
+          },
+          "required": [
+            "enabled",
+            "title",
+            "questions"
+          ]
+        }
+      },
       "knowledge_bases_json": {
         "type": "string",
-        "title": "题库数据 JSON",
-        "description": "由 TelePilot Web 配置页的题库管理器维护；管理员无需手工编辑 JSON。",
+        "title": "旧版题库数据 JSON",
+        "description": "兼容旧版本配置；新版本请使用结构化题库列表。",
         "default": "[]",
-        "x-ui-widget": "textarea"
+        "x-ui-widget": "textarea",
+        "x-ui-hidden": true
       }
     },
     "required": [
@@ -368,7 +495,7 @@
       "ai_timeout_seconds",
       "max_source_chars",
       "question_generation_prompt",
-      "knowledge_bases_json"
+      "knowledge_bases"
     ]
   },
   "license": "MIT"

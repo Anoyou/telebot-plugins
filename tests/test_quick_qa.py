@@ -166,6 +166,64 @@ class QuickQATest(unittest.TestCase):
         self.assertEqual(len(kbs), 1)
         self.assertEqual(kbs[0].kb_id, "kb-draft")
 
+    def test_config_action_generates_knowledge_base_patch(self) -> None:
+        class FakeHTTP:
+            async def get(self, _url: str):
+                return types.SimpleNamespace(
+                    status_code=200,
+                    text="<html><body><h1>TelePilot</h1>" + ("插件配置框架支持题库生成。" * 30) + "</body></html>",
+                )
+
+        class FakeAI:
+            async def complete(self, *_args, **_kwargs):
+                return types.SimpleNamespace(
+                    text=(
+                        '{"title":"配置框架","summary":"通用配置页动作",'
+                        '"questions":['
+                        '{"question":"配置页动作由谁声明？","options":["插件","数据库","主题"],"answer_index":0},'
+                        '{"question":"题库来源是什么？","options":["URL","贴纸","头像"],"answer_index":0},'
+                        '{"question":"答案按钮数量？","options":["三个","一个","五个"],"answer_index":0}'
+                        ']}'
+                    )
+                )
+
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(
+                account_id=1,
+                config={"allowed_source_hosts": "example.com"},
+            )
+            ctx.http = FakeHTTP()
+            ctx.ai = FakeAI()
+            result = await plugin.on_config_action(
+                ctx,
+                "generate_knowledge_base",
+                {
+                    "input": {"url": "https://example.com/article", "title": "配置页"},
+                    "config": {
+                        "knowledge_bases": [
+                            {
+                                "kb_id": "old",
+                                "title": "旧题库",
+                                "enabled": False,
+                                "questions": [
+                                    {"question": "旧题", "options": ["A", "B", "C"], "answer_index": 0}
+                                ],
+                            }
+                        ]
+                    },
+                },
+            )
+            items = result["config_patch"]["knowledge_bases"]
+            self.assertEqual(len(items), 2)
+            self.assertEqual(items[0]["kb_id"], "old")
+            self.assertFalse(items[0]["enabled"])
+            self.assertEqual(items[1]["title"], "配置页")
+            self.assertTrue(items[1]["enabled"])
+            self.assertEqual(len(items[1]["questions"]), 3)
+
+        asyncio.run(scenario())
+
     def test_paid_game_selects_kb_and_settles_after_answer(self) -> None:
         self._seed_kb()
 

@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -83,6 +83,7 @@ class KnowledgeBase:
     url: str
     summary: str = ""
     questions: list[QAQuestion] = field(default_factory=list)
+    enabled: bool = True
     created_at: float = field(default_factory=time.time)
 
 
@@ -146,6 +147,19 @@ def _float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on", "y", "启用"}:
+        return True
+    if normalized in {"0", "false", "no", "off", "n", "停用"}:
+        return False
+    return default
 
 
 def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
@@ -481,6 +495,7 @@ def _kb_from_dict(value: Any) -> KnowledgeBase | None:
         url=url,
         summary=_safe_text(value.get("summary"), limit=160),
         questions=valid_questions,
+        enabled=_bool(value.get("enabled"), True),
         created_at=_float(value.get("created_at"), time.time()),
     )
 
@@ -491,9 +506,42 @@ def _kb_to_json(kb: KnowledgeBase) -> dict[str, Any]:
         "title": kb.title,
         "url": kb.url,
         "summary": kb.summary,
+        "enabled": kb.enabled,
         "questions": [asdict(q) for q in kb.questions],
         "created_at": kb.created_at,
     }
+
+
+def _config_kb_items(config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    cfg = config or {}
+    items: list[dict[str, Any]] = []
+    for item in _list(cfg.get("knowledge_bases")):
+        if isinstance(item, dict):
+            items.append(dict(item))
+    raw_config = str(cfg.get("knowledge_bases_json") or "").strip()
+    if raw_config:
+        try:
+            parsed = json.loads(raw_config)
+            entries = parsed if isinstance(parsed, list) else _list(_dict(parsed).get("knowledge_bases"))
+            for item in entries:
+                if isinstance(item, dict):
+                    items.append(dict(item))
+        except Exception:
+            pass
+    return _dedupe_kb_items(items)
+
+
+def _dedupe_kb_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for item in items:
+        kb_id = str(item.get("kb_id") or item.get("id") or "").strip()
+        marker = kb_id or f"{item.get('url')}\n{item.get('title')}"
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique.append(item)
+    return unique
 
 
 def _question_to_json(question: QAQuestion) -> dict[str, Any]:
@@ -594,6 +642,38 @@ class QuickQAPlugin(Plugin):
         if entry_key not in {ENTRY_KEY, ADMIN_ENTRY_KEY, "start_quick_qa"}:
             return None
         return await self._handle_interaction(ctx, payload)
+
+    async def on_config_action(
+        self,
+        ctx: PluginContext,
+        action_key: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action_key != "generate_knowledge_base":
+            return None
+        action_input = _dict(payload.get("input"))
+        current_config = _dict(payload.get("config"))
+        ctx.config = {**(ctx.config or {}), **current_config}
+        url = str(action_input.get("url") or "").strip()
+        title_hint = str(action_input.get("title") or action_input.get("name") or "").strip()
+        if not url:
+            raise ValueError("请先填写题库来源 URL")
+
+        draft = await self._generate_kb_draft(ctx, url, title_hint)
+        kb = _kb_from_dict({**draft, "enabled": True})
+        if kb is None:
+            raise RuntimeError("AI 返回的题库不可用")
+
+        current_items = [
+            item
+            for item in _config_kb_items(current_config)
+            if str(item.get("kb_id") or item.get("id") or "").strip() != kb.kb_id
+        ]
+        current_items.append(_kb_to_json(kb))
+        return {
+            "message": f"已生成题库：{kb.title}（{len(kb.questions)} 题），请保存配置后生效。",
+            "config_patch": {"knowledge_bases": current_items},
+        }
 
     async def _handle_interaction(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
         event_type = _event_type(payload)
@@ -1288,21 +1368,12 @@ class QuickQAPlugin(Plugin):
         account = _account_store(store, account_id)
         for item in account["knowledge_bases"]:
             kb = _kb_from_dict(item)
-            if kb is not None:
+            if kb is not None and kb.enabled:
                 kbs.append(kb)
-        raw_config = ""
-        if config is not None:
-            raw_config = str(config.get("knowledge_bases_json") or "").strip()
-        if raw_config:
-            try:
-                parsed = json.loads(raw_config)
-                entries = parsed if isinstance(parsed, list) else _list(_dict(parsed).get("knowledge_bases"))
-                for item in entries:
-                    kb = _kb_from_dict(item)
-                    if kb is not None:
-                        kbs.append(kb)
-            except Exception:
-                pass
+        for item in _config_kb_items(config):
+            kb = _kb_from_dict(item)
+            if kb is not None and kb.enabled:
+                kbs.append(kb)
         seen: set[str] = set()
         unique: list[KnowledgeBase] = []
         for kb in kbs:
