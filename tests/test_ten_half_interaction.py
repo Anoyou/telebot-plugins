@@ -5,6 +5,7 @@ import importlib.util
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -128,6 +129,10 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertIn("加入牌局成功", join_actions[0]["text"])
                 self.assertIn("牌桌 ID", join_actions[0]["text"])
                 self.assertNotIn("十点半开局", join_actions[0]["text"])
+                self.assertEqual(
+                    join_actions[0]["replace_saved_message_id_key"],
+                    plugin_module._join_notice_key(1, -100123),
+                )
 
                 game = plugin._games[-100123]
                 self.assertEqual(game.player_message_ids[111], 700)
@@ -162,13 +167,73 @@ class TenHalfInteractionTest(unittest.TestCase):
                         reply_message_id=710,
                     ),
                 )
-                self.assertEqual([a["type"] for a in second], ["delete_message", "send_message", "edit_message"])
-                self.assertEqual(second[0]["message_id"], 910)
+                self.assertEqual([a["type"] for a in second], ["send_message", "delete_message", "edit_message"])
+                self.assertEqual(second[1]["message_id"], 910)
                 self.assertEqual(second[2]["message_id"], 900)
-                self.assertIn("玩家A、玩家B", second[1]["text"])
+                self.assertIn("玩家A、玩家B", second[0]["text"])
                 self.assertIn("玩家A、玩家B", second[2]["text"])
+                self.assertEqual(plugin._games[-100123].phase, "ask_dealer")
+                self.assertIn("reply_markup", second[2])
             finally:
                 await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_interaction_dealer_timeout_does_not_auto_pick_bot_dealer(self) -> None:
+        # This test uses a local coroutine patch to avoid waiting 30 seconds.
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario_fast() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                phase="ask_dealer",
+                via_interaction=True,
+                started_at=123.0,
+            )
+            game.ask_dealer_uid = 111
+            game.ask_dealer_name = "玩家A"
+            plugin._games[-100123] = game
+
+            with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                await plugin._dealer_question_timeout(-100123, 123.0, ctx)
+
+            self.assertEqual(game.phase, "ask_dealer")
+            self.assertEqual(game.dealer_id, 0)
+            self.assertEqual(game.dealer_cards, [])
+            self.assertIn("选庄等待已结束", game.status_note)
+
+        asyncio.run(scenario_fast())
+
+    def test_bot_dealer_stand_advances_to_player_turn(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, via_interaction=True)
+            game.lobby_players = [(111, "玩家A"), (222, "玩家B")]
+            game.main_message_id = 900
+            deck = [
+                plugin_module.Card("♠️", "4"),
+                plugin_module.Card("♥️", "3"),
+                plugin_module.Card("♦️", "2"),
+                plugin_module.Card("♣️", "A"),
+            ]
+
+            with patch.object(plugin_module, "create_deck", return_value=list(deck)):
+                actions = await plugin._ix_begin(-100123, game, 0, "🤖 庄家", ctx)
+
+            self.assertEqual(game.phase, "playing")
+            self.assertFalse(game.finished)
+            self.assertEqual(game.current_player_idx, 0)
+            self.assertEqual(len(game.dealer_cards), 2)
+            self.assertEqual([len(p.cards) for p in game.players], [1, 1])
+            self.assertNotIn("end_session", [action["type"] for action in actions])
+            self.assertEqual(actions[-1]["type"], "edit_message")
+            self.assertIn("轮到 玩家A 行动", actions[-1]["text"])
+            self.assertIn("reply_markup", actions[-1])
 
         asyncio.run(scenario())
 

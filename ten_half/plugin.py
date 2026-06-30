@@ -508,6 +508,7 @@ def _send_action(
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
     save_message_id_key: str | None = None,
+    replace_saved_message_id_key: str | None = None,
     send_via: str = "interaction_bot",
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
@@ -522,6 +523,8 @@ def _send_action(
         action["reply_markup"] = reply_markup
     if save_message_id_key:
         action["save_message_id_key"] = save_message_id_key
+    if replace_saved_message_id_key:
+        action["replace_saved_message_id_key"] = replace_saved_message_id_key
     return action
 
 
@@ -671,16 +674,17 @@ class TenHalfPlugin(Plugin):
         actions: list[dict[str, Any]] = []
         key = _join_notice_key(ctx.account_id, g.chat_id)
         previous_mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, key)
-        if previous_mid:
-            g.join_notice_msg_id = previous_mid
-            actions.append(_delete_action(previous_mid))
         actions.append(
             _send_action(
                 self._build_join_notice_text(g, payer_name=payer_name, amount=amount),
                 reply_to_message_id=_ie_mid(payload),
                 save_message_id_key=key,
+                replace_saved_message_id_key=key if not previous_mid else None,
             )
         )
+        if previous_mid:
+            g.join_notice_msg_id = previous_mid
+            actions.append(_delete_action(previous_mid))
         return actions
 
     def _build_lobby_text(self, g: TenHalfGame, receiver_label: str) -> str:
@@ -769,7 +773,7 @@ class TenHalfPlugin(Plugin):
                 f"[ten_half] ask_dealer: uid={first_id}, name={first_name}, "
                 f"players={[n for _, n in g.lobby_players]}, chat_id={cid}",
             )
-        if not g.dealer_timeout_started:
+        if not g.via_interaction and not g.dealer_timeout_started:
             g.dealer_timeout_started = True
             self._track(asyncio.create_task(
                 self._dealer_question_timeout(cid, g.started_at, ctx),
@@ -912,19 +916,16 @@ class TenHalfPlugin(Plugin):
             if not g.lobby_players:
                 g.finished = True
                 self._games.pop(cid, None)
-                # NOTE: timeout messages use ctx.client for interaction flow
-                # because on_interaction already returned; this is acceptable
-                # for system-initiated notifications.
                 if g.via_interaction:
-                    action = await self._main_action(ctx, g, "⏰ 没人加入，十点半游戏取消。")
-                    await self._send_ix_actions(ctx, cid, [action] if action else [])
+                    g.status_note = "没人加入，牌局已取消。"
                 else:
                     await self._send(ctx, cid, "⏰ 没人加入，十点半游戏取消。")
                 return
             if g.via_interaction:
-                # For interaction flow, we can't return actions from a timeout task.
-                # Send via ctx.client as a system notification.
-                await self._ask_dealer_ix(cid, g, ctx)
+                # Interaction-visible messages must be returned as standard
+                # actions from on_interaction. A background task only mutates
+                # state here; otherwise it would send via the userbot client.
+                g.status_note = "大厅等待已结束，请等待下一次交互刷新牌桌。"
             else:
                 await self._ask_dealer(cid, g, ctx)
 
@@ -967,8 +968,10 @@ class TenHalfPlugin(Plugin):
                     f"[ten_half] dealer_question_timeout: defaulting to bot dealer, "
                     f"chat_id={cid}")
             if g.via_interaction:
-                actions = await self._ix_begin(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
-                await self._send_ix_actions(ctx, cid, actions)
+                # Do not auto-pick a bot dealer from a background task: it
+                # cannot return Bot API actions, so the follow-up buttons would
+                # be sent by the userbot and become non-interactive.
+                g.status_note = "选庄等待已结束，请重新开桌或让候选玩家点击选庄按钮。"
             else:
                 await self._begin_game(cid, g, dealer_id=0, dealer_name="🤖 庄家", ctx=ctx)
 
@@ -1128,8 +1131,6 @@ class TenHalfPlugin(Plugin):
             if g.via_interaction:
                 g.status_note = f"{p.name} 超时，自动停牌。"
                 g.current_player_idx += 1
-                actions = await self._ix_advance(cid, g, ctx)
-                await self._send_ix_actions(ctx, cid, actions)
             else:
                 await self._send(ctx, cid, f"⏰ {p.name} 超时，自动停牌。")
                 g.current_player_idx += 1
@@ -1824,7 +1825,7 @@ class TenHalfPlugin(Plugin):
                 amount=amount,
             )
 
-            if cnt >= self._max_players:
+            if cnt >= 2:
                 actions.extend(await self._enter_ask_dealer(ctx, cid, g))
                 return actions
 
@@ -1931,7 +1932,7 @@ class TenHalfPlugin(Plugin):
                 )
             ]
 
-        if cnt >= self._max_players:
+        if cnt >= 2:
             result.extend(await self._enter_ask_dealer(ctx, g.chat_id, g))
         else:
             result.append(
