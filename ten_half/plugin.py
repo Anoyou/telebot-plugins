@@ -443,6 +443,30 @@ def _config_int(
     return max(minimum, min(maximum, int(default)))
 
 
+def _interaction_bet_from_payload(payload: dict[str, Any]) -> int:
+    sources = [payload, _module_config(payload), _trigger_payload(payload)]
+    priority_keys = (
+        "module_prize",
+        "math_prize",
+        "prize",
+        "entry_fee",
+        "threshold_amount",
+        "payment_threshold",
+        "default_bet",
+        "bet_amount",
+        "bet",
+        "amount",
+    )
+    for key in priority_keys:
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            parsed = _pint(source.get(key), 0, minimum=1)
+            if parsed > 0:
+                return parsed
+    return 0
+
+
 def _start_keyword_label(payload: dict[str, Any], fallback: str) -> str:
     trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
     trigger_payload = _trigger_payload(payload)
@@ -1875,10 +1899,7 @@ class TenHalfPlugin(Plugin):
         self, ctx: PluginContext, payload: dict[str, Any], cid: int,
     ) -> list[dict[str, Any]]:
         limits = self._game_limits_from_payload(ctx, payload)
-        bet = _pint(
-            payload.get("bet") or payload.get("amount") or payload.get("prize"),
-            0, minimum=1,
-        )
+        bet = _interaction_bet_from_payload(payload)
 
 
 
