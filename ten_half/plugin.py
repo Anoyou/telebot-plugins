@@ -773,15 +773,18 @@ class TenHalfPlugin(Plugin):
         mid = g.main_message_id or await self._read_saved_message_id(ctx, key)
         if mid:
             g.main_message_id = mid
-            return _edit_action(mid, text, reply_markup=reply_markup)
-        if not send_if_missing:
+            action = _edit_action(mid, text, reply_markup=reply_markup)
+        elif not send_if_missing:
             return None
-        return _send_action(
-            text,
-            reply_to_message_id=reply_to_message_id,
-            reply_markup=reply_markup,
-            save_message_id_key=key,
-        )
+        else:
+            action = _send_action(
+                text,
+                reply_to_message_id=reply_to_message_id,
+                reply_markup=reply_markup,
+                save_message_id_key=key,
+            )
+        action.setdefault("chat_id", g.chat_id)
+        return action
 
     async def _emit_background_actions(
         self,

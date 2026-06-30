@@ -286,6 +286,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(messages.applied[0]["entry_key"], "start_ten_half")
             actions = messages.applied[0]["actions"]
             self.assertEqual(actions[0]["type"], "edit_message")
+            self.assertEqual(actions[0]["chat_id"], -100123)
             self.assertEqual(actions[0]["message_id"], 900)
             self.assertIn("th:start_now:111", str(actions[0]["reply_markup"]))
 
@@ -322,6 +323,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(len(messages.applied), 1)
             actions = messages.applied[0]["actions"]
             self.assertEqual(actions[0]["type"], "edit_message")
+            self.assertEqual(actions[0]["chat_id"], -100123)
             self.assertIn("庄家先行动", actions[0]["text"])
             self.assertIn("th:hit:111", str(actions[0]["reply_markup"]))
 
