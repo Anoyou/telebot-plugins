@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -346,7 +346,7 @@ MANIFEST = Manifest(
                 },
                 "required": ["entry_fee"],
             },
-            "dispatch_modes": ["public_keyword", "payment_confirmed"],
+            "dispatch_modes": ["public_keyword"],
             "message_channels": {"public_keyword": "interaction_bot"},
             "money_channel": "userbot_reply",
             "participant_policy": "paid_pool",
