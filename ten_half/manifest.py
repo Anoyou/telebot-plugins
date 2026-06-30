@@ -13,7 +13,7 @@ CONFIG_SCHEMA = {
     "properties": {
         "command": {
             "type": "string",
-            "title": "触发指令名",
+            "title": "触发指令名（不含前缀）",
             "default": "10d",
             "minLength": 1,
             "maxLength": 32,
@@ -69,7 +69,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.23",
+    version="0.2.24",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

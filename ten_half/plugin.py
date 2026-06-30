@@ -54,6 +54,7 @@ SUITS = ["♠️", "♥️", "♦️", "♣️"]
 RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
 REDIS_MAIN_MSG_KEY_PREFIX = "ten_half:main:"
 REDIS_JOIN_NOTICE_KEY_PREFIX = "ten_half:join_notice:"
+REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 
 
 @dataclass
@@ -93,6 +94,31 @@ def _main_msg_key(account_id: int, chat_id: int) -> str:
 
 def _join_notice_key(account_id: int, chat_id: int) -> str:
     return f"{REDIS_JOIN_NOTICE_KEY_PREFIX}{account_id}:{chat_id}"
+
+
+def _reward_msg_key(account_id: int, chat_id: int, game_id: str, user_id: int) -> str:
+    return f"{REDIS_REWARD_MSG_KEY_PREFIX}{account_id}:{chat_id}:{game_id}:{user_id}"
+
+
+def _normalize_command_name(raw: Any) -> str:
+    text = str(raw or "").strip()
+    prefixes = [
+        current_command_prefix(fallback=","),
+        ",",
+        ".",
+        "。",
+        "/",
+        "!",
+    ]
+    changed = True
+    while changed and text:
+        changed = False
+        for prefix in prefixes:
+            if prefix and text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                changed = True
+                break
+    return text or "10d"
 
 
 # ─────────────────────────────────────────────────────
@@ -670,12 +696,20 @@ def _edit_action(
     return action
 
 
-def _delete_action(message_id: int) -> dict[str, Any]:
-    return {
+def _delete_action(
+    message_id: int,
+    *,
+    chat_id: int | None = None,
+    send_via: str = "interaction_bot",
+) -> dict[str, Any]:
+    action: dict[str, Any] = {
         "type": "delete_message",
         "message_id": message_id,
-        "send_via": "interaction_bot",
+        "send_via": send_via,
     }
+    if chat_id is not None:
+        action["chat_id"] = chat_id
+    return action
 
 
 def _answer_action(payload: dict[str, Any], text: str, *, show_alert: bool = False) -> dict[str, Any]:
@@ -703,6 +737,7 @@ class TenHalfPlugin(Plugin):
         self._command = "10d"
         self._turn_timeout = 8
         self._lobby_timeout = 60
+        self._settlement_cleanup_delay = 15
         self._max_players = 5
         self._games: dict[int, TenHalfGame] = {}
         self._locks: dict[int, asyncio.Lock] = {}
@@ -810,6 +845,84 @@ class TenHalfPlugin(Plugin):
             if ctx.log:
                 await ctx.log("warn", f"[ten_half] background_actions_failed: {exc}")
             return False
+
+    async def _emit_background_actions_batched(
+        self,
+        ctx: PluginContext,
+        actions: list[dict[str, Any]],
+        *,
+        batch_size: int = 10,
+    ) -> bool:
+        delivered = False
+        for index in range(0, len(actions), batch_size):
+            delivered = await self._emit_background_actions(ctx, actions[index:index + batch_size]) or delivered
+        return delivered
+
+    def _schedule_settlement_cleanup(
+        self,
+        ctx: PluginContext,
+        g: TenHalfGame,
+        reward_message_keys: list[str],
+    ) -> None:
+        self._track_task(asyncio.create_task(
+            self._cleanup_game_messages_task(
+                ctx,
+                g.chat_id,
+                g.main_message_id,
+                g.join_notice_msg_id,
+                list(reward_message_keys),
+                self._settlement_cleanup_delay,
+            )
+        ))
+
+    async def _cleanup_game_messages_task(
+        self,
+        ctx: PluginContext,
+        cid: int,
+        main_message_id: int | None,
+        join_notice_msg_id: int | None,
+        reward_message_keys: list[str],
+        delay_seconds: int,
+    ) -> None:
+        await asyncio.sleep(max(0, int(delay_seconds)))
+        interaction_message_ids: set[int] = set()
+        userbot_message_ids: set[int] = set()
+
+        if main_message_id:
+            interaction_message_ids.add(main_message_id)
+        saved_main_mid = await self._read_saved_message_id(ctx, _main_msg_key(ctx.account_id, cid))
+        if saved_main_mid:
+            interaction_message_ids.add(saved_main_mid)
+        if join_notice_msg_id:
+            interaction_message_ids.add(join_notice_msg_id)
+        saved_join_mid = await self._read_saved_message_id(ctx, _join_notice_key(ctx.account_id, cid))
+        if saved_join_mid:
+            interaction_message_ids.add(saved_join_mid)
+        for key in reward_message_keys:
+            reward_mid = await self._read_saved_message_id(ctx, key)
+            if reward_mid:
+                userbot_message_ids.add(reward_mid)
+
+        actions = [
+            _delete_action(mid, chat_id=cid, send_via="interaction_bot")
+            for mid in sorted(interaction_message_ids)
+        ]
+        actions.extend(
+            _delete_action(mid, chat_id=cid, send_via="userbot_reply")
+            for mid in sorted(userbot_message_ids)
+        )
+        if not actions:
+            if ctx.log:
+                await ctx.log("info", f"[ten_half] settlement_cleanup_skip: no_messages, chat_id={cid}")
+            return
+        delivered = await self._emit_background_actions_batched(ctx, actions)
+        if ctx.log:
+            level = "info" if delivered else "warn"
+            await ctx.log(
+                level,
+                f"[ten_half] settlement_cleanup: messages={len(actions)}, "
+                f"delay={delay_seconds}, delivered={delivered}, chat_id={cid}",
+            )
 
     @staticmethod
     def _start_controller_uid(g: TenHalfGame) -> int:
@@ -967,13 +1080,20 @@ class TenHalfPlugin(Plugin):
         return "\n".join(lines)
 
     def _build_join_notice_text(self, g: TenHalfGame, *, payer_name: str, amount: int) -> str:
-        players = "、".join(_html(name) for _, name in g.lobby_players) or "暂无"
-        return "\n".join([
+        players = [f"• {_html(name)}" for _, name in g.lobby_players] or ["• 暂无"]
+        lines = [
             f"✅ <b>{_html(payer_name)}</b> 加入牌局成功",
             f"🆔 牌桌 ID: <code>{g.game_id}</code>",
             f"💰 入场金额: {amount}",
-            f"👥 当前玩家 ({len(g.lobby_players)}/{g.max_players}): {players}",
-        ])
+            f"👥 当前玩家 ({len(g.lobby_players)}/{g.max_players}):",
+            *players,
+        ]
+        if g.dealer_locked and 2 <= len(g.lobby_players) < g.max_players:
+            lines.extend([
+                "",
+                f"⏳ 开始倒计时 {g.idle_start_seconds} 秒，如果没人加入则庄家可以选择直接开局。",
+            ])
+        return "\n".join(lines)
 
     def _build_ask_dealer_text(self, g: TenHalfGame) -> str:
         players = "、".join(_html(name) for _, name in g.lobby_players)
@@ -1091,7 +1211,7 @@ class TenHalfPlugin(Plugin):
     # ── 生命周期 ─────────────────────────────────────
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
-        self._command = cfg.get("command", "10d")
+        self._command = _normalize_command_name(cfg.get("command", "10d"))
         self._turn_timeout = _pint(cfg.get("timeout"), 8, minimum=5)
         self._lobby_timeout = _pint(cfg.get("lobby_timeout"), 60, minimum=10)
         self._max_players = _pint(cfg.get("max_players"), 5, minimum=2)
@@ -1615,9 +1735,8 @@ class TenHalfPlugin(Plugin):
             outcome = self._compare(p, dv, db, dn, dfs)
             mult = 2.0 if outcome in ("win_nat", "win_5s") else 1.0 if outcome == "win" else 0.0
             reward = int(total_pot * mult * 0.9) if mult > 0 else 0
-            display = self._outcome_str(outcome, eb)
-            if reward > 0:
-                display += f" → 获得 {reward}"
+            loss = eb if outcome == "lose" else 0
+            display = self._settlement_outcome_text(p, outcome, eb, reward, loss)
             lines.append(f"👤 {p.name}: {p.hand_str()} → {display}")
             if reward > 0:
                 winners.append({"user_id": p.user_id, "name": p.name, "reward": reward})
@@ -1635,7 +1754,7 @@ class TenHalfPlugin(Plugin):
         )
         if dealer_reward > 0:
             winners.append({"user_id": g.dealer_id, "name": g.dealer_name, "reward": dealer_reward})
-            lines.append(f"🎰 {g.dealer_name}: 通吃 → 获得 {dealer_reward}")
+            lines.append(f"🎰 {g.dealer_name}: 🎉是赢家 获得 {dealer_reward}")
             if ctx.log:
                 await ctx.log("info",
                     f"[ten_half] dealer_reward: uid={g.dealer_id}, name={g.dealer_name}, "
@@ -1824,9 +1943,8 @@ class TenHalfPlugin(Plugin):
             outcome = self._compare(p, dv, db, dn, dfs)
             mult = 2.0 if outcome in ("win_nat", "win_5s") else 1.0 if outcome == "win" else 0.0
             reward = int(total_pot * mult * 0.9) if mult > 0 else 0
-            display = self._outcome_str(outcome, eb)
-            if reward > 0:
-                display += f" → 获得 {reward}"
+            loss = eb if outcome == "lose" else 0
+            display = self._settlement_outcome_text(p, outcome, eb, reward, loss)
             lines.append(f"👤 {p.name}: {p.hand_str()} → {display}")
             if ctx.log:
                 await ctx.log("info",
@@ -1897,6 +2015,30 @@ class TenHalfPlugin(Plugin):
         if outcome == "push":
             return "🤝 平局 0"
         return f"❌ 输 -{bet}"
+
+    @staticmethod
+    def _settlement_outcome_text(
+        p: PlayerHand,
+        outcome: str,
+        bet: int,
+        reward: int,
+        loss: int,
+        *,
+        html_mode: bool = False,
+    ) -> str:
+        if p.busted or p.value > 10.5 + 1e-9:
+            return f"❌ 爆牌！输 {loss or bet}"
+        if reward > 0:
+            amount = f"<b>{reward}</b>" if html_mode else str(reward)
+            prefix = ""
+            if outcome == "win_nat":
+                prefix = "✨ 天生十点半！"
+            elif outcome == "win_5s":
+                prefix = "🌟 五小！"
+            return f"{prefix}🎉是赢家 获得 {amount}"
+        if outcome == "push":
+            return "🤝 平局 0"
+        return f"❌ 输 {loss or bet}"
 
     # ═══════════════════════════════════════════════════
     # on_message (userbot 流)
@@ -2312,7 +2454,7 @@ class TenHalfPlugin(Plugin):
         else:
             result = [
                 _send_action(
-                    f"✅ <b>{_html(aname)}</b> 加入牌局成功\n🆔 牌桌 ID: <code>{g.game_id}</code>",
+                    self._build_join_notice_text(g, payer_name=aname, amount=g.bet),
                     reply_to_message_id=mid,
                 )
             ]
@@ -2944,11 +3086,14 @@ class TenHalfPlugin(Plugin):
             loss = eb if outcome == "lose" else 0
 
             # 显示文案
-            outcome_display = self._outcome_str(outcome, eb)
-            if reward > 0:
-                outcome_display += f" → 获得 <b>{reward}</b>"
-            elif loss > 0:
-                outcome_display += f" → 损失 {loss}"
+            outcome_display = self._settlement_outcome_text(
+                p,
+                outcome,
+                eb,
+                reward,
+                loss,
+                html_mode=True,
+            )
 
             lines.append(f"• <b>{_html(p.name)}</b>: {_cards_brief(p.cards)} → {outcome_display}")
 
@@ -2992,7 +3137,7 @@ class TenHalfPlugin(Plugin):
             player_results.append(dealer_result)
             lines.extend([
                 "",
-                f"🎰 庄家 <b>{_html(g.dealer_name)}</b> 通吃 → 获得 <b>{dealer_reward}</b>",
+                f"🎰 庄家 <b>{_html(g.dealer_name)}</b> 🎉是赢家 获得 <b>{dealer_reward}</b>",
             ])
             if ctx and ctx.log:
                 await ctx.log(
@@ -3010,12 +3155,17 @@ class TenHalfPlugin(Plugin):
             actions.append(_send_action("\n".join(lines)))
 
         # ── 向每位赢家发放奖励（走 userbot_reply，参照 dice_grid_hunt） ──
+        reward_message_keys: list[str] = []
         for w in winners:
+            reward_key = _reward_msg_key(ctx.account_id, cid, g.game_id, int(w["user_id"])) if ctx else ""
+            if reward_key:
+                reward_message_keys.append(reward_key)
             actions.append({
                 "type": "send_message",
                 "text": f"+{w['reward']}",
                 "reply_to_message_id": self._player_reply_message(g, int(w["user_id"])),
                 "send_via": "userbot_reply",
+                **({"save_message_id_key": reward_key} if reward_key else {}),
             })
             if ctx and ctx.log:
                 await ctx.log("info",
@@ -3063,6 +3213,8 @@ class TenHalfPlugin(Plugin):
             })
 
         actions.append({"type": "end_session"})
+        if ctx is not None and getattr(ctx, "messages", None) is not None:
+            self._schedule_settlement_cleanup(ctx, g, reward_message_keys)
         self._games.pop(cid, None)
         return actions
 

@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.2.23",
+  "version": "0.2.24",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -29,7 +29,7 @@
     "properties": {
       "command": {
         "type": "string",
-        "title": "触发指令名",
+        "title": "触发指令名（不含前缀）",
         "default": "10d",
         "minLength": 1,
         "maxLength": 32,
