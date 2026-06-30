@@ -391,7 +391,7 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_keyword_lobby_prefers_rule_prize_over_entry_default_bet(self) -> None:
+    def test_keyword_lobby_prefers_module_config_bet_over_framework_fallback_prize(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
@@ -399,7 +399,8 @@ class TenHalfInteractionTest(unittest.TestCase):
             try:
                 payload = keyword_payload()
                 payload["bet"] = 100
-                payload["prize"] = 1000
+                payload["prize"] = 123
+                payload["module_config"] = {"bet": 1000}
                 actions = await plugin.on_interaction(ctx, "start_ten_half", payload)
 
                 game = plugin._games[-100123]
@@ -419,6 +420,43 @@ class TenHalfInteractionTest(unittest.TestCase):
                     payment_payload(amount=1000),
                 )
                 self.assertTrue(any("加入牌局成功" in action.get("text", "") for action in joined))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_keyword_lobby_accepts_explicit_module_prize(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                payload = keyword_payload()
+                payload["bet"] = 100
+                payload["module_prize"] = 1000
+                actions = await plugin.on_interaction(ctx, "start_ten_half", payload)
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.bet, 1000)
+                self.assertIn("底注: <b>1000</b>", actions[0]["text"])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_keyword_lobby_ignores_bare_framework_fallback_prize(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                payload = keyword_payload()
+                payload.pop("bet", None)
+                payload["prize"] = 123
+                actions = await plugin.on_interaction(ctx, "start_ten_half", payload)
+
+                self.assertNotIn(-100123, plugin._games)
+                self.assertIn("请指定下注金额", actions[0]["text"])
             finally:
                 await plugin.on_shutdown(ctx)
 

@@ -444,26 +444,40 @@ def _config_int(
 
 
 def _interaction_bet_from_payload(payload: dict[str, Any]) -> int:
-    sources = [payload, _module_config(payload), _trigger_payload(payload)]
-    priority_keys = (
-        "module_prize",
-        "math_prize",
-        "prize",
+    module_config = _module_config(payload)
+    trigger_payload = _trigger_payload(payload)
+
+    def first_positive(source: dict[str, Any], keys: tuple[str, ...]) -> int:
+        for key in keys:
+            parsed = _pint(source.get(key), 0, minimum=1)
+            if parsed > 0:
+                return parsed
+        return 0
+
+    rule_keys = ("module_prize", "math_prize")
+    amount_keys = (
         "entry_fee",
+        "entry_amount",
         "threshold_amount",
         "payment_threshold",
         "default_bet",
         "bet_amount",
+        "stake",
         "bet",
         "amount",
+        "prize",
     )
-    for key in priority_keys:
-        for source in sources:
-            if not isinstance(source, dict):
-                continue
-            parsed = _pint(source.get(key), 0, minimum=1)
-            if parsed > 0:
-                return parsed
+    payload_amount_keys = tuple(key for key in amount_keys if key != "prize")
+
+    for source, keys in (
+        (payload, rule_keys),
+        (module_config, amount_keys),
+        (trigger_payload, amount_keys),
+        (payload, payload_amount_keys),
+    ):
+        parsed = first_positive(source, keys)
+        if parsed > 0:
+            return parsed
     return 0
 
 
