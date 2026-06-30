@@ -54,6 +54,7 @@ SUITS = ["♠️", "♥️", "♦️", "♣️"]
 RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
 REDIS_MAIN_MSG_KEY_PREFIX = "ten_half:main:"
 REDIS_JOIN_NOTICE_KEY_PREFIX = "ten_half:join_notice:"
+REDIS_SETTLEMENT_MSG_KEY_PREFIX = "ten_half:settlement:"
 REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 
 
@@ -94,6 +95,10 @@ def _main_msg_key(account_id: int, chat_id: int) -> str:
 
 def _join_notice_key(account_id: int, chat_id: int) -> str:
     return f"{REDIS_JOIN_NOTICE_KEY_PREFIX}{account_id}:{chat_id}"
+
+
+def _settlement_msg_key(account_id: int, chat_id: int, game_id: str) -> str:
+    return f"{REDIS_SETTLEMENT_MSG_KEY_PREFIX}{account_id}:{chat_id}:{game_id}"
 
 
 def _reward_msg_key(account_id: int, chat_id: int, game_id: str, user_id: int) -> str:
@@ -192,6 +197,9 @@ class TenHalfGame:
     lobby_msg_id: int | None = None
     main_message_id: int | None = None
     join_notice_msg_id: int | None = None
+    known_interaction_message_ids: set[int] = field(default_factory=set)
+    opening_message_deleted: bool = False
+    game_message_started: bool = False
     payment_receiver_name: str = ""
     status_note: str = ""
     dealer_timeout_started: bool = False
@@ -763,6 +771,11 @@ class TenHalfPlugin(Plugin):
             g.player_message_ids[int(uid)] = int(mid)
 
     @staticmethod
+    def _remember_interaction_message(g: TenHalfGame, mid: int | None) -> None:
+        if mid:
+            g.known_interaction_message_ids.add(int(mid))
+
+    @staticmethod
     def _player_reply_message(g: TenHalfGame, uid: int) -> int | None:
         return g.player_message_ids.get(int(uid))
 
@@ -806,11 +819,23 @@ class TenHalfPlugin(Plugin):
         reply_markup: dict[str, Any] | None = None,
         reply_to_message_id: int | None = None,
         send_if_missing: bool = True,
+        force_send: bool = False,
     ) -> dict[str, Any] | None:
         key = _main_msg_key(ctx.account_id, g.chat_id)
-        mid = g.main_message_id or await self._read_saved_message_id(ctx, key)
+        if (
+            not force_send
+            and not g.main_message_id
+            and g.opening_message_deleted
+            and g.phase in {"playing", "dealer_turn"}
+            and not g.game_message_started
+        ):
+            force_send = True
+        mid = None if force_send else (g.main_message_id or await self._read_saved_message_id(ctx, key))
         if mid:
             g.main_message_id = mid
+            self._remember_interaction_message(g, mid)
+            if g.phase in {"playing", "dealer_turn"}:
+                g.game_message_started = True
             action = _edit_action(mid, text, reply_markup=reply_markup)
         elif not send_if_missing:
             return None
@@ -820,7 +845,41 @@ class TenHalfPlugin(Plugin):
                 reply_to_message_id=reply_to_message_id,
                 reply_markup=reply_markup,
                 save_message_id_key=key,
+                replace_saved_message_id_key=key if force_send else None,
             )
+            if g.phase in {"playing", "dealer_turn"}:
+                g.game_message_started = True
+        action.setdefault("chat_id", g.chat_id)
+        return action
+
+    async def _delete_current_join_notice_actions(
+        self,
+        ctx: PluginContext,
+        g: TenHalfGame,
+    ) -> list[dict[str, Any]]:
+        key = _join_notice_key(ctx.account_id, g.chat_id)
+        mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, key)
+        if not mid:
+            return []
+        g.join_notice_msg_id = mid
+        self._remember_interaction_message(g, mid)
+        return [_delete_action(mid)]
+
+    async def _join_notice_update_action(
+        self,
+        ctx: PluginContext,
+        g: TenHalfGame,
+        text: str,
+        *,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        key = _join_notice_key(ctx.account_id, g.chat_id)
+        mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, key)
+        if not mid:
+            return None
+        g.join_notice_msg_id = mid
+        self._remember_interaction_message(g, mid)
+        action = _edit_action(mid, text, reply_markup=reply_markup)
         action.setdefault("chat_id", g.chat_id)
         return action
 
@@ -863,6 +922,7 @@ class TenHalfPlugin(Plugin):
         ctx: PluginContext,
         g: TenHalfGame,
         reward_message_keys: list[str],
+        settlement_message_key: str | None = None,
     ) -> None:
         self._track_task(asyncio.create_task(
             self._cleanup_game_messages_task(
@@ -870,6 +930,8 @@ class TenHalfPlugin(Plugin):
                 g.chat_id,
                 g.main_message_id,
                 g.join_notice_msg_id,
+                set(g.known_interaction_message_ids),
+                settlement_message_key,
                 list(reward_message_keys),
                 self._settlement_cleanup_delay,
             )
@@ -881,11 +943,13 @@ class TenHalfPlugin(Plugin):
         cid: int,
         main_message_id: int | None,
         join_notice_msg_id: int | None,
+        known_interaction_message_ids: set[int] | None,
+        settlement_message_key: str | None,
         reward_message_keys: list[str],
         delay_seconds: int,
     ) -> None:
         await asyncio.sleep(max(0, int(delay_seconds)))
-        interaction_message_ids: set[int] = set()
+        interaction_message_ids: set[int] = set(known_interaction_message_ids or set())
         userbot_message_ids: set[int] = set()
 
         if main_message_id:
@@ -898,6 +962,10 @@ class TenHalfPlugin(Plugin):
         saved_join_mid = await self._read_saved_message_id(ctx, _join_notice_key(ctx.account_id, cid))
         if saved_join_mid:
             interaction_message_ids.add(saved_join_mid)
+        if settlement_message_key:
+            settlement_mid = await self._read_saved_message_id(ctx, settlement_message_key)
+            if settlement_mid:
+                interaction_message_ids.add(settlement_mid)
         for key in reward_message_keys:
             reward_mid = await self._read_saved_message_id(ctx, key)
             if reward_mid:
@@ -1007,10 +1075,14 @@ class TenHalfPlugin(Plugin):
                     f"[ten_half] idle_start_prompt: controller={controller_uid}, "
                     f"players={len(g.lobby_players)}/{g.max_players}, chat_id={cid}",
                 )
-            action = await self._main_action(
+            action = await self._join_notice_update_action(
                 ctx,
                 g,
-                self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
+                self._build_join_notice_text(
+                    g,
+                    payer_name=g.lobby_players[-1][1] if g.lobby_players else g.dealer_name,
+                    amount=g.bet,
+                ),
                 reply_markup=_kb_start_decision(controller_uid),
             )
         delivered = await self._emit_background_actions(ctx, [action])
@@ -1034,19 +1106,28 @@ class TenHalfPlugin(Plugin):
         amount: int,
     ) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
-        key = _join_notice_key(ctx.account_id, g.chat_id)
-        previous_mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, key)
+        join_key = _join_notice_key(ctx.account_id, g.chat_id)
+        main_key = _main_msg_key(ctx.account_id, g.chat_id)
+        previous_mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, join_key)
+        opening_mid = None
+        if not previous_mid and not g.opening_message_deleted:
+            opening_mid = g.main_message_id or await self._read_saved_message_id(ctx, main_key)
         actions.append(
             _send_action(
                 self._build_join_notice_text(g, payer_name=payer_name, amount=amount),
                 reply_to_message_id=_ie_mid(payload),
-                save_message_id_key=key,
-                replace_saved_message_id_key=key if not previous_mid else None,
+                save_message_id_key=join_key,
             )
         )
         if previous_mid:
             g.join_notice_msg_id = previous_mid
+            self._remember_interaction_message(g, previous_mid)
             actions.append(_delete_action(previous_mid))
+        elif opening_mid:
+            self._remember_interaction_message(g, opening_mid)
+            g.main_message_id = None
+            g.opening_message_deleted = True
+            actions.append(_delete_action(opening_mid))
         return actions
 
     def _build_lobby_text(self, g: TenHalfGame, receiver_label: str) -> str:
@@ -1093,6 +1174,8 @@ class TenHalfPlugin(Plugin):
                 "",
                 f"⏳ 开始倒计时 {g.idle_start_seconds} 秒，如果没人加入则庄家可以选择直接开局。",
             ])
+        if g.awaiting_start_confirmation and g.status_note:
+            lines.extend(["", _html(g.status_note)])
         return "\n".join(lines)
 
     def _build_ask_dealer_text(self, g: TenHalfGame) -> str:
@@ -2338,20 +2421,6 @@ class TenHalfPlugin(Plugin):
 
             if g.dealer_locked:
                 self._schedule_idle_start_prompt(cid, g, ctx)
-
-            main_update = await self._main_action(
-                ctx,
-                g,
-                self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
-                reply_markup=(
-                    _kb_start_decision(self._start_controller_uid(g))
-                    if g.awaiting_start_confirmation
-                    else _kb_join(g.bet)
-                ),
-                send_if_missing=False,
-            )
-            if main_update is not None:
-                actions.append(main_update)
             return actions
 
     # ── 交互：callback_query 处理 ────────────────────
@@ -2391,8 +2460,9 @@ class TenHalfPlugin(Plugin):
             if not g or g.finished:
                 return [{"type": "no_session"}]
             callback_message_id = _ie_message_mid(payload)
-            if callback_message_id:
+            if callback_message_id and action in ("hit", "stand", "double"):
                 g.main_message_id = callback_message_id
+                self._remember_interaction_message(g, callback_message_id)
 
             # ── join ──
             if action == "join":
@@ -2719,6 +2789,7 @@ class TenHalfPlugin(Plugin):
                 f"players={player_names}, bet={g.bet}, chat_id={cid}")
 
         actions: list[dict[str, Any]] = []
+        actions.extend(await self._delete_current_join_notice_actions(ctx, g))
         if payload is not None:
             actions.append(_answer_action(payload, _dealer_private_brief(g), show_alert=True))
         g.status_note = f"{g.dealer_name} 当庄，玩家起手 1 张明牌。玩家先行动，全部结束后庄家行动。"
@@ -3148,9 +3219,18 @@ class TenHalfPlugin(Plugin):
 
         actions: list[dict[str, Any]] = []
 
-        # ── 结算公告（走 interaction_bot，编辑主消息） ──
+        settlement_message_key = (
+            _settlement_msg_key(ctx.account_id, cid, g.game_id)
+            if ctx is not None
+            else None
+        )
+
+        # ── 结算公告（走 interaction_bot，新发结算消息） ──
         if ctx is not None:
-            actions.append(await self._main_action(ctx, g, "\n".join(lines)))
+            actions.append(_send_action(
+                "\n".join(lines),
+                save_message_id_key=settlement_message_key,
+            ))
         else:
             actions.append(_send_action("\n".join(lines)))
 
@@ -3214,7 +3294,7 @@ class TenHalfPlugin(Plugin):
 
         actions.append({"type": "end_session"})
         if ctx is not None and getattr(ctx, "messages", None) is not None:
-            self._schedule_settlement_cleanup(ctx, g, reward_message_keys)
+            self._schedule_settlement_cleanup(ctx, g, reward_message_keys, settlement_message_key)
         self._games.pop(cid, None)
         return actions
 
