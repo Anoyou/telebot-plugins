@@ -447,16 +447,27 @@ def _start_keyword_label(payload: dict[str, Any], fallback: str) -> str:
     trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
     trigger_payload = _trigger_payload(payload)
     module_config = _module_config(payload)
-    for value in (
+    event_type = str(payload.get("event_type") or trigger.get("type") or "").strip()
+    for values in (trigger.get("start_keywords"), module_config.get("start_keywords")):
+        if isinstance(values, list):
+            for value in values:
+                text = str(value or "").strip()
+                if text:
+                    return text
+    values = [
         trigger.get("keyword"),
-        trigger.get("text"),
         trigger_payload.get("keyword"),
-        trigger_payload.get("text"),
         payload.get("keyword"),
-        payload.get("message_text"),
         module_config.get("keyword"),
         module_config.get("start_keyword"),
-    ):
+    ]
+    if event_type != "payment_confirmed":
+        values.extend([
+            trigger.get("text"),
+            trigger_payload.get("text"),
+            payload.get("message_text"),
+        ])
+    for value in values:
         text = str(value or "").strip()
         if text:
             return text
