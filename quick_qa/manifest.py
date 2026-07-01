@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.2.2"
+PLUGIN_VERSION = "1.2.3"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -12,15 +12,20 @@ DEFAULT_CORRECT_POINTS = 3
 DEFAULT_WRONG_POINTS = 5
 DEFAULT_ENTRY_FEE = 100
 DEFAULT_REWARD_RATIO = 0.9
-DEFAULT_MAX_QUESTIONS_PER_GAME = 30
+DEFAULT_MAX_QUESTIONS_PER_GAME = 50
 DEFAULT_QUESTION_TIMEOUT_SECONDS = 45
 DEFAULT_SELECTION_TIMEOUT_SECONDS = 120
 DEFAULT_MIN_PLAYERS = 2
 DEFAULT_MAX_PLAYERS = 30
-DEFAULT_MAX_SOURCE_CHARS = 60000
-DEFAULT_AI_QUESTION_COUNT = 24
+DEFAULT_MAX_SOURCE_CHARS = 120000
+DEFAULT_AI_QUESTION_COUNT = 80
 DEFAULT_AI_TIMEOUT_SECONDS = 600
 MIN_AI_TIMEOUT_SECONDS = 300
+MAX_AI_TIMEOUT_SECONDS = 3600
+MAX_AI_QUESTION_COUNT = 200
+MAX_SOURCE_CHARS = 800000
+MAX_QUESTIONS_PER_GAME = 1000
+MAX_PLAYERS = 500
 AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手。
 你会收到一个网页的纯文本内容。请只基于原文整理适合群聊快问快答的三选一题库。
 要求：
@@ -95,6 +100,7 @@ CONFIG_SCHEMA = {
             "default": (
                 "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n"
                 "{prefix}quickqa 100 创建报名大厅\n"
+                "{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n"
                 "{prefix}quickqa start 开始选择题库\n"
                 "{prefix}quickqa kb list 查看题库"
             ),
@@ -140,28 +146,28 @@ CONFIG_SCHEMA = {
             "title": "最高报名人数",
             "default": DEFAULT_MAX_PLAYERS,
             "minimum": 2,
-            "maximum": 200,
+            "maximum": MAX_PLAYERS,
         },
         "max_questions_per_game": {
             "type": "integer",
             "title": "每局最多题数",
             "default": DEFAULT_MAX_QUESTIONS_PER_GAME,
             "minimum": 1,
-            "maximum": 500,
+            "maximum": MAX_QUESTIONS_PER_GAME,
         },
         "question_timeout_seconds": {
             "type": "integer",
             "title": "每题限时（秒）",
             "default": DEFAULT_QUESTION_TIMEOUT_SECONDS,
             "minimum": 5,
-            "maximum": 600,
+            "maximum": 1800,
         },
         "selection_timeout_seconds": {
             "type": "integer",
             "title": "题库选择限时（秒）",
             "default": DEFAULT_SELECTION_TIMEOUT_SECONDS,
             "minimum": 10,
-            "maximum": 1800,
+            "maximum": 3600,
         },
         "reward_ratio": {
             "type": "number",
@@ -211,7 +217,7 @@ CONFIG_SCHEMA = {
             "title": "单个 URL 生成题数",
             "default": DEFAULT_AI_QUESTION_COUNT,
             "minimum": 3,
-            "maximum": 80,
+            "maximum": MAX_AI_QUESTION_COUNT,
         },
         "ai_timeout_seconds": {
             "type": "integer",
@@ -219,14 +225,14 @@ CONFIG_SCHEMA = {
             "description": "建议至少 600 秒；低于 300 秒的旧配置会按 600 秒执行。",
             "default": DEFAULT_AI_TIMEOUT_SECONDS,
             "minimum": MIN_AI_TIMEOUT_SECONDS,
-            "maximum": 1800,
+            "maximum": MAX_AI_TIMEOUT_SECONDS,
         },
         "max_source_chars": {
             "type": "integer",
             "title": "网页正文最大字符数",
             "default": DEFAULT_MAX_SOURCE_CHARS,
             "minimum": 1000,
-            "maximum": 300000,
+            "maximum": MAX_SOURCE_CHARS,
         },
         "question_generation_prompt": {
             "type": "string",
@@ -371,6 +377,29 @@ CONFIG_ACTIONS = [
                     "description": "留空时由 AI 根据网页内容判断题库标题。",
                     "default": "",
                 },
+                "mode": {
+                    "type": "string",
+                    "title": "保存方式",
+                    "description": "追加会合并到同 URL/同题库并按题干去重；替换会用本次结果覆盖匹配题库。",
+                    "default": "append",
+                    "enum": ["append", "replace"],
+                },
+                "question_count": {
+                    "type": "integer",
+                    "title": "本次生成题数（可选）",
+                    "description": "填 0 使用配置里的单个 URL 生成题数。",
+                    "default": 0,
+                    "minimum": 0,
+                    "maximum": MAX_AI_QUESTION_COUNT,
+                },
+                "target_total": {
+                    "type": "integer",
+                    "title": "增量补到题数（可选）",
+                    "description": "追加模式下，如果已有同 URL 题库，会尽量补到这个总题数。",
+                    "default": 0,
+                    "minimum": 0,
+                    "maximum": 5000,
+                },
             },
             "required": ["url"],
         },
@@ -454,6 +483,13 @@ MANIFEST = Manifest(
                         "type": "string",
                         "title": "开局关键词",
                         "default": DEFAULT_START_KEYWORD,
+                    },
+                    "max_questions_per_game": {
+                        "type": "integer",
+                        "title": "本局最多题数",
+                        "default": DEFAULT_MAX_QUESTIONS_PER_GAME,
+                        "minimum": 1,
+                        "maximum": MAX_QUESTIONS_PER_GAME,
                     },
                 },
                 "required": ["entry_fee"],

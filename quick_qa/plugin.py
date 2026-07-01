@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.2.2"
+PLUGIN_VERSION = "1.2.3"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -37,15 +37,20 @@ DEFAULT_CORRECT_POINTS = 3
 DEFAULT_WRONG_POINTS = 5
 DEFAULT_ENTRY_FEE = 100
 DEFAULT_REWARD_RATIO = 0.9
-DEFAULT_MAX_QUESTIONS_PER_GAME = 30
+DEFAULT_MAX_QUESTIONS_PER_GAME = 50
 DEFAULT_QUESTION_TIMEOUT_SECONDS = 45
 DEFAULT_SELECTION_TIMEOUT_SECONDS = 120
 DEFAULT_MIN_PLAYERS = 2
 DEFAULT_MAX_PLAYERS = 30
-DEFAULT_MAX_SOURCE_CHARS = 60000
-DEFAULT_AI_QUESTION_COUNT = 24
+DEFAULT_MAX_SOURCE_CHARS = 120000
+DEFAULT_AI_QUESTION_COUNT = 80
 DEFAULT_AI_TIMEOUT_SECONDS = 600
 MIN_AI_TIMEOUT_SECONDS = 300
+MAX_AI_TIMEOUT_SECONDS = 3600
+MAX_AI_QUESTION_COUNT = 200
+MAX_SOURCE_CHARS = 800000
+MAX_QUESTIONS_PER_GAME = 1000
+MAX_PLAYERS = 500
 
 AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手。
 你会收到一个网页的纯文本内容。请只基于原文整理适合群聊快问快答的三选一题库。
@@ -172,7 +177,7 @@ def _ai_timeout_seconds(config: dict[str, Any] | None) -> int:
     raw = _int((config or {}).get("ai_timeout_seconds"), DEFAULT_AI_TIMEOUT_SECONDS)
     if raw < MIN_AI_TIMEOUT_SECONDS:
         return DEFAULT_AI_TIMEOUT_SECONDS
-    return min(raw, 1800)
+    return min(raw, MAX_AI_TIMEOUT_SECONDS)
 
 
 def _safe_text(value: Any, *, limit: int = 120) -> str:
@@ -527,6 +532,32 @@ def _kb_to_json(kb: KnowledgeBase) -> dict[str, Any]:
     }
 
 
+def _normalized_url(value: str) -> str:
+    parsed = urlparse(str(value or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return str(value or "").strip().rstrip("/")
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{path}"
+
+
+def _question_signature(question: QAQuestion) -> str:
+    return re.sub(r"[\s\W_]+", "", question.question.lower())
+
+
+def _merge_questions(existing: list[QAQuestion], incoming: list[QAQuestion], limit: int = 0) -> list[QAQuestion]:
+    seen: set[str] = set()
+    merged: list[QAQuestion] = []
+    for question in [*existing, *incoming]:
+        marker = _question_signature(question)
+        if not marker or marker in seen:
+            continue
+        seen.add(marker)
+        merged.append(question)
+        if limit > 0 and len(merged) >= limit:
+            break
+    return merged
+
+
 def _config_kb_items(config: dict[str, Any] | None) -> list[dict[str, Any]]:
     cfg = config or {}
     items: list[dict[str, Any]] = []
@@ -557,6 +588,28 @@ def _dedupe_kb_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(marker)
         unique.append(item)
     return unique
+
+
+def _find_matching_kb_index(
+    items: list[dict[str, Any]],
+    *,
+    url: str = "",
+    title: str = "",
+    kb_id: str = "",
+) -> int:
+    normalized_url = _normalized_url(url)
+    normalized_title = _safe_text(title, limit=80).lower()
+    for idx, item in enumerate(items):
+        kb = _kb_from_dict(item)
+        if kb is None:
+            continue
+        if kb_id and kb.kb_id == kb_id:
+            return idx
+        if normalized_url and _normalized_url(kb.url) == normalized_url:
+            return idx
+        if normalized_title and kb.title.lower() == normalized_title:
+            return idx
+    return -1
 
 
 def _question_to_json(question: QAQuestion) -> dict[str, Any]:
@@ -674,19 +727,71 @@ class QuickQAPlugin(Plugin):
         if not url:
             raise ValueError("请先填写题库来源 URL")
 
-        draft = await self._generate_kb_draft(ctx, url, title_hint)
+        mode = str(action_input.get("mode") or "append").strip().lower()
+        if mode not in {"append", "replace"}:
+            mode = "append"
+        current_items = _config_kb_items(current_config)
+        match_index = _find_matching_kb_index(current_items, url=url, title=title_hint)
+        existing_kb = _kb_from_dict(current_items[match_index]) if match_index >= 0 else None
+        configured_count = _clamp_int(
+            (ctx.config or {}).get("ai_question_count"),
+            DEFAULT_AI_QUESTION_COUNT,
+            3,
+            MAX_AI_QUESTION_COUNT,
+        )
+        requested_count = _int(action_input.get("question_count"), 0)
+        question_count = (
+            _clamp_int(requested_count, configured_count, 3, MAX_AI_QUESTION_COUNT)
+            if requested_count > 0
+            else configured_count
+        )
+        target_total = _int(action_input.get("target_total"), 0)
+        if mode == "append" and existing_kb is not None and target_total > 0:
+            remaining = max(0, target_total - len(existing_kb.questions))
+            if remaining <= 0:
+                return {
+                    "message": f"题库：{existing_kb.title} 已有 {len(existing_kb.questions)} 题，已达到目标题数。",
+                    "config_patch": {"knowledge_bases": current_items},
+                }
+            question_count = min(MAX_AI_QUESTION_COUNT, max(3, remaining))
+
+        draft = await self._generate_kb_draft(
+            ctx,
+            url,
+            title_hint,
+            question_count=question_count,
+            existing_questions=existing_kb.questions if mode == "append" and existing_kb is not None else None,
+        )
         kb = _kb_from_dict({**draft, "enabled": True})
         if kb is None:
             raise RuntimeError("AI 返回的题库不可用")
 
-        current_items = [
-            item
-            for item in _config_kb_items(current_config)
-            if str(item.get("kb_id") or item.get("id") or "").strip() != kb.kb_id
-        ]
-        current_items.append(_kb_to_json(kb))
+        match_index = _find_matching_kb_index(current_items, url=url, title=title_hint or kb.title, kb_id=kb.kb_id)
+        added_count = len(kb.questions)
+        if mode == "append" and match_index >= 0:
+            existing = _kb_from_dict(current_items[match_index])
+            if existing is not None:
+                merged_questions = _merge_questions(existing.questions, kb.questions)
+                added_count = max(0, len(merged_questions) - len(existing.questions))
+                kb = KnowledgeBase(
+                    kb_id=existing.kb_id,
+                    title=kb.title or existing.title,
+                    url=kb.url or existing.url,
+                    summary=kb.summary or existing.summary,
+                    questions=merged_questions,
+                    enabled=existing.enabled,
+                    created_at=existing.created_at,
+                )
+                current_items[match_index] = _kb_to_json(kb)
+            else:
+                current_items.append(_kb_to_json(kb))
+        elif match_index >= 0:
+            current_items[match_index] = _kb_to_json(kb)
+        else:
+            current_items.append(_kb_to_json(kb))
+        action_text = "已增量补充" if mode == "append" and match_index >= 0 else "已生成题库"
         return {
-            "message": f"已生成题库：{kb.title}（{len(kb.questions)} 题），请保存配置后生效。",
+            "message": f"{action_text}：{kb.title}（新增 {added_count} 题，当前 {len(kb.questions)} 题），请保存配置后生效。",
             "config_patch": {"knowledge_bases": current_items},
         }
 
@@ -751,6 +856,11 @@ class QuickQAPlugin(Plugin):
                 self._games.pop(chat_id, None)
             return [_send_action("已取消当前快问快答游戏。", reply_to_message_id=reply_to), {"type": "end_session"}]
         if args and args[0].isdigit():
+            payload = dict(payload)
+            if len(args) >= 2 and args[1].isdigit():
+                module_config = dict(_dict(payload.get("module_config")))
+                module_config["max_questions_per_game"] = _int(args[1], DEFAULT_MAX_QUESTIONS_PER_GAME)
+                payload["module_config"] = module_config
             return await self._create_lobby(ctx, payload, chat_id, _int(args[0], DEFAULT_ENTRY_FEE))
         return [_send_action(self._usage(ctx), reply_to_message_id=reply_to)]
 
@@ -885,19 +995,24 @@ class QuickQAPlugin(Plugin):
             wrong_points=wrong_points,
             reward_ratio=reward_ratio,
             min_players=_clamp_int(cfg.get("min_players"), DEFAULT_MIN_PLAYERS, 2, 100),
-            max_players=_clamp_int(cfg.get("max_players"), DEFAULT_MAX_PLAYERS, 2, 200),
-            max_questions=_clamp_int(cfg.get("max_questions_per_game"), DEFAULT_MAX_QUESTIONS_PER_GAME, 1, 500),
+            max_players=_clamp_int(cfg.get("max_players"), DEFAULT_MAX_PLAYERS, 2, MAX_PLAYERS),
+            max_questions=_clamp_int(
+                cfg.get("max_questions_per_game"),
+                DEFAULT_MAX_QUESTIONS_PER_GAME,
+                1,
+                MAX_QUESTIONS_PER_GAME,
+            ),
             question_timeout_seconds=_clamp_int(
                 cfg.get("question_timeout_seconds"),
                 DEFAULT_QUESTION_TIMEOUT_SECONDS,
                 5,
-                600,
+                1800,
             ),
             selection_timeout_seconds=_clamp_int(
                 cfg.get("selection_timeout_seconds"),
                 DEFAULT_SELECTION_TIMEOUT_SECONDS,
                 10,
-                1800,
+                3600,
             ),
             host_user_id=host_user_id,
             host_name=host_name,
@@ -1212,6 +1327,8 @@ class QuickQAPlugin(Plugin):
                 "chat_id": chat_id,
                 "message_id": self._event_message_id(event),
             }
+            if len(args) >= 2 and args[1].isdigit():
+                payload["module_config"] = {"max_questions_per_game": _int(args[1], DEFAULT_MAX_QUESTIONS_PER_GAME)}
             actions = await self._create_lobby(ctx, payload, chat_id, _int(args[0], DEFAULT_ENTRY_FEE))
             await self._event_edit_or_reply(event, self._actions_text(actions))
             return
@@ -1266,7 +1383,15 @@ class QuickQAPlugin(Plugin):
         )
         return [_send_action(text, reply_to_message_id=reply_to_message_id, reply_markup=self._draft_markup(draft["draft_id"]))]
 
-    async def _generate_kb_draft(self, ctx: PluginContext, url: str, title_hint: str) -> dict[str, Any]:
+    async def _generate_kb_draft(
+        self,
+        ctx: PluginContext,
+        url: str,
+        title_hint: str,
+        *,
+        question_count: int | None = None,
+        existing_questions: list[QAQuestion] | None = None,
+    ) -> dict[str, Any]:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("只支持 http/https URL")
@@ -1287,12 +1412,17 @@ class QuickQAPlugin(Plugin):
         raw_text = str(getattr(response, "text", "") or "")
         await _progress_log(ctx, "info", "网页内容抓取完成，开始清洗正文", step="clean_source", status=status, raw_chars=len(raw_text))
         source_text = _clean_html_to_text(raw_text)
-        max_chars = _clamp_int((ctx.config or {}).get("max_source_chars"), DEFAULT_MAX_SOURCE_CHARS, 1000, 300000)
+        max_chars = _clamp_int((ctx.config or {}).get("max_source_chars"), DEFAULT_MAX_SOURCE_CHARS, 1000, MAX_SOURCE_CHARS)
         if len(source_text) > max_chars:
             source_text = source_text[:max_chars]
         if len(source_text) < 200:
             raise RuntimeError("网页正文太短，无法整理题库")
-        question_count = _clamp_int((ctx.config or {}).get("ai_question_count"), DEFAULT_AI_QUESTION_COUNT, 3, 80)
+        question_count = _clamp_int(
+            question_count if question_count is not None else (ctx.config or {}).get("ai_question_count"),
+            DEFAULT_AI_QUESTION_COUNT,
+            3,
+            MAX_AI_QUESTION_COUNT,
+        )
         ai_timeout = _ai_timeout_seconds(ctx.config or {})
         await _progress_log(
             ctx,
@@ -1304,12 +1434,20 @@ class QuickQAPlugin(Plugin):
             timeout_seconds=ai_timeout,
         )
         system_prompt = str((ctx.config or {}).get("question_generation_prompt") or AI_SYSTEM_PROMPT)
+        existing_hint = ""
+        if existing_questions:
+            sample = "\n".join(f"- {q.question}" for q in existing_questions[:120])
+            existing_hint = (
+                "\n\n已有题目（请尽量避开重复题干和同义改写）：\n"
+                f"{sample}"
+            )
         user_prompt = (
             f"来源 URL：{url}\n"
             f"期望题数：{question_count}\n"
             f"标题提示：{title_hint or '自动判断'}\n\n"
             "网页正文：\n"
             f"{source_text}"
+            f"{existing_hint}"
         )
         result = await complete(
             system_prompt,
@@ -1317,7 +1455,7 @@ class QuickQAPlugin(Plugin):
             provider=(ctx.config or {}).get("telepilot_provider") or None,
             model=(ctx.config or {}).get("telepilot_model") or None,
             provider_tag="long_context",
-            max_tokens=6000,
+            max_tokens=max(6000, min(24000, question_count * 160)),
             timeout_seconds=ai_timeout,
             source="plugin:quick_qa",
         )
@@ -1426,6 +1564,7 @@ class QuickQAPlugin(Plugin):
             f"门槛金额：{_code(game.entry_fee)}",
             f"初始积分：{_code(game.initial_points)}",
             f"人数：{len(game.players)}/{game.max_players}（至少 {game.min_players} 人开局）",
+            f"本局最多题数：{_code(game.max_questions)}",
             "",
             "参与方式：对收款人的消息转账门槛金额，到账后自动报名。",
         ]
@@ -1448,6 +1587,7 @@ class QuickQAPlugin(Plugin):
             "<b>题库选择</b>",
             f"本轮随机抽中：{_html(selector.name if selector else game.selector_user_id)}",
             f"当前将使用：{selected_count} 个题库",
+            f"本局最多出题：{game.max_questions} 题",
             "",
             "可以点选一个或多个题库；不选直接开始则默认使用全部题库。",
         ]
@@ -1474,6 +1614,7 @@ class QuickQAPlugin(Plugin):
         return (
             "<b>快问快答开始</b>\n"
             f"题库：{_html(titles)}\n"
+            f"本局题数：{len(game.question_pool)} 题\n"
             f"答对 +{game.correct_points} 分，答错 -{game.wrong_points} 分，扣完出局。\n"
             f"剩最后一人时按积分折算发奖，奖池上限为总门槛金额的 {int(game.reward_ratio * 100)}%。"
         )
@@ -1598,6 +1739,7 @@ class QuickQAPlugin(Plugin):
             "<b>快问快答</b>\n"
             "题库：在 TelePilot Web 配置页添加 URL，获取并整理后保存配置\n"
             f"{_code(prefix + self._command + ' 100')} 创建报名大厅\n"
+            f"{_code(prefix + self._command + ' 100 20')} 创建本局最多 20 题的报名大厅\n"
             f"{_code(prefix + self._command + ' start')} 达到人数后开始选择题库\n"
             f"{_code(prefix + self._command + ' cancel')} 取消当前局\n"
             f"{_code(prefix + self._command + ' kb list')} 查看题库"

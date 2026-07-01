@@ -231,6 +231,66 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_config_action_appends_and_deduplicates_existing_kb(self) -> None:
+        class FakeHTTP:
+            async def get(self, _url: str):
+                return types.SimpleNamespace(
+                    status_code=200,
+                    text="<html><body>" + ("TelePilot 支持插件配置动作和题库生成。" * 40) + "</body></html>",
+                )
+
+        class FakeAI:
+            async def complete(self, *_args, **_kwargs):
+                return types.SimpleNamespace(
+                    text=(
+                        '{"title":"配置框架","summary":"增量题库",'
+                        '"questions":['
+                        '{"question":"旧题会重复吗？","options":["不会","会","不确定"],"answer_index":0},'
+                        '{"question":"新增题来自哪里？","options":["URL正文","骰子","头像"],"answer_index":0},'
+                        '{"question":"每题几个选项？","options":["三个","两个","四个"],"answer_index":0}'
+                        ']}'
+                    )
+                )
+
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(
+                account_id=1,
+                config={"allowed_source_hosts": "example.com", "ai_question_count": 10},
+            )
+            ctx.http = FakeHTTP()
+            ctx.ai = FakeAI()
+            result = await plugin.on_config_action(
+                ctx,
+                "generate_knowledge_base",
+                {
+                    "input": {"url": "https://example.com/article", "mode": "append", "target_total": 5},
+                    "config": {
+                        "knowledge_bases": [
+                            {
+                                "kb_id": "kb-existing",
+                                "title": "配置框架",
+                                "url": "https://example.com/article/",
+                                "enabled": True,
+                                "questions": [
+                                    {"question": "旧题会重复吗？", "options": ["不会", "会", "不确定"], "answer_index": 0}
+                                ],
+                            }
+                        ],
+                    },
+                },
+            )
+            items = result["config_patch"]["knowledge_bases"]
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0]["kb_id"], "kb-existing")
+            self.assertEqual(len(items[0]["questions"]), 3)
+            self.assertEqual(
+                [item["question"] for item in items[0]["questions"]],
+                ["旧题会重复吗？", "新增题来自哪里？", "每题几个选项？"],
+            )
+
+        asyncio.run(scenario())
+
     def test_paid_game_selects_kb_and_settles_after_answer(self) -> None:
         self._seed_kb()
 

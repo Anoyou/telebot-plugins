@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "interactive",
@@ -72,6 +72,32 @@
             "title": "标题提示（可选）",
             "description": "留空时由 AI 根据网页内容判断题库标题。",
             "default": ""
+          },
+          "mode": {
+            "type": "string",
+            "title": "保存方式",
+            "description": "追加会合并到同 URL/同题库并按题干去重；替换会用本次结果覆盖匹配题库。",
+            "default": "append",
+            "enum": [
+              "append",
+              "replace"
+            ]
+          },
+          "question_count": {
+            "type": "integer",
+            "title": "本次生成题数（可选）",
+            "description": "填 0 使用配置里的单个 URL 生成题数。",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 200
+          },
+          "target_total": {
+            "type": "integer",
+            "title": "增量补到题数（可选）",
+            "description": "追加模式下，如果已有同 URL 题库，会尽量补到这个总题数。",
+            "default": 0,
+            "minimum": 0,
+            "maximum": 5000
           }
         },
         "required": [
@@ -180,6 +206,13 @@
             "type": "string",
             "title": "开局关键词",
             "default": "开始答题"
+          },
+          "max_questions_per_game": {
+            "type": "integer",
+            "title": "本局最多题数",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 1000
           }
         },
         "required": [
@@ -230,7 +263,7 @@
         "type": "string",
         "title": "使用说明（只读）",
         "readOnly": true,
-        "default": "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n{prefix}quickqa 100 创建报名大厅\n{prefix}quickqa start 开始选择题库\n{prefix}quickqa kb list 查看题库"
+        "default": "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n{prefix}quickqa 100 创建报名大厅\n{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n{prefix}quickqa start 开始选择题库\n{prefix}quickqa kb list 查看题库"
       },
       "entry_fee": {
         "type": "integer",
@@ -273,28 +306,28 @@
         "title": "最高报名人数",
         "default": 30,
         "minimum": 2,
-        "maximum": 200
+        "maximum": 500
       },
       "max_questions_per_game": {
         "type": "integer",
         "title": "每局最多题数",
-        "default": 30,
+        "default": 50,
         "minimum": 1,
-        "maximum": 500
+        "maximum": 1000
       },
       "question_timeout_seconds": {
         "type": "integer",
         "title": "每题限时（秒）",
         "default": 45,
         "minimum": 5,
-        "maximum": 600
+        "maximum": 1800
       },
       "selection_timeout_seconds": {
         "type": "integer",
         "title": "题库选择限时（秒）",
         "default": 120,
         "minimum": 10,
-        "maximum": 1800
+        "maximum": 3600
       },
       "reward_ratio": {
         "type": "number",
@@ -345,9 +378,9 @@
       "ai_question_count": {
         "type": "integer",
         "title": "单个 URL 生成题数",
-        "default": 24,
+        "default": 80,
         "minimum": 3,
-        "maximum": 80
+        "maximum": 200
       },
       "ai_timeout_seconds": {
         "type": "integer",
@@ -355,14 +388,14 @@
         "description": "建议至少 600 秒；低于 300 秒的旧配置会按 600 秒执行。",
         "default": 600,
         "minimum": 300,
-        "maximum": 1800
+        "maximum": 3600
       },
       "max_source_chars": {
         "type": "integer",
         "title": "网页正文最大字符数",
-        "default": 60000,
+        "default": 120000,
         "minimum": 1000,
-        "maximum": 300000
+        "maximum": 800000
       },
       "question_generation_prompt": {
         "type": "string",
