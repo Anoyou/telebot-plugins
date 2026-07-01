@@ -1002,7 +1002,7 @@ class TenHalfPlugin(Plugin):
         g.lobby_version += 1
         g.awaiting_start_confirmation = False
 
-    def _lock_first_dealer(self, g: TenHalfGame, uid: int, name: str) -> None:
+    def _lock_dealer(self, g: TenHalfGame, uid: int, name: str, status_note: str) -> None:
         if g.dealer_locked:
             return
         g.dealer_id = uid
@@ -1010,7 +1010,23 @@ class TenHalfPlugin(Plugin):
         g.dealer_locked = True
         g.ask_dealer_uid = 0
         g.ask_dealer_name = ""
-        g.status_note = f"{name} 作为首位加入玩家，已自动成为本局庄家。"
+        g.status_note = status_note
+
+    def _lock_first_dealer(self, g: TenHalfGame, uid: int, name: str) -> None:
+        self._lock_dealer(
+            g,
+            uid,
+            name,
+            f"{name} 作为首位加入玩家，已自动成为本局庄家。",
+        )
+
+    def _lock_command_dealer(self, g: TenHalfGame, uid: int, name: str) -> None:
+        self._lock_dealer(
+            g,
+            uid,
+            name,
+            f"{name} 作为开桌者，已直接成为本局庄家。",
+        )
 
     def _schedule_turn_timeout(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
         g.turn_timeout_version += 1
@@ -1368,13 +1384,19 @@ class TenHalfPlugin(Plugin):
                 host_name=host_name,
             )
             g.payment_receiver_name = self._receiver_label(ctx, None, g)
-            g.status_note = "首位成功加入的玩家将自动成为本局庄家。"
+            if host_id:
+                g.lobby_players.append((host_id, host_name))
+                self._lock_command_dealer(g, host_id, host_name)
+            else:
+                g.status_note = "首位成功加入的玩家将自动成为本局庄家。"
             self._games[cid] = g
 
         if ctx.log:
             await ctx.log("info",
                 f"[ten_half] game_start: chat_id={cid}, bet={bet}, "
-                f"lobby_timeout={g.lobby_timeout}, via_interaction=True, dealer=first_player")
+                f"lobby_timeout={g.lobby_timeout}, via_interaction=True, "
+                f"dealer={'command_host' if g.dealer_locked else 'first_player'}, "
+                f"players={len(g.lobby_players)}/{g.max_players}")
 
         action = await self._main_action(
             ctx,
@@ -1383,16 +1405,20 @@ class TenHalfPlugin(Plugin):
             reply_to_message_id=int(getattr(event, "id", 0) or 0) or None,
             force_send=True,
         )
+        session_action = {
+            "type": "start_session",
+            "chat_id": cid,
+            "entry_key": "start_ten_half",
+            "event_type": "command",
+            "started_by_user_id": host_id,
+            "started_by_message_id": int(getattr(event, "id", 0) or 0) or None,
+            "participant_policy": "paid_pool",
+        }
+        if host_id:
+            session_action["paid_user_ids"] = [host_id]
+            session_action["participant_user_ids"] = [host_id]
         await self._emit_background_actions(ctx, [
-            {
-                "type": "start_session",
-                "chat_id": cid,
-                "entry_key": "start_ten_half",
-                "event_type": "command",
-                "started_by_user_id": host_id,
-                "started_by_message_id": int(getattr(event, "id", 0) or 0) or None,
-                "participant_policy": "paid_pool",
-            },
+            session_action,
             action,
         ])
         self._track(asyncio.create_task(
@@ -1869,12 +1895,19 @@ class TenHalfPlugin(Plugin):
         # tasks cannot return actions to TelePilot's delivery executor.
         for winner in winners:
             reply_to = self._player_reply_message(g, int(winner["user_id"]))
+            if not reply_to:
+                if ctx.log:
+                    await ctx.log("info",
+                        f"[ten_half] reward_skipped_no_payment_message: "
+                        f"uid={winner['user_id']}, name={winner['name']}, "
+                        f"amount={winner['reward']}, chat_id={cid}, background=True")
+                continue
             try:
                 if ctx.client:
                     await ctx.client.send_message(
                         cid,
                         f"+{winner['reward']}",
-                        **({"reply_to": reply_to} if reply_to else {}),
+                        reply_to=reply_to,
                     )
             except Exception:
                 pass
@@ -3250,13 +3283,20 @@ class TenHalfPlugin(Plugin):
         # ── 向每位赢家发放奖励（走 userbot_reply，参照 dice_grid_hunt） ──
         reward_message_keys: list[str] = []
         for w in winners:
+            reply_to = self._player_reply_message(g, int(w["user_id"]))
+            if not reply_to:
+                if ctx and ctx.log:
+                    await ctx.log("info",
+                        f"[ten_half] reward_skipped_no_payment_message: "
+                        f"uid={w['user_id']}, name={w['name']}, amount={w['reward']}, chat_id={cid}")
+                continue
             reward_key = _reward_msg_key(ctx.account_id, cid, g.game_id, int(w["user_id"])) if ctx else ""
             if reward_key:
                 reward_message_keys.append(reward_key)
             actions.append({
                 "type": "send_message",
                 "text": f"+{w['reward']}",
-                "reply_to_message_id": self._player_reply_message(g, int(w["user_id"])),
+                "reply_to_message_id": reply_to,
                 "send_via": "userbot_reply",
                 **({"save_message_id_key": reward_key} if reward_key else {}),
             })
