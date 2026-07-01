@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；主消息和后续要牌/停牌/加倍都由交互 Bot 按钮承接；结算发奖走 userbot_reply 受控通道。',
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；开局后所有玩家和真人庄家都在同一牌桌面板上各自点击自己的按钮，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply 受控通道。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -21,7 +21,7 @@ CONFIG_SCHEMA = {
         },
         "timeout": {
             "type": "integer",
-            "title": "每回合限时（秒）",
+            "title": "每人操作限时（秒）",
             "default": 8,
             "minimum": 5,
             "maximum": 120,
@@ -46,8 +46,8 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；主消息和后续要牌/停牌/加倍都由交互 Bot '
- '按钮承接；结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
+USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；开局后所有玩家和真人庄家都在同一牌桌面板上各自点击自己的按钮，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply '
+ '受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
  'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
  '受控通道。')
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
@@ -69,7 +69,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.2.28",
+    version="0.3.0",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -108,7 +108,7 @@ MANIFEST = Manifest(
                                           'default': 100,
                                           'minimum': 1},
                                   'timeout': {'type': 'integer',
-                                              'title': '每回合限时（秒）',
+                                              'title': '每人操作限时（秒）',
                                               'default': 8,
                                               'minimum': 5,
                                               'maximum': 120},
