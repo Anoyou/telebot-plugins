@@ -248,6 +248,54 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_join_notice_uses_latest_saved_message_after_stale_previous_game_key(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            messages = FakeMessages()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis, messages=messages)
+            join_key = plugin_module._join_notice_key(1, -100123)
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
+                redis.store[join_key] = "800"
+
+                first = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
+                self.assertEqual([a["message_id"] for a in first if a["type"] == "delete_message"], [800, 900])
+                game = plugin._games[-100123]
+                self.assertIsNone(game.join_notice_msg_id)
+
+                redis.store[join_key] = "910"
+                second = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    payment_payload(
+                        payer_id=222,
+                        payer_name="玩家B",
+                        notice_message_id=711,
+                        reply_message_id=710,
+                    ),
+                )
+                self.assertEqual([a["message_id"] for a in second if a["type"] == "delete_message"], [910])
+                self.assertIsNone(game.join_notice_msg_id)
+
+                redis.store[join_key] = "920"
+                with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                    await plugin._idle_start_prompt_task(-100123, game.started_at, game.lobby_version, ctx)
+
+                prompt_actions = messages.applied[-1]["actions"]
+                self.assertEqual(prompt_actions[0]["type"], "edit_message")
+                self.assertEqual(prompt_actions[0]["message_id"], 920)
+                self.assertIn("th:start_now:111", str(prompt_actions[0]["reply_markup"]))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_interaction_dealer_timeout_does_not_auto_pick_bot_dealer(self) -> None:
         # This test uses a local coroutine patch to avoid waiting 30 seconds.
         async def fast_sleep(_seconds):
@@ -678,6 +726,8 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(action["reply_to_message_id"], 600)
                 self.assertEqual(action["replace_saved_message_id_key"], plugin_module._main_msg_key(1, -100123))
                 self.assertIn("十点半开局", action["text"])
+                self.assertIn("请转账 <b>100</b> 给 <b>@owner</b>", action["text"])
+                self.assertNotIn("本群 userbot", action["text"])
                 self.assertIn("👥 已加入 (1/2): owner", action["text"])
                 self.assertIn("🎰 庄家: <b>owner</b>", action["text"])
             finally:

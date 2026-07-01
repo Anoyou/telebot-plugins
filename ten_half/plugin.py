@@ -47,6 +47,14 @@ except ImportError:  # pragma: no cover - older TelePilot compatibility
         return str(fallback_id) if fallback_id not in (None, "") else default
 
 
+def _receiver_label_from_entity(entity: Any, *, fallback: str = "") -> str:
+    username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
+    if username:
+        return f"@{username}"
+    label = public_entity_display_name(entity, fallback_id="", default="")
+    return label or fallback
+
+
 # ─────────────────────────────────────────────────────
 # 牌组
 # ─────────────────────────────────────────────────────
@@ -858,7 +866,8 @@ class TenHalfPlugin(Plugin):
         g: TenHalfGame,
     ) -> list[dict[str, Any]]:
         key = _join_notice_key(ctx.account_id, g.chat_id)
-        mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, key)
+        saved_mid = await self._read_saved_message_id(ctx, key)
+        mid = saved_mid or g.join_notice_msg_id
         if not mid:
             return []
         g.join_notice_msg_id = mid
@@ -874,7 +883,8 @@ class TenHalfPlugin(Plugin):
         reply_markup: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         key = _join_notice_key(ctx.account_id, g.chat_id)
-        mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, key)
+        saved_mid = await self._read_saved_message_id(ctx, key)
+        mid = saved_mid or g.join_notice_msg_id
         if not mid:
             return None
         g.join_notice_msg_id = mid
@@ -1124,9 +1134,10 @@ class TenHalfPlugin(Plugin):
         actions: list[dict[str, Any]] = []
         join_key = _join_notice_key(ctx.account_id, g.chat_id)
         main_key = _main_msg_key(ctx.account_id, g.chat_id)
-        previous_mid = g.join_notice_msg_id or await self._read_saved_message_id(ctx, join_key)
+        saved_join_mid = await self._read_saved_message_id(ctx, join_key)
+        previous_mid = saved_join_mid or g.join_notice_msg_id
         opening_mid = None
-        if not previous_mid and not g.opening_message_deleted:
+        if not g.opening_message_deleted:
             opening_mid = g.main_message_id or await self._read_saved_message_id(ctx, main_key)
         actions.append(
             _send_action(
@@ -1135,15 +1146,17 @@ class TenHalfPlugin(Plugin):
                 save_message_id_key=join_key,
             )
         )
+        g.join_notice_msg_id = None
         if previous_mid:
-            g.join_notice_msg_id = previous_mid
             self._remember_interaction_message(g, previous_mid)
             actions.append(_delete_action(previous_mid))
-        elif opening_mid:
+        if opening_mid and opening_mid != previous_mid:
             self._remember_interaction_message(g, opening_mid)
             g.main_message_id = None
             g.opening_message_deleted = True
             actions.append(_delete_action(opening_mid))
+        elif opening_mid:
+            g.opening_message_deleted = True
         return actions
 
     def _build_lobby_text(self, g: TenHalfGame, receiver_label: str) -> str:
@@ -1365,10 +1378,12 @@ class TenHalfPlugin(Plugin):
 
             host_id = int(getattr(event, "sender_id", 0) or 0)
             host_name = "管理员"
+            receiver_name = ""
             try:
                 me = await client.get_me()
                 host_id = int(getattr(me, "id", host_id) or host_id)
                 host_name = public_entity_display_name(me, fallback_id=host_id, default="管理员")
+                receiver_name = _receiver_label_from_entity(me, fallback=host_name)
             except Exception:
                 pass
 
@@ -1383,7 +1398,7 @@ class TenHalfPlugin(Plugin):
                 host_user_id=host_id,
                 host_name=host_name,
             )
-            g.payment_receiver_name = self._receiver_label(ctx, None, g)
+            g.payment_receiver_name = receiver_name or host_name or self._receiver_label(ctx, None, g)
             if host_id:
                 g.lobby_players.append((host_id, host_name))
                 self._lock_command_dealer(g, host_id, host_name)
