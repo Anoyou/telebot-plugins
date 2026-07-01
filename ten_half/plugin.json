@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -209,8 +209,8 @@
         "external_payment_notice",
         "userbot"
       ],
-      "scope": "rule_bound",
-      "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
+      "scope": "all_allowed_chats",
+      "description": "付款确认按已允许群投递，插件只接收当前等待牌桌且金额等于本桌底注的转账。"
     }
   ],
   "capabilities": {}

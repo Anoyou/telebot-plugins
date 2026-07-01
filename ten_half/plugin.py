@@ -1727,66 +1727,45 @@ class TenHalfPlugin(Plugin):
     ) -> list[dict[str, Any]]:
         """payment_confirmed: 玩家转账给管理员(userbot)。
 
-        有活跃大厅 → 加入；没有大厅则提示先开桌。
+        付款订阅是群级别的，必须先用插件内活跃牌桌和底注做过滤；
+        不属于本桌的转账静默跳过，避免干扰同群其它玩法或普通转账。
         """
         payer_id, payer_name = _ie_payer(payload)
         amount = _ie_payment_amount(payload)
         mid = _ie_mid(payload)
         payment_status = _ie_payment_status(payload)
 
-        if ctx.log:
-            await ctx.log("info",
-                f"[ten_half] payment_confirmed: payer={payer_id} ({payer_name}), "
-                f"amount={amount}, status={payment_status}, chat_id={cid}")
-
-        if payment_status and payment_status != "confirmed":
-            return [
-                _send_action(
-                    "⚠️ 这笔转账尚未确认到账，暂不能加入牌局。",
-                    reply_to_message_id=mid,
-                )
-            ]
-        if not payer_id:
-            return [
-                _send_action(
-                    "⚠️ 未能识别付款人，请按付款确认按钮绑定身份后再加入。",
-                    reply_to_message_id=mid,
-                )
-            ]
-
         async with self._lock(cid):
             g = self._games.get(cid)
             if not g or g.finished:
-                start_keyword = _start_keyword_label(payload, self._command)
-                return [
-                    _send_action(
-                        f"⚠️ 暂无等待中的十点半牌局，请先发送「{_html(start_keyword)}」开桌。",
-                        reply_to_message_id=mid,
-                    ),
-                    {"type": "no_session"},
-                ]
+                return [{"type": "no_session"}]
             if not g.via_interaction:
-                return [
-                    _send_action(
-                        "⚠️ 当前牌局不是交互 Bot 开局，请按原牌局提示加入。",
-                        reply_to_message_id=mid,
-                    )
-                ]
+                return [{"type": "no_session"}]
             if not g.payment_receiver_name:
                 g.payment_receiver_name = self._receiver_label(ctx, payload, g)
 
             if g.phase != "lobby":
+                return [{"type": "no_session"}]
+
+            if amount != g.bet:
+                return [{"type": "no_session"}]
+
+            if ctx.log:
+                await ctx.log("info",
+                    f"[ten_half] payment_confirmed: payer={payer_id} ({payer_name}), "
+                    f"amount={amount}, status={payment_status}, chat_id={cid}")
+
+            if payment_status and payment_status != "confirmed":
                 return [
                     _send_action(
-                        "⚠️ 本桌牌局已经开始，不能继续加入。",
+                        "⚠️ 这笔转账尚未确认到账，暂不能加入牌局。",
                         reply_to_message_id=mid,
                     )
                 ]
-
-            if amount != g.bet:
+            if not payer_id:
                 return [
                     _send_action(
-                        f"⚠️ 入场金额需为 {g.bet}，你转了 {amount}，本次未加入。",
+                        "⚠️ 未能识别付款人，请按付款确认按钮绑定身份后再加入。",
                         reply_to_message_id=mid,
                     )
                 ]

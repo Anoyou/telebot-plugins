@@ -754,7 +754,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                     "start_ten_half",
                     payment_payload(amount=100),
                 )
-                self.assertIn("入场金额需为 1000", wrong[0]["text"])
+                self.assertEqual(wrong, [{"type": "no_session"}])
 
                 joined = await plugin.on_interaction(
                     ctx,
@@ -762,6 +762,41 @@ class TenHalfInteractionTest(unittest.TestCase):
                     payment_payload(amount=1000),
                 )
                 self.assertTrue(any("加入牌局成功" in action.get("text", "") for action in joined))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_userbot_command_lobby_accepts_matching_payment_without_rule_bound_session(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60}, messages=messages)
+            await plugin.on_startup(ctx)
+            try:
+                event = FakeCommandEvent()
+                await plugin.commands["10d"](FakeCommandClient(), event, ["7895"], 1, ctx)
+
+                self.assertIn(-100123, plugin._games)
+                self.assertEqual(plugin._games[-100123].bet, 7895)
+                self.assertTrue(messages.applied)
+                self.assertEqual(messages.applied[0]["actions"][0]["type"], "start_session")
+
+                wrong = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    payment_payload(amount=1000),
+                )
+                self.assertEqual(wrong, [{"type": "no_session"}])
+
+                joined = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    payment_payload(amount=7895),
+                )
+                self.assertTrue(any("加入牌局成功" in action.get("text", "") for action in joined))
+                game = plugin._games[-100123]
+                self.assertEqual([uid for uid, _name in game.lobby_players], [999, 111])
             finally:
                 await plugin.on_shutdown(ctx)
 

@@ -62,14 +62,14 @@ EVENT_SUBSCRIPTIONS = [{'events': ['command'],
  {'events': ['payment_confirmed'],
   'entry_key': 'start_ten_half',
   'source': ['external_payment_notice', 'userbot'],
-  'scope': 'rule_bound',
-  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+  'scope': 'all_allowed_chats',
+  'description': '付款确认按已允许群投递，插件只接收当前等待牌桌且金额等于本桌底注的转账。'}]
 CAPABILITIES = {}
 
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.3.0",
+    version="0.3.1",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
