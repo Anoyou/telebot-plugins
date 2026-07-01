@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -63,7 +63,7 @@
       "lobby_timeout",
       "max_players"
     ],
-    "x-usage-guide": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；开局后所有玩家和真人庄家都在同一牌桌面板上各自点击自己的按钮，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply 受控通道。"
+    "x-usage-guide": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply 受控通道。"
   },
   "license": "MIT",
   "category": "interactive",
@@ -175,7 +175,7 @@
       "participant_policy": "paid_pool"
     }
   ],
-  "usage": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；开局后所有玩家和真人庄家都在同一牌桌面板上各自点击自己的按钮，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
+  "usage": "管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply 受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
   "event_subscriptions": [
     {
       "events": [

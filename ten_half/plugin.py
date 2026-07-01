@@ -612,11 +612,6 @@ def _kb_start_decision(uid: int) -> dict[str, Any]:
     }
 
 
-def _short_button_name(name: str, *, limit: int = 8) -> str:
-    text = str(name or "玩家").strip() or "玩家"
-    return text if len(text) <= limit else text[:limit] + "…"
-
-
 def _target_action_version(g: TenHalfGame, uid: int) -> int:
     uid = int(uid)
     if uid not in g.action_versions:
@@ -631,43 +626,24 @@ def _bump_target_action_version(g: TenHalfGame, uid: int) -> None:
     g.action_version = max(g.action_version + 1, g.action_versions[uid])
 
 
-def _kb_action_row(uid: int, name: str, *, can_double: bool, action_version: int, dealer: bool = False) -> list[dict[str, str]]:
-    suffix = f":{action_version}"
-    who = _short_button_name(name)
-    row = [
-        {"text": f"👀 {who}", "callback_data": f"th:view:{uid}{suffix}"},
-        {"text": f"🃏 {who}", "callback_data": f"th:hit:{uid}{suffix}"},
-        {"text": f"🛑 {who}", "callback_data": f"th:stand:{uid}{suffix}"},
+def _kb_unified_action_row() -> list[dict[str, str]]:
+    return [
+        {"text": "👀 我的牌", "callback_data": "th:view:0"},
+        {"text": "🃏 要牌", "callback_data": "th:hit:0"},
+        {"text": "🛑 停牌", "callback_data": "th:stand:0"},
+        {"text": "💰 加倍", "callback_data": "th:double:0"},
     ]
-    if can_double and not dealer:
-        row.append({"text": f"💰 {who}", "callback_data": f"th:double:{uid}{suffix}"})
-    return row
 
 
 def _kb_parallel_actions(g: TenHalfGame) -> dict[str, Any] | None:
-    rows: list[list[dict[str, str]]] = []
-    for p in g.players:
-        if p.is_done:
-            continue
-        rows.append(
-            _kb_action_row(
-                p.user_id,
-                p.name,
-                can_double=len(p.cards) == 2,
-                action_version=_target_action_version(g, p.user_id),
-            )
-        )
+    return {"inline_keyboard": [_kb_unified_action_row()]} if _active_action_targets(g) else None
+
+
+def _active_action_targets(g: TenHalfGame) -> list[int]:
+    ids = [p.user_id for p in g.players if not p.is_done]
     if g.dealer_id > 0 and not g.dealer_done():
-        rows.append(
-            _kb_action_row(
-                g.dealer_id,
-                f"庄 {g.dealer_name}",
-                can_double=False,
-                action_version=_target_action_version(g, g.dealer_id),
-                dealer=True,
-            )
-        )
-    return {"inline_keyboard": rows} if rows else None
+        ids.append(g.dealer_id)
+    return ids
 
 
 def _html(s: Any) -> str:
@@ -1380,7 +1356,7 @@ class TenHalfPlugin(Plugin):
             if g.dealer_id > 0 and not g.dealer_done():
                 active_names.append(g.dealer_name)
             if active_names:
-                lines.append("⚡ 所有人可同时操作自己的按钮；全部停牌/爆牌后统一结算。")
+                lines.append("⚡ 所有人共用下方按钮，系统按点击者识别自己的手牌；全部停牌/爆牌后统一结算。")
                 lines.append("⏳ 等待：" + "、".join(_html(name) for name in active_names))
         if g.phase == "dealer_turn" and not g.dealer_is_bot and not g.finished:
             lines.append("👉 所有玩家已行动，庄家请要牌或停牌。")
@@ -1877,7 +1853,7 @@ class TenHalfPlugin(Plugin):
             if not g or g.finished:
                 return [{"type": "no_session"}]
             callback_message_id = _ie_message_mid(payload)
-            if callback_message_id and action in ("hit", "stand", "double"):
+            if callback_message_id and action in ("view", "hit", "stand", "double"):
                 g.main_message_id = callback_message_id
                 self._remember_interaction_message(g, callback_message_id)
 
@@ -2016,11 +1992,16 @@ class TenHalfPlugin(Plugin):
         target_uid = aid
         if len(parts) >= 3:
             try:
-                target_uid = int(parts[2])
+                parsed_uid = int(parts[2])
             except (ValueError, TypeError):
-                target_uid = aid
+                parsed_uid = 0
+            if parsed_uid > 0:
+                target_uid = parsed_uid
 
-        current_version = _target_action_version(g, target_uid)
+        if cb_version is not None:
+            current_version = _target_action_version(g, target_uid)
+        else:
+            current_version = None
         if cb_version is not None and cb_version != current_version:
             if ctx.log:
                 await ctx.log(
@@ -2053,10 +2034,10 @@ class TenHalfPlugin(Plugin):
         cur = self._find_player(g, target_uid)
         if cur is None:
             return [_answer_action(payload or {}, "你不在本轮付费玩家列表中。", show_alert=True)] if payload else []
-        if cur.is_done:
-            return [_answer_action(payload or {}, "你本轮已经结束。")] if payload else []
         if action == "view":
             return [_answer_action(payload or {}, f"你的手牌：{cur.hand_str()}", show_alert=True)] if payload else []
+        if cur.is_done:
+            return [_answer_action(payload or {}, "你本轮已经结束。")] if payload else []
         if action == "hit":
             return await self._ix_hit(g.chat_id, g, ctx, payload, player=cur)
         elif action == "stand":
@@ -2153,7 +2134,7 @@ class TenHalfPlugin(Plugin):
         actions.extend(await self._delete_current_join_notice_actions(ctx, g))
         if payload is not None:
             actions.append(_answer_action(payload, _dealer_private_brief(g), show_alert=True))
-        g.status_note = f"{g.dealer_name} 当庄，玩家起手 1 张明牌。所有人可同时操作自己的按钮。"
+        g.status_note = f"{g.dealer_name} 当庄，玩家起手 1 张明牌。所有人共用下方按钮，系统按点击者识别自己的手牌。"
         actions.extend(await self._ix_refresh_or_settle(cid, g, ctx, schedule_all=True))
         return actions
 
