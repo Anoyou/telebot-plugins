@@ -422,10 +422,29 @@ def _ie_payment_amount(p: dict[str, Any]) -> int:
 def _ie_payer(p: dict[str, Any]) -> tuple[int, str]:
     """Extract payer identity from a payment_confirmed payload."""
     e = _pe(p)
+    rt = _reply_to(p)
+    actor = _pa(p)
     player = _pp(p)
     payment = _pay(p)
     payer = payment.get("payer") if isinstance(payment.get("payer"), dict) else {}
     data = e.get("data") if isinstance(e.get("data"), dict) else {}
+    is_payment = _ie_type(p) == "payment_confirmed"
+    if is_payment:
+        raw_id = (
+            payment.get("payer_user_id") or payer.get("user_id")
+            or p.get("payer_user_id") or data.get("payer_user_id")
+            or rt.get("user_id") or player.get("user_id") or actor.get("user_id")
+            or e.get("payer_user_id") or p.get("sender_user_id")
+        )
+        raw_name = (
+            payment.get("payer_display_name") or payment.get("payer_name")
+            or payer.get("display_name") or payer.get("name")
+            or p.get("payer_name") or data.get("payer_name")
+            or rt.get("display_name") or player.get("display_name") or actor.get("display_name")
+            or player.get("name") or actor.get("name")
+            or e.get("payer_name") or p.get("sender_name") or "玩家"
+        )
+        return _pint(raw_id, 0, minimum=0), str(raw_name).strip() or "玩家"
     raw_id = (
         player.get("user_id") or payment.get("payer_user_id") or payer.get("user_id")
         or p.get("payer_user_id") or data.get("payer_user_id")
@@ -1735,20 +1754,32 @@ class TenHalfPlugin(Plugin):
         mid = _ie_mid(payload)
         payment_status = _ie_payment_status(payload)
 
+        async def _skip(reason: str, game: TenHalfGame | None = None) -> list[dict[str, Any]]:
+            if ctx.log:
+                await ctx.log(
+                    "debug",
+                    "[ten_half] payment_skip: "
+                    f"reason={reason}, payer={payer_id} ({payer_name}), amount={amount}, "
+                    f"bet={getattr(game, 'bet', None)}, phase={getattr(game, 'phase', None)}, "
+                    f"via_interaction={getattr(game, 'via_interaction', None)}, "
+                    f"players={len(getattr(game, 'lobby_players', []) or [])}, chat_id={cid}",
+                )
+            return [{"type": "no_session"}]
+
         async with self._lock(cid):
             g = self._games.get(cid)
             if not g or g.finished:
-                return [{"type": "no_session"}]
+                return await _skip("no_lobby", g)
             if not g.via_interaction:
-                return [{"type": "no_session"}]
+                return await _skip("not_interaction_lobby", g)
             if not g.payment_receiver_name:
                 g.payment_receiver_name = self._receiver_label(ctx, payload, g)
 
             if g.phase != "lobby":
-                return [{"type": "no_session"}]
+                return await _skip("phase_not_lobby", g)
 
             if amount != g.bet:
-                return [{"type": "no_session"}]
+                return await _skip("amount_mismatch", g)
 
             if ctx.log:
                 await ctx.log("info",

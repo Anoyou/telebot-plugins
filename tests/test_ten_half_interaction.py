@@ -802,6 +802,46 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_payment_notice_uses_replied_user_instead_of_notice_bot_sender(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", {**keyword_payload(), "bet": 1000})
+
+                first_payload = payment_payload(amount=1000, payer_id=111, payer_name="玩家A")
+                first_payload.pop("payer_user_id", None)
+                first_payload["sender_user_id"] = 8980553289
+                first_payload["sender_name"] = "转账通知Abot"
+                first_payload["actor"] = {"user_id": 8980553289, "display_name": "转账通知Abot"}
+                first_payload["player"] = {"user_id": 8980553289, "display_name": "转账通知Abot"}
+
+                first = await plugin.on_interaction(ctx, "start_ten_half", first_payload)
+                self.assertTrue(any("加入牌局成功" in action.get("text", "") for action in first))
+
+                second_payload = payment_payload(
+                    amount=1000,
+                    payer_id=222,
+                    payer_name="玩家B",
+                    notice_message_id=711,
+                    reply_message_id=710,
+                )
+                second_payload.pop("payer_user_id", None)
+                second_payload["sender_user_id"] = 8980553289
+                second_payload["sender_name"] = "转账通知Abot"
+                second_payload["actor"] = {"user_id": 8980553289, "display_name": "转账通知Abot"}
+                second_payload["player"] = {"user_id": 8980553289, "display_name": "转账通知Abot"}
+
+                second = await plugin.on_interaction(ctx, "start_ten_half", second_payload)
+                self.assertFalse(any("你已经加入了" in action.get("text", "") for action in second))
+                game = plugin._games[-100123]
+                self.assertEqual([uid for uid, _name in game.lobby_players], [111, 222])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_keyword_lobby_accepts_explicit_module_prize(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
