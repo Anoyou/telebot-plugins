@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.2.5 (2026-07-02)
+- 修复 Event Bus 领取消息只读取 `actor`、没有读取标准 `sender.user_id` 导致发送者 ID 为空、领取返回空动作的问题。
+- 新增标准 UserBot 事件信封回归测试，覆盖 `source/message/chat/sender` 结构下的财富密码领取。
+
 ## 1.2.4 (2026-07-02)
 - 按 TelePilot 0.33 Event Bus 主路径补齐 `on_event` 和消息订阅 `entry_key`，避免领取消息只落到 legacy 兼容层后没有标准动作。
 - 领取成功现在会返回 `userbot_reply` 标准发钱动作，并保留 raw client 重发红包消息来更新图片财富密码和红包消息 ID。

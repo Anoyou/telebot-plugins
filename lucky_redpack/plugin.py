@@ -58,7 +58,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.2.4"
+PLUGIN_VERSION = "1.2.5"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -165,6 +165,10 @@ def _payload_actor(payload: dict[str, Any]) -> dict[str, Any]:
     return _dict(payload.get("actor"))
 
 
+def _payload_sender(payload: dict[str, Any]) -> dict[str, Any]:
+    return _dict(payload.get("sender"))
+
+
 def _payload_reply_to(payload: dict[str, Any]) -> dict[str, Any]:
     return _dict(payload.get("reply_to"))
 
@@ -248,12 +252,15 @@ def _payload_message_text(payload: dict[str, Any]) -> str:
 
 def _payload_sender_id(payload: dict[str, Any]) -> int:
     actor = _payload_actor(payload)
+    sender = _payload_sender(payload)
     event = _payload_event(payload)
     source = _payload_source(payload)
     message = _payload_message(payload)
     try:
         return int(
-            actor.get("user_id")
+            sender.get("user_id")
+            or sender.get("id")
+            or actor.get("user_id")
             or actor.get("id")
             or payload.get("sender_user_id")
             or event.get("user_id")
@@ -268,11 +275,14 @@ def _payload_sender_id(payload: dict[str, Any]) -> int:
 
 def _payload_sender_name(payload: dict[str, Any], sender_id: int) -> str:
     actor = _payload_actor(payload)
+    sender = _payload_sender(payload)
     event = _payload_event(payload)
     source = _payload_source(payload)
     message = _payload_message(payload)
     name = (
-        actor.get("display_name")
+        sender.get("display_name")
+        or sender.get("name")
+        or actor.get("display_name")
         or actor.get("name")
         or payload.get("sender_name")
         or event.get("display_name")
@@ -286,8 +296,9 @@ def _payload_sender_name(payload: dict[str, Any], sender_id: int) -> str:
 
 def _payload_actor_is_bot(payload: dict[str, Any]) -> bool:
     actor = _payload_actor(payload)
+    sender = _payload_sender(payload)
     message = _payload_message(payload)
-    return bool(actor.get("is_bot") or message.get("sender_is_bot"))
+    return bool(sender.get("is_bot") or actor.get("is_bot") or message.get("sender_is_bot"))
 
 
 def _chat_id_from_event(event: Any) -> int:

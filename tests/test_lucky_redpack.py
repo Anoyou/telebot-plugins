@@ -424,6 +424,46 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_event_bus_claim_reads_standard_sender_envelope(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=-1003806095342, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, command_event, ["测试", "100", "2"], 1, ctx)
+            pack = plugin._packs[-1003806095342][0]
+            password = pack.current_password
+
+            actions = await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -1003806095342, "message_id": 2814, "text": password},
+                    "chat": {"id": -1003806095342},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["reply_to_message_id"], 2814)
+            self.assertIn(8629045843, pack.claimed_user_ids)
+            self.assertEqual(pack.claims[0].display_name, "领取者")
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
     def test_message_subscription_declares_event_bus_entry_key(self) -> None:
         manifest = json.loads((ROOT / "lucky_redpack" / "plugin.json").read_text())
         message_subscriptions = [
