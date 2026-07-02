@@ -101,11 +101,14 @@ class FakeMessage:
 
 
 class FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, *, entities: dict[int, object] | None = None, get_entity_error: Exception | None = None) -> None:
         self.sent: list[dict] = []
         self.files: list[dict] = []
         self.edited: list[dict] = []
         self.deleted: list[dict] = []
+        self.entities = entities or {}
+        self.get_entity_error = get_entity_error
+        self.get_entity_calls: list[int] = []
         self.on_send_message = None
         self.on_edit_message = None
 
@@ -132,6 +135,12 @@ class FakeClient:
 
     async def delete_messages(self, chat_id, message_ids):
         self.deleted.append({"chat_id": chat_id, "message_ids": list(message_ids)})
+
+    async def get_entity(self, entity_id):
+        self.get_entity_calls.append(entity_id)
+        if self.get_entity_error is not None:
+            raise self.get_entity_error
+        return self.entities.get(entity_id)
 
 
 class FakeRedis:
@@ -604,7 +613,17 @@ class LuckyRedpackTest(unittest.TestCase):
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
             ctx = PluginContext()
-            ctx.client = FakeClient()
+            ctx.client = FakeClient(
+                entities={
+                    8629045843: types.SimpleNamespace(
+                        id=8629045843,
+                        first_name="这是一个超过十个字的用户名",
+                        last_name="后缀",
+                        username="",
+                        is_bot=False,
+                    )
+                }
+            )
             ctx.config = {
                 "command": "rp",
                 "default_amount": 100,
@@ -632,17 +651,57 @@ class LuckyRedpackTest(unittest.TestCase):
                     "source": {"type": "message", "channel": "userbot", "account_id": 1},
                     "message": {"chat_id": chat_id, "message_id": 2850, "text": pack.current_password},
                     "chat": {"id": chat_id},
-                    "sender": {
-                        "user_id": 8629045843,
-                        "display_name": "联系人备注",
-                        "first_name": "这是一个超过十个字的用户名",
-                        "last_name": "后缀",
-                    },
+                    "sender": {"user_id": 8629045843, "display_name": "8629045843"},
                     "trigger": {"entry_key": "claim_lucky_redpack"},
                 },
             )
 
             self.assertEqual(plugin._packs[chat_id][0].claims[0].display_name, "这是一个超过十个字的")
+            self.assertEqual(ctx.client.get_entity_calls, [8629045843])
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_event_bus_claim_falls_back_to_payload_name_when_entity_lookup_fails(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient(get_entity_error=RuntimeError("entity cache miss"))
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            chat_id = -1003806095342
+            await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "command", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2848, "text": "rp 测试 100 2"},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 1682400007, "display_name": "发起人"},
+                },
+            )
+            pack = plugin._packs[chat_id][0]
+
+            await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2850, "text": pack.current_password},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(plugin._packs[chat_id][0].claims[0].display_name, "领取者")
+            self.assertEqual(ctx.client.get_entity_calls, [8629045843])
 
             await plugin.on_shutdown(ctx)
 

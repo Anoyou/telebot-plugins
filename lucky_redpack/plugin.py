@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.5"
+PLUGIN_VERSION = "1.3.6"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -1220,12 +1220,13 @@ class LuckyRedpackPlugin(Plugin):
         if not chat_id:
             return []
         sender_id = _payload_sender_id(payload)
+        sender_name = await self._event_sender_display_name(ctx, payload, sender_id)
         actions, pack_to_resend = await self._claim_password(
             ctx,
             text=text,
             chat_id=chat_id,
             sender_id=sender_id,
-            sender_name=_payload_sender_name(payload, sender_id),
+            sender_name=sender_name,
             sender_is_bot=_payload_actor_is_bot(payload),
             claim_message_id=_payload_message_id(payload),
         )
@@ -1671,6 +1672,28 @@ class LuckyRedpackPlugin(Plugin):
         if name:
             return _short_display_name(name)
         return _short_display_name(public_entity_display_name(sender, fallback_id=sender_id, default="玩家"))
+
+    async def _event_sender_display_name(self, ctx: PluginContext, payload: dict[str, Any], sender_id: int) -> str:
+        payload_name = _payload_sender_name(payload, sender_id)
+        entity = await self._lookup_sender_entity(ctx, sender_id)
+        if entity is not None:
+            entity_name = self._sender_display_name(entity, sender_id)
+            if entity_name and entity_name != str(sender_id):
+                return entity_name
+        return payload_name
+
+    async def _lookup_sender_entity(self, ctx: PluginContext, sender_id: int) -> Any | None:
+        if not sender_id or ctx.client is None:
+            return None
+        getter = getattr(ctx.client, "get_entity", None)
+        if not callable(getter):
+            return None
+        try:
+            return await getter(sender_id)
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("debug", f"[lucky_redpack] 回查领取者 Telegram 原始姓名失败：{type(exc).__name__}")
+            return None
 
     async def _resend_pack_message(self, ctx: PluginContext, pack: LuckyRedpack) -> None:
         if ctx.client is None:
