@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import tempfile
 import types
@@ -241,6 +242,16 @@ class QuickQATest(unittest.TestCase):
             self.assertEqual(fake_ai.calls[0]["timeout_seconds"], plugin_module.DEFAULT_AI_TIMEOUT_SECONDS)
 
         asyncio.run(scenario())
+
+    def test_plugin_json_allows_legacy_ai_timeout_config(self) -> None:
+        data = json.loads((ROOT / "quick_qa" / "plugin.json").read_text())
+        timeout_schema = data["config_schema"]["properties"]["ai_timeout_seconds"]
+
+        self.assertLessEqual(timeout_schema["minimum"], 90)
+        self.assertEqual(
+            plugin_module._ai_timeout_seconds({"ai_timeout_seconds": 90}),
+            plugin_module.DEFAULT_AI_TIMEOUT_SECONDS,
+        )
 
     def test_config_action_appends_and_deduplicates_existing_kb(self) -> None:
         class FakeHTTP:

@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.2.6"
+PLUGIN_VERSION = "1.2.7"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
