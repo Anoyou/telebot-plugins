@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.2"
+PLUGIN_VERSION = "1.3.3"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -661,6 +661,7 @@ def render_settlement(pack: LuckyRedpack, *, expired: bool = False) -> str:
 def _send_action(
     text: str,
     *,
+    chat_id: int | None = None,
     reply_to_message_id: int | None = None,
     send_via: str = "userbot_reply",
     parse_mode: str | None = "html",
@@ -670,6 +671,8 @@ def _send_action(
         "text": text,
         "send_via": send_via,
     }
+    if chat_id is not None:
+        action["chat_id"] = int(chat_id)
     if parse_mode:
         action["parse_mode"] = parse_mode
     if reply_to_message_id:
@@ -876,12 +879,18 @@ class LuckyRedpackPlugin(Plugin):
     def _state_key(self, account_id: int, chat_id: int) -> str:
         return f"lucky_redpack:{int(account_id)}:{int(chat_id)}:packs"
 
+    def _account_state_key(self, account_id: int) -> str:
+        return f"lucky_redpack:{int(account_id)}:packs"
+
     def _state_dir(self) -> Path:
         configured = str(os.environ.get(STATE_DIR_ENV) or "").strip()
         return Path(configured).expanduser() if configured else DEFAULT_STATE_DIR
 
     def _state_file(self, account_id: int, chat_id: int) -> Path:
         return self._state_dir() / f"{int(account_id)}_{int(chat_id)}.json"
+
+    def _account_state_file(self, account_id: int) -> Path:
+        return self._state_dir() / f"{int(account_id)}_all.json"
 
     @contextmanager
     def _state_file_lock(self, account_id: int, chat_id: int):
@@ -903,6 +912,13 @@ class LuckyRedpackPlugin(Plugin):
 
     def _load_file_packs(self, account_id: int, chat_id: int) -> list[LuckyRedpack]:
         path = self._state_file(account_id, chat_id)
+        return self._load_file_packs_from(path)
+
+    def _load_account_file_packs(self, account_id: int) -> list[LuckyRedpack]:
+        path = self._account_state_file(account_id)
+        return self._load_file_packs_from(path)
+
+    def _load_file_packs_from(self, path: Path) -> list[LuckyRedpack]:
         if not path.exists():
             return []
         try:
@@ -912,6 +928,13 @@ class LuckyRedpackPlugin(Plugin):
 
     def _save_file_packs(self, account_id: int, chat_id: int, packs: list[LuckyRedpack]) -> None:
         path = self._state_file(account_id, chat_id)
+        self._save_file_packs_to(path, packs)
+
+    def _save_account_file_packs(self, account_id: int, packs: list[LuckyRedpack]) -> None:
+        path = self._account_state_file(account_id)
+        self._save_file_packs_to(path, packs)
+
+    def _save_file_packs_to(self, path: Path, packs: list[LuckyRedpack]) -> None:
         if not packs:
             try:
                 path.unlink(missing_ok=True)
@@ -949,6 +972,51 @@ class LuckyRedpackPlugin(Plugin):
         self._sync_memory_packs(chat_id, merged)
         return merged
 
+    def _all_memory_packs(self) -> list[LuckyRedpack]:
+        packs: list[LuckyRedpack] = []
+        for chat_packs in self._packs.values():
+            packs.extend(chat_packs)
+        return self._active_from(packs)
+
+    async def _load_account_index_packs(self, ctx: PluginContext) -> list[LuckyRedpack]:
+        redis = getattr(ctx, "redis", None)
+        packs: list[LuckyRedpack] = []
+        if redis is not None:
+            try:
+                packs = _packs_from_json(await redis.get(self._account_state_key(ctx.account_id)))
+            except Exception as exc:
+                if ctx.log:
+                    await ctx.log("warn", f"[lucky_redpack] 读取 Redis 账号红包索引失败，改用本地状态：{type(exc).__name__}")
+                packs = []
+        if not packs:
+            packs = self._load_account_file_packs(ctx.account_id)
+        if not packs:
+            packs = self._all_memory_packs()
+        return self._active_from(packs)
+
+    async def _save_account_index_packs(self, ctx: PluginContext, packs: list[LuckyRedpack]) -> None:
+        active = self._active_from(packs)
+        self._save_account_file_packs(ctx.account_id, active)
+        redis = getattr(ctx, "redis", None)
+        if redis is None:
+            return
+        key = self._account_state_key(ctx.account_id)
+        try:
+            if not active:
+                await redis.delete(key)
+                return
+            ttl = max(30, int(max(pack.expires_at for pack in active) - time.time()) + 60)
+            await redis.set(key, _packs_to_json(active), ex=ttl)
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[lucky_redpack] 写入 Redis 账号红包索引失败，已保留本地状态：{type(exc).__name__}")
+
+    async def _update_account_index(self, ctx: PluginContext, chat_id: int, chat_packs: list[LuckyRedpack]) -> None:
+        account_packs = await self._load_account_index_packs(ctx)
+        next_packs = [pack for pack in account_packs if pack.chat_id != chat_id]
+        next_packs.extend(chat_packs)
+        await self._save_account_index_packs(ctx, next_packs)
+
     async def _load_active_packs(self, ctx: PluginContext, chat_id: int) -> list[LuckyRedpack]:
         redis = getattr(ctx, "redis", None)
         packs: list[LuckyRedpack] = []
@@ -962,8 +1030,18 @@ class LuckyRedpackPlugin(Plugin):
         if not packs:
             packs = self._load_file_packs(ctx.account_id, chat_id)
         if not packs:
+            account_packs = await self._load_account_index_packs(ctx)
+            packs = [pack for pack in account_packs if pack.chat_id == chat_id]
+        if not packs:
             packs = self._active_packs(chat_id)
         active = self._active_from(packs)
+        if packs and not active:
+            account_packs = await self._load_account_index_packs(ctx)
+            account_chat_packs = [pack for pack in account_packs if pack.chat_id == chat_id]
+            account_active = self._active_from(account_chat_packs)
+            if account_active:
+                packs = account_chat_packs
+                active = account_active
         active = self._sync_loaded_packs(chat_id, active)
         if len(active) != len(packs):
             await self._save_active_packs(ctx, chat_id, active)
@@ -973,6 +1051,7 @@ class LuckyRedpackPlugin(Plugin):
         active = self._active_from(packs)
         self._sync_memory_packs(chat_id, active)
         self._save_file_packs(ctx.account_id, chat_id, active)
+        await self._update_account_index(ctx, chat_id, active)
         redis = getattr(ctx, "redis", None)
         if redis is None:
             return
@@ -1194,6 +1273,15 @@ class LuckyRedpackPlugin(Plugin):
                 pack.used_passwords.add(_normalize_password(pack.current_password))
                 existing_packs.append(pack)
                 await self._save_active_packs(ctx, chat_id, existing_packs)
+                if ctx.log:
+                    storage = "redis+file" if getattr(ctx, "redis", None) is not None else "file"
+                    await ctx.log(
+                        "info",
+                        (
+                            f"[lucky_redpack] 红包状态已保存：code={pack.pack_code} "
+                            f"chat={chat_id} account={ctx.account_id} count={len(existing_packs)} storage={storage}"
+                        ),
+                    )
 
         try:
             sent = await self._send_pack_message(ctx, pack, reply_to=_message_id_from_event(event))
@@ -1266,9 +1354,16 @@ class LuckyRedpackPlugin(Plugin):
                                 f"[lucky_redpack] 领取口令未命中：chat={chat_id} msg={claim_message_id} active={active_codes}",
                             )
                         elif not packs and _looks_like_password_attempt(text, self._suffix_length):
+                            account_packs = await self._load_account_index_packs(ctx)
+                            account_count = len(account_packs)
+                            memory_count = len(self._all_memory_packs())
                             await ctx.log(
                                 "warn",
-                                f"[lucky_redpack] 领取口令未找到红包状态：chat={chat_id} msg={claim_message_id}",
+                                (
+                                    f"[lucky_redpack] 领取口令未找到红包状态：chat={chat_id} "
+                                    f"msg={claim_message_id} account={ctx.account_id} "
+                                    f"account_index={account_count} memory={memory_count}"
+                                ),
                             )
                     return [], None
                 if pack.is_expired():
@@ -1276,7 +1371,7 @@ class LuckyRedpackPlugin(Plugin):
                     await self._save_active_packs(ctx, chat_id, packs)
                     if pack.message_id:
                         actions.append(_delete_action(pack.message_id, chat_id=chat_id))
-                    actions.append(_send_action(render_settlement(pack, expired=True), send_via="userbot_reply"))
+                    actions.append(_send_action(render_settlement(pack, expired=True), chat_id=chat_id, send_via="userbot_reply"))
                     return actions, None
                 if not sender_id:
                     if ctx.log:
@@ -1304,13 +1399,13 @@ class LuckyRedpackPlugin(Plugin):
                     )
                 )
                 if claim_message_id:
-                    actions.append(_send_action(f"+{claim_amount}", reply_to_message_id=claim_message_id, send_via="userbot_reply", parse_mode=None))
+                    actions.append(_send_action(f"+{claim_amount}", chat_id=chat_id, reply_to_message_id=claim_message_id, send_via="userbot_reply", parse_mode=None))
                 if pack.is_finished():
                     packs = [item for item in packs if item.pack_code != pack.pack_code]
                     await self._save_active_packs(ctx, chat_id, packs)
                     if pack.message_id:
                         actions.append(_delete_action(pack.message_id, chat_id=chat_id))
-                    actions.append(_send_action(render_settlement(pack), send_via="userbot_reply"))
+                    actions.append(_send_action(render_settlement(pack), chat_id=chat_id, send_via="userbot_reply"))
                 else:
                     pack.current_suffix = self._new_suffix(pack)
                     pack.used_passwords.add(_normalize_password(pack.current_password))

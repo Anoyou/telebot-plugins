@@ -450,6 +450,7 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertEqual(len(actions), 1)
             self.assertEqual(actions[0]["type"], "send_message")
             self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["chat_id"], 100)
             self.assertEqual(actions[0]["reply_to_message_id"], 2001)
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
             self.assertEqual(ctx.client.deleted[0]["message_ids"], [old_redpack_message_id])
@@ -491,6 +492,7 @@ class LuckyRedpackTest(unittest.TestCase):
 
             self.assertEqual(len(actions), 1)
             self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["chat_id"], -1003806095342)
             self.assertEqual(actions[0]["reply_to_message_id"], 2814)
             self.assertIn(8629045843, pack.claimed_user_ids)
             self.assertEqual(pack.claims[0].display_name, "领取者")
@@ -540,6 +542,7 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertEqual(len(actions), 1)
             self.assertEqual(actions[0]["type"], "send_message")
             self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["chat_id"], -1003806095342)
             self.assertEqual(actions[0]["reply_to_message_id"], 2821)
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
             self.assertEqual(claim_ctx.client.deleted[0]["message_ids"], [created_pack.message_id])
@@ -590,6 +593,7 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertEqual(len(actions), 1)
             self.assertEqual(actions[0]["type"], "send_message")
             self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["chat_id"], -1003806095342)
             self.assertEqual(actions[0]["reply_to_message_id"], 2821)
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
             self.assertEqual(claim_ctx.client.deleted[0]["message_ids"], [created_pack.message_id])
@@ -659,6 +663,7 @@ class LuckyRedpackTest(unittest.TestCase):
 
             self.assertEqual(len(claim_actions), 1)
             self.assertEqual(claim_actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(claim_actions[0]["chat_id"], -1003806095342)
             self.assertEqual(claim_actions[0]["reply_to_message_id"], 2839)
 
             packs = await claim_plugin._load_active_packs(claim_ctx, -1003806095342)
@@ -666,6 +671,58 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertEqual(packs[0].remaining_count, 1)
             self.assertNotEqual(packs[0].current_password, claimed_password)
             self.assertEqual(packs[0].claims[0].user_id, 8629045843)
+
+            await creator_plugin.on_shutdown(create_ctx)
+            await claim_plugin.on_shutdown(claim_ctx)
+
+        asyncio.run(run_case())
+
+    def test_account_index_recovers_when_chat_state_key_is_missing(self) -> None:
+        async def run_case() -> None:
+            redis = FakeRedis()
+            creator_plugin = plugin_module.LuckyRedpackPlugin()
+            claim_plugin = plugin_module.LuckyRedpackPlugin()
+            create_ctx = PluginContext(redis=redis)
+            claim_ctx = PluginContext(redis=redis)
+            create_ctx.client = FakeClient()
+            claim_ctx.client = FakeClient()
+            shared_config = {
+                "command": "rp",
+                "default_amount": 2000,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            create_ctx.config = dict(shared_config)
+            claim_ctx.config = dict(shared_config)
+            await creator_plugin.on_startup(create_ctx)
+            await claim_plugin.on_startup(claim_ctx)
+
+            chat_id = -1003806095342
+            command_event = FakeMessage(",rp 测试 2000 2", chat_id=chat_id, sender_id=1, outgoing=True)
+            await creator_plugin._cmd_handler(create_ctx.client, command_event, ["测试", "2000", "2"], 1, create_ctx)
+            created_pack = creator_plugin._packs[chat_id][0]
+            password = created_pack.current_password
+
+            redis.store.pop(creator_plugin._state_key(create_ctx.account_id, chat_id), None)
+            creator_plugin._state_file(create_ctx.account_id, chat_id).unlink(missing_ok=True)
+            claim_plugin._packs.clear()
+
+            actions = await claim_plugin.on_event(
+                claim_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2843, "text": password},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["chat_id"], chat_id)
+            self.assertEqual(actions[0]["reply_to_message_id"], 2843)
 
             await creator_plugin.on_shutdown(create_ctx)
             await claim_plugin.on_shutdown(claim_ctx)
