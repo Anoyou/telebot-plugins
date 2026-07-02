@@ -3,7 +3,7 @@
   "display_name": "拼手气口令红包",
   "description": "纯 UserBot 口令红包插件，支持多红包并行、红包代码管理和图片财富密码",
   "author": "Anoyou",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -129,7 +129,7 @@
       "source": [
         "userbot"
       ],
-      "scope": "chat",
+      "scope": "all_allowed_chats",
       "description": "监听群友发送的财富密码，并由 UserBot 回复 +金额。"
     }
   ],
