@@ -1,0 +1,122 @@
+"""拼手气口令红包插件 Manifest。"""
+
+from __future__ import annotations
+
+from app.worker.plugins.manifest import Manifest
+
+
+CONFIG_SCHEMA = {
+    "type": "object",
+    "x-ui-mode": "single",
+    "x-usage-guide": "管理员发送 {prefix}{command} 发财 88888 10 创建红包；群友发送财富密码领取，插件会用 UserBot 回复 +金额；财富密码每被领一次会随机刷新。",
+    "additionalProperties": False,
+    "properties": {
+        "usage_preview": {
+            "type": "string",
+            "title": "玩法说明",
+            "readOnly": True,
+            "default": "管理员发送 {prefix}{command} 发财 88888 10 创建拼手气红包。\n群友发送当前财富密码即可领取，例如：发财A7K9。\n每领取一次财富密码都会随机刷新，金额消息固定由 UserBot 回复领取者消息发送。",
+            "description": "只读说明；实际系统前缀由 TelePilot 当前命令前缀决定。",
+        },
+        "command": {
+            "type": "string",
+            "title": "触发指令名",
+            "default": "rp",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^\\S+$",
+            "description": "只填写命令本体，不要填写系统前缀。",
+        },
+        "default_amount": {
+            "type": "integer",
+            "title": "默认总额",
+            "default": 88888,
+            "minimum": 1,
+            "maximum": 999999999,
+        },
+        "default_count": {
+            "type": "integer",
+            "title": "默认人数",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 500,
+        },
+        "min_share_amount": {
+            "type": "integer",
+            "title": "最低单包金额",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 999999999,
+        },
+        "suffix_length": {
+            "type": "integer",
+            "title": "随机码位数",
+            "default": 4,
+            "minimum": 1,
+            "maximum": 12,
+            "description": "财富密码 = 基础口令 + 随机码，例如发财A7K9。",
+        },
+        "ttl_seconds": {
+            "type": "integer",
+            "title": "红包有效期（秒）",
+            "default": 3600,
+            "minimum": 30,
+            "maximum": 86400,
+        },
+        "allow_owner_claim": {
+            "type": "boolean",
+            "title": "允许发起人领取",
+            "default": False,
+        },
+        "delete_command_message": {
+            "type": "boolean",
+            "title": "发出后删除原指令",
+            "default": False,
+        },
+    },
+    "required": [
+        "command",
+        "default_amount",
+        "default_count",
+        "min_share_amount",
+        "suffix_length",
+        "ttl_seconds",
+    ],
+}
+
+USAGE = "管理员发送 {prefix}{command} 发财 88888 10 创建红包；群友发送财富密码领取，插件会用 UserBot 回复 +金额；财富密码每被领一次会随机刷新。本插件不提供交互 Bot 入口，资金动作只走 UserBot。"
+EVENT_SUBSCRIPTIONS = [
+    {
+        "events": ["command"],
+        "source": ["userbot"],
+        "scope": "owner_only",
+        "description": "账号主人或授权管理员通过 UserBot 命令创建、查看或清空红包。",
+    },
+    {
+        "events": ["message"],
+        "source": ["userbot"],
+        "scope": "chat",
+        "description": "监听群友发送的财富密码，并由 UserBot 回复 +金额。",
+    },
+]
+CAPABILITIES = {}
+
+MANIFEST = Manifest(
+    key="lucky_redpack",
+    display_name="拼手气口令红包",
+    version="1.0.0",
+    min_telepilot_version="0.33.0",
+    min_telebot_version="0.10.0",
+    author="Anoyou",
+    description="纯 UserBot 口令红包插件，财富密码由基础口令加随机码组成，每领取一次自动刷新",
+    permissions=["send_message", "edit_message", "read_chat", "delete_message"],
+    category="interactive",
+    config_schema=CONFIG_SCHEMA,
+)
+
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
+
+__all__ = ["MANIFEST"]
+

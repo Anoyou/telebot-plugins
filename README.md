@@ -24,6 +24,7 @@ TelePilot 远程插件仓库。
 | [sum](./sum/) | `{prefix}sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
 | [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
 | [quick_qa](./quick_qa/) | `{prefix}quickqa` | 快问快答积分淘汰赛，支持 URL + AI 生成题库 |
+| [lucky_redpack](./lucky_redpack/) | `{prefix}rp 发财 88888 10` | 拼手气口令红包，财富密码每次领取后随机刷新 |
 
 ## byRBQ 迁移插件（Pagermaid → TelePilot）
 
