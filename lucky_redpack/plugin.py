@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.6"
+PLUGIN_VERSION = "1.3.7"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -80,6 +80,14 @@ MAX_AMOUNT = 999_999_999
 MAX_COUNT = 500
 SUFFIX_CHARS = string.ascii_uppercase + string.digits
 PACK_CODE_CHARS = string.ascii_uppercase + string.digits
+PASSWORD_CONFUSABLE_CHARS = str.maketrans({
+    "z": "2",
+    "Z": "2",
+    "i": "1",
+    "I": "1",
+    "l": "1",
+    "L": "1",
+})
 IMAGE_WIDTH = 980
 IMAGE_HEIGHT = 320
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -441,7 +449,7 @@ def _event_text(event: Any) -> str:
 
 
 def _normalize_password(value: str) -> str:
-    return "".join(str(value or "").split()).casefold()
+    return "".join(str(value or "").split()).translate(PASSWORD_CONFUSABLE_CHARS).casefold()
 
 
 def _split_args(args: list[str]) -> list[str]:
@@ -1122,20 +1130,21 @@ class LuckyRedpackPlugin(Plugin):
                 await ctx.log("warn", f"[lucky_redpack] 写入 Redis 红包状态失败，已保留本地状态：{type(exc).__name__}")
 
     async def _persist_pack(self, ctx: PluginContext, pack: LuckyRedpack) -> None:
+        incoming_pack = _pack_from_payload(_pack_to_payload(pack)) or pack
         async with self._get_lock(pack.chat_id):
             with self._state_file_lock(ctx.account_id, pack.chat_id):
                 packs = await self._load_active_packs(ctx, pack.chat_id)
                 replaced = False
                 next_packs: list[LuckyRedpack] = []
                 for item in packs:
-                    if item.pack_code == pack.pack_code:
-                        next_packs.append(pack)
+                    if item.pack_code == incoming_pack.pack_code:
+                        next_packs.append(incoming_pack)
                         replaced = True
                     else:
                         next_packs.append(item)
-                if not replaced and not pack.is_finished() and not pack.is_expired():
-                    next_packs.append(pack)
-                await self._save_active_packs(ctx, pack.chat_id, next_packs)
+                if not replaced and not incoming_pack.is_finished() and not incoming_pack.is_expired():
+                    next_packs.append(incoming_pack)
+                await self._save_active_packs(ctx, incoming_pack.chat_id, next_packs)
 
     async def _persist_created_message_id(
         self,

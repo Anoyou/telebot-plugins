@@ -326,6 +326,38 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_claim_password_accepts_confusable_suffix_chars(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, command_event, ["测试", "100", "2"], 1, ctx)
+            pack = plugin._packs[100][0]
+            pack.current_suffix = "Z1I2"
+            pack.used_passwords.add(plugin_module._normalize_password(pack.current_password))
+            await plugin._save_active_packs(ctx, 100, [pack])
+
+            claim_event = FakeMessage("测试211Z", chat_id=100, sender_id=2, outgoing=False)
+            await plugin.on_message(ctx, claim_event)
+
+            self.assertEqual(ctx.client.sent[0]["reply_to"], claim_event.id)
+            self.assertRegex(ctx.client.sent[0]["text"], r"^\+\d+$")
+            self.assertIn(2, pack.claimed_user_ids)
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
     def test_creator_can_claim_with_outgoing_message_by_default(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
@@ -349,6 +381,35 @@ class LuckyRedpackTest(unittest.TestCase):
 
             self.assertEqual(ctx.client.sent[0]["reply_to"], claim_event.id)
             self.assertRegex(ctx.client.sent[0]["text"], r"^\+\d+$")
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_persist_pack_keeps_incoming_updated_message_id(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, command_event, ["测试", "100", "2"], 1, ctx)
+            pack = plugin._packs[100][0]
+            self.assertIsNotNone(pack.message_id)
+
+            pack.message_id = 987654
+            await plugin._persist_pack(ctx, pack)
+
+            loaded = await plugin._load_active_packs(ctx, 100)
+            self.assertEqual(loaded[0].message_id, 987654)
 
             await plugin.on_shutdown(ctx)
 
