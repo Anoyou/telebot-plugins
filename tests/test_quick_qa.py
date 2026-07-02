@@ -324,7 +324,7 @@ class QuickQATest(unittest.TestCase):
     def test_keyword_route_creates_lobby(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.QuickQAPlugin()
-            ctx = PluginContext(account_id=1, config={"command": "qa", "entry_fee": 100})
+            ctx = PluginContext(account_id=1, config={"command": "qa", "entry_fee": 100, "start_keyword": "我要答题"})
             await plugin.on_startup(ctx)
             try:
                 actions = await plugin.on_interaction(
@@ -335,6 +335,31 @@ class QuickQATest(unittest.TestCase):
 
                 self.assertIn(-100123, plugin._games)
                 self.assertTrue(any("快问快答报名中" in action.get("text", "") for action in actions))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_transfer_command_message_does_not_reopen_lobby(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(account_id=1, config={"command": "qa", "entry_fee": 100, "start_keyword": "我要答题"})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("我要答题", 111, "玩家A"),
+                )
+
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("+100", 111, "玩家A", message_id=701),
+                )
+
+                self.assertEqual(actions, [])
+                self.assertIn(-100123, plugin._games)
             finally:
                 await plugin.on_shutdown(ctx)
 

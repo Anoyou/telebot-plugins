@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.2.4"
+PLUGIN_VERSION = "1.2.5"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -895,7 +895,7 @@ class QuickQAPlugin(Plugin):
         trigger = _dict(payload.get("trigger"))
         if str(trigger.get("type") or trigger.get("event_type") or "").strip() == "keyword":
             return True
-        return _source_channel(payload) == "interaction_bot" and event_type == "message"
+        return False
 
     async def _handle_callback(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         data = _callback_data(payload)
