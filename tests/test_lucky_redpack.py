@@ -221,6 +221,63 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_claim_password_ignores_inner_spaces(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, command_event, ["测试", "100", "2"], 1, ctx)
+            pack = plugin._packs[100][0]
+            spaced_password = f"{pack.base_keyword} {pack.current_suffix}"
+
+            claim_event = FakeMessage(spaced_password, chat_id=100, sender_id=2, outgoing=False)
+            await plugin.on_message(ctx, claim_event)
+
+            self.assertEqual(ctx.client.sent[1]["reply_to"], claim_event.id)
+            self.assertRegex(ctx.client.sent[1]["text"], r"^\+\d+$")
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_creator_can_claim_with_outgoing_message_by_default(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, command_event, ["测试", "100", "2"], 1, ctx)
+            pack = plugin._packs[100][0]
+
+            claim_event = FakeMessage(pack.current_password, chat_id=100, sender_id=1, outgoing=True)
+            await plugin.on_message(ctx, claim_event)
+
+            self.assertEqual(ctx.client.sent[1]["reply_to"], claim_event.id)
+            self.assertRegex(ctx.client.sent[1]["text"], r"^\+\d+$")
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
     def test_image_mode_sends_password_as_file_without_caption_password(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()

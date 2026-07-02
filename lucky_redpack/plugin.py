@@ -58,7 +58,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.2.2"
+PLUGIN_VERSION = "1.2.3"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -67,6 +67,7 @@ DEFAULT_MIN_SHARE_AMOUNT = 1
 DEFAULT_SUFFIX_LENGTH = 4
 DEFAULT_TTL_SECONDS = 3600
 DEFAULT_IMAGE_PASSWORD_ENABLED = False
+DEFAULT_ALLOW_OWNER_CLAIM = True
 MAX_AMOUNT = 999_999_999
 MAX_COUNT = 500
 SUFFIX_CHARS = string.ascii_uppercase + string.digits
@@ -214,7 +215,7 @@ def _event_text(event: Any) -> str:
 
 
 def _normalize_password(value: str) -> str:
-    return " ".join(str(value or "").strip().split()).casefold()
+    return "".join(str(value or "").split()).casefold()
 
 
 def _split_args(args: list[str]) -> list[str]:
@@ -519,7 +520,7 @@ class LuckyRedpackPlugin(Plugin):
         self._ttl_seconds = DEFAULT_TTL_SECONDS
         self._image_password_enabled = DEFAULT_IMAGE_PASSWORD_ENABLED
         self._delete_command_message = False
-        self._allow_owner_claim = False
+        self._allow_owner_claim = DEFAULT_ALLOW_OWNER_CLAIM
         self._packs: dict[int, list[LuckyRedpack]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -585,7 +586,7 @@ class LuckyRedpackPlugin(Plugin):
         self._ttl_seconds = _clamp_int(cfg.get("ttl_seconds"), DEFAULT_TTL_SECONDS, 30, 86400)
         self._image_password_enabled = bool(cfg.get("image_password_enabled", DEFAULT_IMAGE_PASSWORD_ENABLED))
         self._delete_command_message = bool(cfg.get("delete_command_message", False))
-        self._allow_owner_claim = bool(cfg.get("allow_owner_claim", False))
+        self._allow_owner_claim = bool(cfg.get("allow_owner_claim", DEFAULT_ALLOW_OWNER_CLAIM))
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
             await ctx.log("info", f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}")
@@ -716,9 +717,6 @@ class LuckyRedpackPlugin(Plugin):
         chat_id = _chat_id_from_event(event)
         if not chat_id:
             return
-        if _is_outgoing_event(event):
-            return
-
         async with self._get_lock(chat_id):
             packs = self._active_packs(chat_id)
             pack = next(

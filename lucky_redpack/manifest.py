@@ -72,7 +72,7 @@ CONFIG_SCHEMA = {
         "allow_owner_claim": {
             "type": "boolean",
             "title": "允许发起人领取",
-            "default": False,
+            "default": True,
         },
         "delete_command_message": {
             "type": "boolean",
@@ -111,7 +111,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.2.2",
+    version="1.2.3",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
