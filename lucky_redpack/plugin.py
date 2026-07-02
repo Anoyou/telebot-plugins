@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.4"
+PLUGIN_VERSION = "1.3.5"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -85,6 +85,7 @@ IMAGE_HEIGHT = 320
 PLUGIN_DIR = Path(__file__).resolve().parent
 STATE_DIR_ENV = "LUCKY_REDPACK_STATE_DIR"
 DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "telepilot_lucky_redpack_state"
+SETTLEMENT_DELETE_DELAY_SECONDS = 60
 BUNDLED_FONT_CANDIDATES = [
     PLUGIN_DIR.parent / "redpack-byRBQ" / "assets" / "font.ttf",
 ]
@@ -321,6 +322,13 @@ def _payload_sender_name(payload: dict[str, Any], sender_id: int) -> str:
     event = _payload_event(payload)
     source = _payload_source(payload)
     message = _payload_message(payload)
+    tg_name = _display_name_from_parts(
+        sender.get("first_name") or actor.get("first_name") or event.get("first_name") or message.get("first_name") or source.get("first_name"),
+        sender.get("last_name") or actor.get("last_name") or event.get("last_name") or message.get("last_name") or source.get("last_name"),
+        sender.get("username") or actor.get("username") or event.get("username") or message.get("username") or source.get("username"),
+    )
+    if tg_name:
+        return _short_display_name(tg_name)
     name = (
         sender.get("display_name")
         or sender.get("name")
@@ -333,7 +341,27 @@ def _payload_sender_name(payload: dict[str, Any], sender_id: int) -> str:
         or sender_id
         or "玩家"
     )
-    return str(name).strip() or "玩家"
+    return _short_display_name(str(name).strip() or "玩家")
+
+
+def _display_name_from_parts(first_name: Any = None, last_name: Any = None, username: Any = None) -> str:
+    name = " ".join(
+        part
+        for part in (
+            str(first_name or "").strip(),
+            str(last_name or "").strip(),
+        )
+        if part
+    )
+    if name:
+        return name
+    username_text = str(username or "").strip().lstrip("@")
+    return f"@{username_text}" if username_text else ""
+
+
+def _short_display_name(name: Any, *, limit: int = 10) -> str:
+    text = str(name or "").strip() or "玩家"
+    return text if len(text) <= limit else text[:limit].strip()
 
 
 def _payload_actor_is_bot(payload: dict[str, Any]) -> bool:
@@ -651,7 +679,7 @@ def render_claim_details(pack: LuckyRedpack) -> str:
     lines = ["领取详情："]
     for index, claim in enumerate(pack.claims, start=1):
         suffix = " 🏆" if claim is best else ""
-        lines.append(f"{index}. {_html(claim.display_name)} +{claim.amount}{suffix}")
+        lines.append(f"{index}. {_html(_short_display_name(claim.display_name))} +{claim.amount}{suffix}")
     return f"<blockquote expandable>{chr(10).join(lines)}</blockquote>"
 
 
@@ -675,19 +703,14 @@ def render_redpack_message(pack: LuckyRedpack) -> str:
 
 def render_settlement(pack: LuckyRedpack, *, expired: bool = False) -> str:
     title = "🕒 拼手气红包已超时" if expired else "🧧 拼手气红包已领完"
-    lines = [
+    text = "\n".join([
         title,
         f"红包代码：{pack.pack_code}",
         f"总额：{pack.total_amount}｜已领：{len(pack.claims)}/{pack.total_count}｜剩余：{pack.remaining_amount}",
-    ]
+    ])
     if not pack.claims:
-        return "\n".join(lines)
-    best = max(pack.claims, key=lambda claim: claim.amount)
-    lines.append("领取详情：")
-    for index, claim in enumerate(pack.claims, start=1):
-        suffix = " 🏆" if claim is best else ""
-        lines.append(f"{index}. {claim.display_name} +{claim.amount}{suffix}")
-    return "\n".join(lines)
+        return text
+    return f"{text}\n{render_claim_details(pack)}"
 
 
 def _send_action(
@@ -1319,18 +1342,18 @@ class LuckyRedpackPlugin(Plugin):
                     )
 
         try:
-            sent = await self._send_pack_message(ctx, pack, reply_to=command_message_id)
+            sent = await self._send_pack_message(ctx, pack, edit_message_id=command_message_id)
         except RuntimeError as exc:
             await self._remove_pack_by_code(ctx, chat_id, pack.pack_code)
             if ctx.log:
                 await ctx.log("error", f"[lucky_redpack] 图片财富密码生成失败：{exc}")
             return reply_action(f"图片财富密码生成失败：{exc}")
 
-        sent_message_id = _message_id_from_event(sent)
+        sent_message_id = _message_id_from_event(sent) or command_message_id
         pack.message_id = sent_message_id
         await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
-        if self._delete_command_message and command_message_id:
+        if self._delete_command_message and command_message_id and sent_message_id != command_message_id:
             await self._delete_message(ctx, chat_id, command_message_id)
         return []
 
@@ -1441,19 +1464,20 @@ class LuckyRedpackPlugin(Plugin):
                         ),
                     )
 
+        command_message_id = _message_id_from_event(event)
         try:
-            sent = await self._send_pack_message(ctx, pack, reply_to=_message_id_from_event(event))
+            sent = await self._send_pack_message(ctx, pack, edit_message_id=command_message_id)
         except RuntimeError as exc:
             await self._remove_pack_by_code(ctx, chat_id, pack.pack_code)
             if ctx.log:
                 await ctx.log("error", f"[lucky_redpack] 图片财富密码生成失败：{exc}")
             await self._reply(event, f"图片财富密码生成失败：{exc}")
             return
-        sent_message_id = _message_id_from_event(sent) if sent is not None else _message_id_from_event(event)
+        sent_message_id = _message_id_from_event(sent) or command_message_id
         pack.message_id = sent_message_id
         await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
-        if self._delete_command_message:
+        if self._delete_command_message and sent_message_id != command_message_id:
             await self._delete_event(ctx, event)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
@@ -1467,7 +1491,7 @@ class LuckyRedpackPlugin(Plugin):
             return
         sender = await self._sender(event)
         sender_id = int(getattr(sender, "id", 0) or _sender_id_from_event(event))
-        display_name = public_entity_display_name(sender, fallback_id=sender_id, default="玩家")
+        display_name = self._sender_display_name(sender, sender_id)
         actions, pack_to_resend = await self._claim_password(
             ctx,
             text=text,
@@ -1527,9 +1551,7 @@ class LuckyRedpackPlugin(Plugin):
                 if pack.is_expired():
                     packs = [item for item in packs if item.pack_code != pack.pack_code]
                     await self._save_active_packs(ctx, chat_id, packs)
-                    if pack.message_id:
-                        actions.append(_delete_action(pack.message_id, chat_id=chat_id))
-                    actions.append(_send_action(render_settlement(pack, expired=True), chat_id=chat_id, send_via="userbot_reply"))
+                    self._track_task(asyncio.create_task(self._send_temporary_settlement(ctx, pack, expired=True)))
                     return actions, None
                 if not sender_id:
                     if ctx.log:
@@ -1561,9 +1583,7 @@ class LuckyRedpackPlugin(Plugin):
                 if pack.is_finished():
                     packs = [item for item in packs if item.pack_code != pack.pack_code]
                     await self._save_active_packs(ctx, chat_id, packs)
-                    if pack.message_id:
-                        actions.append(_delete_action(pack.message_id, chat_id=chat_id))
-                    actions.append(_send_action(render_settlement(pack), chat_id=chat_id, send_via="userbot_reply"))
+                    self._track_task(asyncio.create_task(self._send_temporary_settlement(ctx, pack)))
                 else:
                     pack.current_suffix = self._new_suffix(pack)
                     pack.used_passwords.add(_normalize_password(pack.current_password))
@@ -1642,6 +1662,16 @@ class LuckyRedpackPlugin(Plugin):
                 return sender
         return getattr(event, "sender", None) or getattr(getattr(event, "message", None), "sender", None)
 
+    def _sender_display_name(self, sender: Any, sender_id: int) -> str:
+        name = _display_name_from_parts(
+            getattr(sender, "first_name", None),
+            getattr(sender, "last_name", None),
+            getattr(sender, "username", None),
+        )
+        if name:
+            return _short_display_name(name)
+        return _short_display_name(public_entity_display_name(sender, fallback_id=sender_id, default="玩家"))
+
     async def _resend_pack_message(self, ctx: PluginContext, pack: LuckyRedpack) -> None:
         if ctx.client is None:
             return
@@ -1654,11 +1684,23 @@ class LuckyRedpackPlugin(Plugin):
             if ctx.log:
                 await ctx.log("warn", f"[lucky_redpack] 红包消息重发失败：{type(exc).__name__}: {exc}")
 
-    async def _send_pack_message(self, ctx: PluginContext, pack: LuckyRedpack, *, reply_to: int | None = None) -> Any:
+    async def _send_pack_message(
+        self,
+        ctx: PluginContext,
+        pack: LuckyRedpack,
+        *,
+        reply_to: int | None = None,
+        edit_message_id: int | None = None,
+    ) -> Any:
         if ctx.client is None:
             return None
         caption = render_redpack_message(pack)
         if not pack.image_mode:
+            if edit_message_id:
+                edit_message = getattr(ctx.client, "edit_message", None)
+                if callable(edit_message):
+                    result = await _maybe_await(edit_message(pack.chat_id, edit_message_id, caption, parse_mode="html"))
+                    return result
             return await ctx.client.send_message(pack.chat_id, caption, parse_mode="html", reply_to=reply_to)
 
         image_path = build_password_image(pack.current_password)
@@ -1678,6 +1720,36 @@ class LuckyRedpackPlugin(Plugin):
                 image_path.parent.rmdir()
             except Exception:
                 pass
+
+    async def _send_temporary_settlement(self, ctx: PluginContext, pack: LuckyRedpack, *, expired: bool = False) -> None:
+        if ctx.client is None:
+            return
+        sent_message_id: int | None = None
+        try:
+            sent = await ctx.client.send_message(pack.chat_id, render_settlement(pack, expired=expired), parse_mode="html")
+            sent_message_id = _message_id_from_event(sent)
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[lucky_redpack] 结算消息发送失败：{type(exc).__name__}: {exc}")
+        message_ids = [item for item in (pack.message_id, sent_message_id) if item]
+        if message_ids:
+            self._track_task(asyncio.create_task(self._delete_messages_later(ctx, pack.chat_id, message_ids)))
+
+    async def _delete_messages_later(self, ctx: PluginContext, chat_id: int, message_ids: list[int]) -> None:
+        await asyncio.sleep(SETTLEMENT_DELETE_DELAY_SECONDS)
+        unique_ids = sorted({int(item) for item in message_ids if item})
+        if not unique_ids:
+            return
+        if ctx.client is None:
+            return
+        delete_messages = getattr(ctx.client, "delete_messages", None)
+        if not callable(delete_messages):
+            return
+        try:
+            await _maybe_await(delete_messages(chat_id, unique_ids))
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[lucky_redpack] 自动删除结算消息失败：{type(exc).__name__}: {exc}")
 
     async def _delete_event(self, ctx: PluginContext, event: Any) -> None:
         delete = getattr(event, "delete", None) or getattr(getattr(event, "message", None), "delete", None)
@@ -1723,9 +1795,8 @@ class LuckyRedpackPlugin(Plugin):
                     return
                 packs = [item for item in packs if item.pack_code != pack.pack_code]
                 await self._save_active_packs(ctx, chat_id, packs)
-                settlement = render_settlement(pack, expired=True)
         if ctx.client is not None:
-            await ctx.client.send_message(chat_id, settlement, reply_to=pack.message_id)
+            await self._send_temporary_settlement(ctx, pack, expired=True)
 
 
 PLUGIN_CLASS = LuckyRedpackPlugin

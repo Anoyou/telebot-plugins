@@ -107,6 +107,7 @@ class FakeClient:
         self.edited: list[dict] = []
         self.deleted: list[dict] = []
         self.on_send_message = None
+        self.on_edit_message = None
 
     async def send_message(self, chat_id, text, **kwargs):
         msg = FakeMessage(text, chat_id=chat_id, sender_id=0, outgoing=True)
@@ -124,6 +125,10 @@ class FakeClient:
 
     async def edit_message(self, chat_id, message_id, text, **kwargs):
         self.edited.append({"chat_id": chat_id, "message_id": message_id, "text": text, **kwargs})
+        if self.on_edit_message is not None:
+            result = self.on_edit_message(chat_id, message_id, text, kwargs)
+            if asyncio.iscoroutine(result):
+                await result
 
     async def delete_messages(self, chat_id, message_ids):
         self.deleted.append({"chat_id": chat_id, "message_ids": list(message_ids)})
@@ -220,6 +225,32 @@ class LuckyRedpackTest(unittest.TestCase):
         self.assertIn("2. 用户3 +333 🏆", text)
         self.assertTrue(text.endswith("</blockquote>"))
 
+    def test_render_settlement_uses_folded_truncated_claim_details(self) -> None:
+        pack = plugin_module.LuckyRedpack(
+            pack_code="ABC123",
+            chat_id=1,
+            creator_user_id=10,
+            base_keyword="发财",
+            total_amount=666,
+            total_count=2,
+            min_share_amount=1,
+            suffix_length=4,
+            created_at=1,
+            expires_at=999,
+            current_suffix="8ZB9",
+            remaining_amount=0,
+            remaining_count=0,
+        )
+        pack.claims.append(plugin_module.ClaimRecord(user_id=2, display_name="这是一个超过十个字的用户名", amount=222, message_id=10))
+        pack.claims.append(plugin_module.ClaimRecord(user_id=3, display_name="用户<3>", amount=444, message_id=11))
+
+        text = plugin_module.render_settlement(pack)
+
+        self.assertIn("🧧 拼手气红包已领完", text)
+        self.assertIn("<blockquote expandable>领取详情：", text)
+        self.assertIn("1. 这是一个超过十个字的 +222", text)
+        self.assertIn("2. 用户&lt;3&gt; +444 🏆", text)
+
     def test_claim_sends_userbot_transfer_reply_and_resends_redpack_message(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
@@ -243,15 +274,15 @@ class LuckyRedpackTest(unittest.TestCase):
             claim_event = FakeMessage(first_password, chat_id=100, sender_id=2, outgoing=False)
             await plugin.on_message(ctx, claim_event)
 
-            self.assertEqual(len(ctx.client.sent), 3)
-            self.assertEqual(ctx.client.sent[1]["reply_to"], claim_event.id)
-            self.assertRegex(ctx.client.sent[1]["text"], r"^\+\d+$")
-            self.assertEqual(len(ctx.client.edited), 0)
+            self.assertEqual(len(ctx.client.sent), 2)
+            self.assertEqual(ctx.client.sent[0]["reply_to"], claim_event.id)
+            self.assertRegex(ctx.client.sent[0]["text"], r"^\+\d+$")
+            self.assertEqual(len(ctx.client.edited), 1)
             self.assertEqual(ctx.client.deleted[0]["message_ids"], [old_redpack_message_id])
             self.assertNotEqual(pack.current_password, first_password)
-            self.assertIn("财富密码：", ctx.client.sent[2]["text"])
-            self.assertIn("<blockquote expandable>领取详情：", ctx.client.sent[2]["text"])
-            self.assertEqual(ctx.client.sent[2]["parse_mode"], "html")
+            self.assertIn("财富密码：", ctx.client.sent[1]["text"])
+            self.assertIn("<blockquote expandable>领取详情：", ctx.client.sent[1]["text"])
+            self.assertEqual(ctx.client.sent[1]["parse_mode"], "html")
 
             await plugin.on_shutdown(ctx)
 
@@ -279,8 +310,8 @@ class LuckyRedpackTest(unittest.TestCase):
             claim_event = FakeMessage(spaced_password, chat_id=100, sender_id=2, outgoing=False)
             await plugin.on_message(ctx, claim_event)
 
-            self.assertEqual(ctx.client.sent[1]["reply_to"], claim_event.id)
-            self.assertRegex(ctx.client.sent[1]["text"], r"^\+\d+$")
+            self.assertEqual(ctx.client.sent[0]["reply_to"], claim_event.id)
+            self.assertRegex(ctx.client.sent[0]["text"], r"^\+\d+$")
 
             await plugin.on_shutdown(ctx)
 
@@ -307,8 +338,8 @@ class LuckyRedpackTest(unittest.TestCase):
             claim_event = FakeMessage(pack.current_password, chat_id=100, sender_id=1, outgoing=True)
             await plugin.on_message(ctx, claim_event)
 
-            self.assertEqual(ctx.client.sent[1]["reply_to"], claim_event.id)
-            self.assertRegex(ctx.client.sent[1]["text"], r"^\+\d+$")
+            self.assertEqual(ctx.client.sent[0]["reply_to"], claim_event.id)
+            self.assertRegex(ctx.client.sent[0]["text"], r"^\+\d+$")
 
             await plugin.on_shutdown(ctx)
 
@@ -355,7 +386,7 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
-    def test_delete_command_message_falls_back_to_client_delete_messages(self) -> None:
+    def test_text_redpack_edits_command_message_instead_of_replying(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
             ctx = PluginContext()
@@ -374,7 +405,10 @@ class LuckyRedpackTest(unittest.TestCase):
             command_event.delete = None
             await plugin._cmd_handler(ctx.client, command_event, ["发财", "100", "2"], 1, ctx)
 
-            self.assertEqual(ctx.client.deleted[0]["message_ids"], [command_event.id])
+            self.assertEqual(ctx.client.sent, [])
+            self.assertEqual(ctx.client.deleted, [])
+            self.assertEqual(ctx.client.edited[0]["message_id"], command_event.id)
+            self.assertIn("🧧 拼手气红包", ctx.client.edited[0]["text"])
             await plugin.on_shutdown(ctx)
 
         asyncio.run(run_case())
@@ -535,8 +569,10 @@ class LuckyRedpackTest(unittest.TestCase):
             )
 
             self.assertEqual(command_actions, [])
-            self.assertEqual(len(create_ctx.client.sent), 1)
-            self.assertIn("🧧 拼手气红包", create_ctx.client.sent[0]["text"])
+            self.assertEqual(create_ctx.client.sent, [])
+            self.assertEqual(len(create_ctx.client.edited), 1)
+            self.assertEqual(create_ctx.client.edited[0]["message_id"], 2848)
+            self.assertIn("🧧 拼手气红包", create_ctx.client.edited[0]["text"])
             created_pack = creator_plugin._packs[chat_id][0]
             password = created_pack.current_password
             self.assertIsNotNone(created_pack.message_id)
@@ -561,6 +597,54 @@ class LuckyRedpackTest(unittest.TestCase):
 
             await creator_plugin.on_shutdown(create_ctx)
             await claim_plugin.on_shutdown(claim_ctx)
+
+        asyncio.run(run_case())
+
+    def test_event_bus_claim_prefers_original_tg_name_and_truncates_it(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            chat_id = -1003806095342
+            await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "command", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2848, "text": "rp 测试 100 2"},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 1682400007, "display_name": "发起人"},
+                },
+            )
+            pack = plugin._packs[chat_id][0]
+
+            await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2850, "text": pack.current_password},
+                    "chat": {"id": chat_id},
+                    "sender": {
+                        "user_id": 8629045843,
+                        "display_name": "联系人备注",
+                        "first_name": "这是一个超过十个字的用户名",
+                        "last_name": "后缀",
+                    },
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(plugin._packs[chat_id][0].claims[0].display_name, "这是一个超过十个字的")
+
+            await plugin.on_shutdown(ctx)
 
         asyncio.run(run_case())
 
@@ -703,7 +787,7 @@ class LuckyRedpackTest(unittest.TestCase):
             claim_actions: list[dict] = []
             claimed_password = ""
 
-            async def claim_during_announcement(chat_id, text, _msg, _kwargs):
+            async def claim_during_announcement(chat_id, _message_id, text, _kwargs):
                 nonlocal claim_actions, claimed_password
                 if "🧧 拼手气红包" not in text or "财富密码：" not in text:
                     return
@@ -719,7 +803,7 @@ class LuckyRedpackTest(unittest.TestCase):
                     },
                 )
 
-            create_ctx.client.on_send_message = claim_during_announcement
+            create_ctx.client.on_edit_message = claim_during_announcement
 
             command_event = FakeMessage(",rp 测试 2000 2", chat_id=-1003806095342, sender_id=1, outgoing=True)
             await creator_plugin._cmd_handler(create_ctx.client, command_event, ["测试", "2000", "2"], 1, create_ctx)
@@ -821,6 +905,56 @@ class LuckyRedpackTest(unittest.TestCase):
         )
 
         self.assertEqual(plugin_module.calculate_random_claim_amount(pack), 37)
+
+    def test_finished_pack_deletes_original_and_settlement_after_delay(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 1,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            old_delay = plugin_module.SETTLEMENT_DELETE_DELAY_SECONDS
+            plugin_module.SETTLEMENT_DELETE_DELAY_SECONDS = 0
+            try:
+                await plugin.on_startup(ctx)
+                await plugin.on_event(
+                    ctx,
+                    {
+                        "source": {"type": "command", "channel": "userbot", "account_id": 1},
+                        "message": {"chat_id": 100, "message_id": 2001, "text": "rp 测试 100 1"},
+                        "chat": {"id": 100},
+                        "sender": {"user_id": 1, "display_name": "发起人"},
+                    },
+                )
+                pack = plugin._packs[100][0]
+
+                actions = await plugin.on_event(
+                    ctx,
+                    {
+                        "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                        "message": {"chat_id": 100, "message_id": 2002, "text": pack.current_password},
+                        "chat": {"id": 100},
+                        "sender": {"user_id": 2, "display_name": "领取者", "first_name": "领取者"},
+                    },
+                )
+                await asyncio.sleep(0.01)
+
+                self.assertEqual(len(actions), 1)
+                self.assertRegex(actions[0]["text"], r"^\+\d+$")
+                self.assertIn("🧧 拼手气红包已领完", ctx.client.sent[-1]["text"])
+                deleted_ids = [message_id for item in ctx.client.deleted for message_id in item["message_ids"]]
+                self.assertIn(2001, deleted_ids)
+                self.assertIn(ctx.client.sent[-1]["message_id"], deleted_ids)
+            finally:
+                plugin_module.SETTLEMENT_DELETE_DELAY_SECONDS = old_delay
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
 
 
 if __name__ == "__main__":
