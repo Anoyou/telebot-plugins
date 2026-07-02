@@ -365,6 +365,78 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_randomizes_options_and_preserves_correct_answer(self) -> None:
+        original_shuffle = plugin_module.random.shuffle
+        plugin_module.random.shuffle = lambda seq: seq.reverse()
+        try:
+            question = plugin_module.QAQuestion(
+                question="正确答案原本在哪里？",
+                options=["正确", "错误一", "错误二"],
+                answer_index=0,
+            )
+
+            randomized = plugin_module._randomized_question_options(question)
+
+            self.assertEqual(randomized.options, ["错误二", "错误一", "正确"])
+            self.assertEqual(randomized.answer_index, 2)
+        finally:
+            plugin_module.random.shuffle = original_shuffle
+
+    def test_dedupes_similar_questions_for_game_pool(self) -> None:
+        questions = [
+            plugin_module.QAQuestion(
+                question="有疑问应先做什么？",
+                options=["先查 Wiki", "直接私信管理", "随便猜"],
+                answer_index=0,
+            ),
+            plugin_module.QAQuestion(
+                question="有疑问时应先做什么？",
+                options=["先查 Wiki", "直接私信管理", "随便猜"],
+                answer_index=0,
+            ),
+            plugin_module.QAQuestion(
+                question="每题有几个选项？",
+                options=["三个", "两个", "四个"],
+                answer_index=0,
+            ),
+        ]
+
+        deduped = plugin_module._dedupe_questions(questions)
+
+        self.assertEqual([item.question for item in deduped], ["有疑问应先做什么？", "每题有几个选项？"])
+
+    def test_finish_message_explains_highest_score_settlement(self) -> None:
+        plugin = plugin_module.QuickQAPlugin()
+        winner = plugin_module.Player(user_id=111, name="玩家A", points=102)
+        game = plugin_module.QuickQAGame(
+            game_id="g1",
+            account_id=1,
+            chat_id=-100123,
+            entry_fee=100,
+            initial_points=20,
+            correct_points=3,
+            wrong_points=5,
+            reward_ratio=0.9,
+            min_players=2,
+            max_players=30,
+            max_questions=30,
+            question_timeout_seconds=45,
+            selection_timeout_seconds=120,
+            host_user_id=111,
+            host_name="玩家A",
+            players={
+                111: winner,
+                222: plugin_module.Player(user_id=222, name="玩家B", points=26),
+            },
+        )
+
+        text = plugin._render_finish(game, winner, 180, "题库已用完，按当前最高分结算")
+
+        self.assertIn("本局题目已出完", text)
+        self.assertIn("赢家：玩家A（102 分）", text)
+        self.assertIn("可发奖金：200 × 90% = 180", text)
+        self.assertIn("发放全部可发奖金", text)
+
     def test_payment_without_lobby_is_ignored(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.QuickQAPlugin()
@@ -418,10 +490,12 @@ class QuickQATest(unittest.TestCase):
                 self.assertTrue(any("TelePilot 插件新主路径" in action.get("text", "") for action in actions))
 
                 question_id = game.current_question.question_id
+                correct_index = game.current_question.question.answer_index
+                wrong_index = (correct_index + 1) % 3
                 wrong = await plugin.on_interaction(
                     ctx,
                     "join_quick_qa",
-                    callback_payload(f"qqa:ans:{game.game_id}:{question_id}:1", 222, "玩家B", message_id=600),
+                    callback_payload(f"qqa:ans:{game.game_id}:{question_id}:{wrong_index}", 222, "玩家B", message_id=600),
                 )
                 self.assertEqual(game.players[222].points, 15)
                 self.assertFalse(any(action.get("type") == "result" for action in wrong))
@@ -429,7 +503,7 @@ class QuickQATest(unittest.TestCase):
                 right = await plugin.on_interaction(
                     ctx,
                     "join_quick_qa",
-                    callback_payload(f"qqa:ans:{game.game_id}:{question_id}:0", 111, "玩家A", message_id=601),
+                    callback_payload(f"qqa:ans:{game.game_id}:{question_id}:{correct_index}", 111, "玩家A", message_id=601),
                 )
                 result = next(action for action in right if action.get("type") == "result")
                 self.assertEqual(result["settlement"]["winner_user_id"], 111)

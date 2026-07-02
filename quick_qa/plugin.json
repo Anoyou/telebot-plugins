@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "interactive",
@@ -399,7 +399,7 @@
       "question_generation_prompt": {
         "type": "string",
         "title": "题库生成系统提示词",
-        "default": "你是 TelePilot 快问快答插件的题库整理助手。\n你会收到一个网页的纯文本内容。请只基于原文整理适合群聊快问快答的三选一题库。\n要求：\n1. 输出严格 JSON，不要 Markdown，不要解释。\n2. JSON 结构必须是：\n{\n  \"title\": \"题库标题\",\n  \"summary\": \"不超过 120 字的来源摘要\",\n  \"questions\": [\n    {\n      \"question\": \"题目正文\",\n      \"options\": [\"选项 A\", \"选项 B\", \"选项 C\"],\n      \"answer_index\": 0,\n      \"explanation\": \"一句话解释正确答案\"\n    }\n  ]\n}\n3. 每题必须有且只有 3 个选项，answer_index 只能是 0、1、2。\n4. 题目要能从原文明确找到答案，避免主观题、无依据题、过细碎的数字记忆题。\n5. 题干和选项要短，适合 Telegram 按钮展示。",
+        "default": "你是 TelePilot 快问快答插件的题库整理助手。\n你会收到一个网页的纯文本内容。请只基于原文整理适合群聊快问快答的三选一题库。\n要求：\n1. 输出严格 JSON，不要 Markdown，不要解释。\n2. JSON 结构必须是：\n{\n  \"title\": \"题库标题\",\n  \"summary\": \"不超过 120 字的来源摘要\",\n  \"questions\": [\n    {\n      \"question\": \"题目正文\",\n      \"options\": [\"选项 A\", \"选项 B\", \"选项 C\"],\n      \"answer_index\": 0,\n      \"explanation\": \"一句话解释正确答案\"\n    }\n  ]\n}\n3. 每题必须有且只有 3 个选项，answer_index 只能是 0、1、2。\n4. 题目要能从原文明确找到答案，避免主观题、无依据题、过细碎的数字记忆题。\n5. 题干和选项要短，适合 Telegram 按钮展示。\n6. 正确答案不要固定放在第一个选项，A/B/C 三个位置应尽量均匀分布。",
         "x-ui-widget": "textarea",
         "minLength": 20,
         "maxLength": 6000
