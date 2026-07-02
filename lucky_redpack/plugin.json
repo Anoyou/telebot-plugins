@@ -3,7 +3,7 @@
   "display_name": "拼手气口令红包",
   "description": "纯 UserBot 口令红包插件，财富密码由基础口令加随机码组成，每领取一次自动刷新",
   "author": "Anoyou",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -127,4 +127,3 @@
   ],
   "capabilities": {}
 }
-

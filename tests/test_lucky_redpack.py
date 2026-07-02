@@ -138,8 +138,10 @@ class LuckyRedpackTest(unittest.TestCase):
 
         self.assertIn("🧧 拼手气红包", text)
         self.assertIn("总额：88888｜剩余：7/10", text)
-        self.assertIn("财富密码：发财A7K9（发财是口令，后4位是随机码）", text)
-        self.assertIn("发送财富密码即可领取，提示：财富密码被领一次会随机变动哦", text)
+        self.assertIn("财富密码：发财A7K9", text)
+        self.assertIn("发送财富密码即可领取\n提示：财富密码被领一次会随机变动", text)
+        self.assertNotIn("是口令", text)
+        self.assertNotIn("随机码）", text)
 
     def test_claim_sends_userbot_transfer_reply_and_refreshes_password(self) -> None:
         async def run_case() -> None:
@@ -195,4 +197,3 @@ class LuckyRedpackTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

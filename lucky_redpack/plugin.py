@@ -46,7 +46,7 @@ except ImportError:  # pragma: no cover - older TelePilot compatibility
         return str(fallback_id) if fallback_id not in (None, "") else default
 
 
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -230,12 +230,12 @@ def calculate_random_claim_amount(pack: LuckyRedpack) -> int:
 
 def render_redpack_message(pack: LuckyRedpack) -> str:
     claimed_count = pack.total_count - pack.remaining_count
-    hint = "财富密码被领一次会随机变动哦"
     return (
         "🧧 拼手气红包\n"
         f"总额：{pack.total_amount}｜剩余：{pack.remaining_count}/{pack.total_count}\n"
-        f"财富密码：{pack.current_password}（{pack.base_keyword}是口令，后{pack.suffix_length}位是随机码）\n"
-        f"发送财富密码即可领取，提示：{hint}"
+        f"财富密码：{pack.current_password}\n"
+        "发送财富密码即可领取\n"
+        "提示：财富密码被领一次会随机变动"
         + (f"\n已领取：{claimed_count} 人" if claimed_count else "")
     )
 
@@ -548,4 +548,3 @@ __all__ = [
     "render_redpack_message",
     "render_settlement",
 ]
-

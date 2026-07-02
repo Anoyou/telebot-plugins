@@ -104,7 +104,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.0.0",
+    version="1.0.1",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -119,4 +119,3 @@ MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
 MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]
-
