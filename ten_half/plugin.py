@@ -185,8 +185,9 @@ class TenHalfGame:
     chat_id: int
     bet: int
     max_players: int = 5
-    turn_timeout: int = 8
+    turn_timeout: int = 45
     lobby_timeout: int = 60
+    settlement_cleanup_delay: int = 60
     idle_start_seconds: int = 15
     game_id: str = field(default_factory=lambda: secrets.token_hex(3).upper())
     # lobby -> playing -> dealer_turn -> finished
@@ -655,6 +656,15 @@ def _html(s: Any) -> str:
     )
 
 
+def _display_name(name: Any, *, limit: int = 10) -> str:
+    text = str(name or "").strip() or "玩家"
+    return text[:limit]
+
+
+def _html_name(name: Any) -> str:
+    return _html(_display_name(name))
+
+
 def _points(cards: list[Card]) -> float:
     return sum(c.value for c in cards)
 
@@ -792,14 +802,14 @@ class TenHalfPlugin(Plugin):
     display_name = "十点半"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command", "timeout", "lobby_timeout", "max_players"}
+    command_config_keys = {"command", "timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"}
 
     def __init__(self) -> None:
         super().__init__()
         self._command = "10d"
-        self._turn_timeout = 8
+        self._turn_timeout = 45
         self._lobby_timeout = 60
-        self._settlement_cleanup_delay = 15
+        self._settlement_cleanup_delay = 60
         self._max_players = 5
         self._games: dict[int, TenHalfGame] = {}
         self._locks: dict[int, asyncio.Lock] = {}
@@ -973,6 +983,58 @@ class TenHalfPlugin(Plugin):
             delivered = await self._emit_background_actions(ctx, actions[index:index + batch_size]) or delivered
         return delivered
 
+    def _schedule_lobby_main_refresh(
+        self,
+        cid: int,
+        g: TenHalfGame,
+        ctx: PluginContext,
+        *,
+        delay_seconds: float = 0.75,
+    ) -> None:
+        self._track_task(asyncio.create_task(
+            self._lobby_main_refresh_task(
+                cid,
+                g.started_at,
+                g.lobby_version,
+                ctx,
+                delay_seconds,
+            )
+        ))
+
+    async def _lobby_main_refresh_task(
+        self,
+        cid: int,
+        sa: float,
+        version: int,
+        ctx: PluginContext,
+        delay_seconds: float,
+    ) -> None:
+        await asyncio.sleep(max(0.0, float(delay_seconds)))
+        async with self._lock(cid):
+            g = self._games.get(cid)
+            if (
+                not g
+                or g.phase != "lobby"
+                or g.finished
+                or g.started_at != sa
+                or g.lobby_version != version
+            ):
+                return
+            reply_markup = None
+            if g.awaiting_start_confirmation and g.dealer_locked and 2 <= len(g.lobby_players) < g.max_players:
+                controller_uid = self._start_controller_uid(g)
+                reply_markup = _kb_start_decision(controller_uid)
+            action = await self._main_action(
+                ctx,
+                g,
+                self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
+                reply_markup=reply_markup,
+                send_if_missing=False,
+            )
+        delivered = await self._emit_background_actions(ctx, [action])
+        if ctx.log and not delivered:
+            await ctx.log("warn", f"[ten_half] lobby_main_refresh_not_delivered: chat_id={cid}")
+
     def _schedule_settlement_cleanup(
         self,
         ctx: PluginContext,
@@ -989,7 +1051,7 @@ class TenHalfPlugin(Plugin):
                 set(g.known_interaction_message_ids),
                 settlement_message_key,
                 list(reward_message_keys),
-                self._settlement_cleanup_delay,
+                max(0, int(g.settlement_cleanup_delay)),
             )
         ))
 
@@ -1004,6 +1066,10 @@ class TenHalfPlugin(Plugin):
         reward_message_keys: list[str],
         delay_seconds: int,
     ) -> None:
+        if delay_seconds <= 0:
+            if ctx.log:
+                await ctx.log("info", f"[ten_half] settlement_cleanup_disabled: chat_id={cid}")
+            return
         await asyncio.sleep(max(0, int(delay_seconds)))
         interaction_message_ids: set[int] = set(known_interaction_message_ids or set())
         userbot_message_ids: set[int] = set()
@@ -1071,7 +1137,7 @@ class TenHalfPlugin(Plugin):
             g,
             uid,
             name,
-            f"{name} 作为首位加入玩家，已自动成为本局庄家。",
+            f"{_display_name(name)} 作为首位加入玩家，已自动成为本局庄家。",
         )
 
     def _lock_command_dealer(self, g: TenHalfGame, uid: int, name: str) -> None:
@@ -1079,7 +1145,7 @@ class TenHalfPlugin(Plugin):
             g,
             uid,
             name,
-            f"{name} 作为开桌者，已直接成为本局庄家。",
+            f"{_display_name(name)} 作为开桌者，已直接成为本局庄家。",
         )
 
     @staticmethod
@@ -1158,7 +1224,7 @@ class TenHalfPlugin(Plugin):
                     return
                 g.dealer_stood = True
                 _bump_target_action_version(g, uid)
-                g.status_note = f"{g.dealer_name} 超时，自动停牌。"
+                g.status_note = f"{_display_name(g.dealer_name)} 超时，自动停牌。"
                 if ctx.log:
                     await ctx.log(
                         "info",
@@ -1171,7 +1237,7 @@ class TenHalfPlugin(Plugin):
                     return
                 p.stood = True
                 _bump_target_action_version(g, uid)
-                g.status_note = f"{p.name} 超时，自动停牌。"
+                g.status_note = f"{_display_name(p.name)} 超时，自动停牌。"
                 if ctx.log:
                     await ctx.log(
                         "info",
@@ -1224,22 +1290,19 @@ class TenHalfPlugin(Plugin):
                 return
             g.awaiting_start_confirmation = True
             controller_uid = self._start_controller_uid(g)
-            g.status_note = f"{g.idle_start_seconds} 秒内没有新玩家加入，{g.dealer_name} 可以选择直接开局或继续等待。"
+            g.status_note = f"{g.idle_start_seconds} 秒内没有新玩家加入，{_display_name(g.dealer_name)} 可以选择直接开局或继续等待。"
             if ctx.log:
                 await ctx.log(
                     "info",
                     f"[ten_half] idle_start_prompt: controller={controller_uid}, "
                     f"players={len(g.lobby_players)}/{g.max_players}, chat_id={cid}",
                 )
-            action = await self._join_notice_update_action(
+            action = await self._main_action(
                 ctx,
                 g,
-                self._build_join_notice_text(
-                    g,
-                    payer_name=g.lobby_players[-1][1] if g.lobby_players else g.dealer_name,
-                    amount=g.bet,
-                ),
+                self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
                 reply_markup=_kb_start_decision(controller_uid),
+                send_if_missing=False,
             )
         delivered = await self._emit_background_actions(ctx, [action])
         if ctx.log and not delivered:
@@ -1250,6 +1313,14 @@ class TenHalfPlugin(Plugin):
             "max_players": _config_int(ctx, payload, "max_players", self._max_players, minimum=2, maximum=10),
             "turn_timeout": _config_int(ctx, payload, "timeout", self._turn_timeout, minimum=5, maximum=120),
             "lobby_timeout": _config_int(ctx, payload, "lobby_timeout", self._lobby_timeout, minimum=10, maximum=300),
+            "settlement_cleanup_delay": _config_int(
+                ctx,
+                payload,
+                "settlement_cleanup_delay",
+                self._settlement_cleanup_delay,
+                minimum=0,
+                maximum=3600,
+            ),
         }
 
     async def _join_notice_actions(
@@ -1263,12 +1334,8 @@ class TenHalfPlugin(Plugin):
     ) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
         join_key = _join_notice_key(ctx.account_id, g.chat_id)
-        main_key = _main_msg_key(ctx.account_id, g.chat_id)
         saved_join_mid = await self._read_saved_message_id(ctx, join_key)
         previous_mid = saved_join_mid or g.join_notice_msg_id
-        opening_mid = None
-        if not g.opening_message_deleted:
-            opening_mid = g.main_message_id or await self._read_saved_message_id(ctx, main_key)
         actions.append(
             _send_action(
                 self._build_join_notice_text(g, payer_name=payer_name, amount=amount),
@@ -1280,13 +1347,6 @@ class TenHalfPlugin(Plugin):
         if previous_mid:
             self._remember_interaction_message(g, previous_mid)
             actions.append(_delete_action(previous_mid))
-        if opening_mid and opening_mid != previous_mid:
-            self._remember_interaction_message(g, opening_mid)
-            g.main_message_id = None
-            g.opening_message_deleted = True
-            actions.append(_delete_action(opening_mid))
-        elif opening_mid:
-            g.opening_message_deleted = True
         return actions
 
     def _build_lobby_text(self, g: TenHalfGame, receiver_label: str) -> str:
@@ -1305,26 +1365,26 @@ class TenHalfPlugin(Plugin):
             f"⏰ 等待玩家加入中... ({g.lobby_timeout}秒)，当前牌桌 ID 为 <code>{g.game_id}</code>"
         )
         if g.lobby_players:
-            players = "、".join(_html(name) for _, name in g.lobby_players)
+            players = "、".join(_html_name(name) for _, name in g.lobby_players)
             lines.extend([
                 "",
                 f"👥 已加入 ({len(g.lobby_players)}/{g.max_players}): {players}",
             ])
         if g.dealer_locked:
-            lines.extend(["", f"🎰 庄家: <b>{_html(g.dealer_name)}</b>"])
+            lines.extend(["", f"🎰 庄家: <b>{_html_name(g.dealer_name)}</b>"])
             if 2 <= len(g.lobby_players) < g.max_players:
                 lines.append(
                     f"🕒 {g.idle_start_seconds} 秒无人加入可由庄家提前开局，"
                     f"{g.lobby_timeout} 秒后自动开局。"
                 )
-        if g.finished and g.status_note:
+        if g.status_note:
             lines.extend(["", _html(g.status_note)])
         return "\n".join(lines)
 
     def _build_join_notice_text(self, g: TenHalfGame, *, payer_name: str, amount: int) -> str:
-        players = [f"• {_html(name)}" for _, name in g.lobby_players] or ["• 暂无"]
+        players = [f"• {_html_name(name)}" for _, name in g.lobby_players] or ["• 暂无"]
         lines = [
-            f"✅ <b>{_html(payer_name)}</b> 加入牌局成功",
+            f"✅ <b>{_html_name(payer_name)}</b> 加入牌局成功",
             f"🆔 牌桌 ID: <code>{g.game_id}</code>",
             f"💰 入场金额: {amount}",
             f"👥 当前玩家 ({len(g.lobby_players)}/{g.max_players}):",
@@ -1349,7 +1409,7 @@ class TenHalfPlugin(Plugin):
             f"🃏 <b>十点半 · 牌桌 <code>{g.game_id}</code></b>",
             f"💰 底注: <b>{g.bet}</b> · {phase_text}",
             "",
-            f"🎰 庄家 <b>{_html(g.dealer_name)}</b>: {_dealer_public_brief(g, reveal=reveal_dealer)}",
+            f"🎰 庄家 <b>{_html_name(g.dealer_name)}</b>: {_dealer_public_brief(g, reveal=reveal_dealer)}",
         ]
         if g.phase == "playing" and not g.finished:
             active_names = [p.name for p in g.players if not p.is_done]
@@ -1357,7 +1417,7 @@ class TenHalfPlugin(Plugin):
                 active_names.append(g.dealer_name)
             if active_names:
                 lines.append("⚡ 所有人共用下方按钮，系统按点击者识别自己的手牌；全部停牌/爆牌后统一结算。")
-                lines.append("⏳ 等待：" + "、".join(_html(name) for name in active_names))
+                lines.append("⏳ 等待：" + "、".join(_html_name(name) for name in active_names))
         if g.phase == "dealer_turn" and not g.dealer_is_bot and not g.finished:
             lines.append("👉 所有玩家已行动，庄家请要牌或停牌。")
         if g.players:
@@ -1366,7 +1426,7 @@ class TenHalfPlugin(Plugin):
                 status = _player_status(p)
                 suffix = f" · {status}" if status else ""
                 marker = "👉" if not p.is_done else "•"
-                lines.append(f"{marker} <b>{_html(p.name)}</b>: {_cards_brief(p.cards)}{suffix}")
+                lines.append(f"{marker} <b>{_html_name(p.name)}</b>: {_cards_brief(p.cards)}{suffix}")
         if g.status_note:
             lines.extend(["", _html(g.status_note)])
         return "\n".join(lines)
@@ -1375,8 +1435,9 @@ class TenHalfPlugin(Plugin):
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
         self._command = _normalize_command_name(cfg.get("command", "10d"))
-        self._turn_timeout = _pint(cfg.get("timeout"), 8, minimum=5)
+        self._turn_timeout = _pint(cfg.get("timeout"), 45, minimum=5)
         self._lobby_timeout = _pint(cfg.get("lobby_timeout"), 60, minimum=10)
+        self._settlement_cleanup_delay = _pint(cfg.get("settlement_cleanup_delay"), 60, minimum=0)
         self._max_players = _pint(cfg.get("max_players"), 5, minimum=2)
         self.commands = {self._command: self._cmd, "十点半": self._cmd}
         if ctx.log:
@@ -1442,6 +1503,7 @@ class TenHalfPlugin(Plugin):
                 max_players=max(2, self._max_players),
                 turn_timeout=self._turn_timeout,
                 lobby_timeout=self._lobby_timeout,
+                settlement_cleanup_delay=self._settlement_cleanup_delay,
                 phase="lobby", started_at=time.monotonic(),
                 via_interaction=True,
                 host_user_id=host_id,
@@ -1686,6 +1748,7 @@ class TenHalfPlugin(Plugin):
                 max_players=limits["max_players"],
                 turn_timeout=limits["turn_timeout"],
                 lobby_timeout=limits["lobby_timeout"],
+                settlement_cleanup_delay=limits["settlement_cleanup_delay"],
                 phase="lobby", started_at=time.monotonic(),
                 via_interaction=True,
                 host_user_id=host_id,
@@ -1812,6 +1875,7 @@ class TenHalfPlugin(Plugin):
                 actions.extend(await self._ix_begin(cid, g, g.dealer_id, g.dealer_name, ctx))
                 return actions
 
+            self._schedule_lobby_main_refresh(cid, g, ctx)
             if g.dealer_locked:
                 self._schedule_idle_start_prompt(cid, g, ctx)
             return actions
@@ -1958,7 +2022,7 @@ class TenHalfPlugin(Plugin):
             return await self._ix_begin(g.chat_id, g, g.dealer_id, g.dealer_name, ctx, payload=payload)
 
         self._touch_lobby(g)
-        g.status_note = f"{g.dealer_name} 选择继续等待后续玩家加入。"
+        g.status_note = f"{_display_name(g.dealer_name)} 选择继续等待后续玩家加入。"
         self._schedule_idle_start_prompt(g.chat_id, g, ctx)
         return [
             _answer_action(payload, "继续等待后续玩家加入。"),
@@ -2134,7 +2198,7 @@ class TenHalfPlugin(Plugin):
         actions.extend(await self._delete_current_join_notice_actions(ctx, g))
         if payload is not None:
             actions.append(_answer_action(payload, _dealer_private_brief(g), show_alert=True))
-        g.status_note = f"{g.dealer_name} 当庄，玩家起手 1 张明牌。所有人共用下方按钮，系统按点击者识别自己的手牌。"
+        g.status_note = f"{_display_name(g.dealer_name)} 当庄，玩家起手 1 张明牌。所有人共用下方按钮，系统按点击者识别自己的手牌。"
         actions.extend(await self._ix_refresh_or_settle(cid, g, ctx, schedule_all=True))
         return actions
 
@@ -2158,12 +2222,12 @@ class TenHalfPlugin(Plugin):
         if payload is not None:
             actions.append(_answer_action(payload, _dealer_private_brief(g), show_alert=True))
         if g.dealer_busted():
-            g.status_note = f"{g.dealer_name} 要牌后爆牌。"
+            g.status_note = f"{_display_name(g.dealer_name)} 要牌后爆牌。"
         if g.dealer_five_small():
             g.dealer_stood = True
-            g.status_note = f"{g.dealer_name} 五小，自动停牌。"
+            g.status_note = f"{_display_name(g.dealer_name)} 五小，自动停牌。"
         if not g.dealer_busted() and not g.dealer_five_small():
-            g.status_note = f"{g.dealer_name} 已要牌，当前 {len(g.dealer_cards)} 张。"
+            g.status_note = f"{_display_name(g.dealer_name)} 已要牌，当前 {len(g.dealer_cards)} 张。"
         actions.extend(await self._ix_refresh_or_settle(cid, g, ctx, reschedule_uid=g.dealer_id))
         return actions
 
@@ -2180,7 +2244,7 @@ class TenHalfPlugin(Plugin):
                 f"cards={len(g.dealer_cards)}, chat_id={cid}")
         g.dealer_stood = True
         _bump_target_action_version(g, g.dealer_id)
-        g.status_note = f"{g.dealer_name} 停牌，共 {len(g.dealer_cards)} 张。"
+        g.status_note = f"{_display_name(g.dealer_name)} 停牌，共 {len(g.dealer_cards)} 张。"
         actions: list[dict[str, Any]] = []
         if payload is not None:
             actions.append(_answer_action(payload, _dealer_private_brief(g), show_alert=True))
@@ -2216,7 +2280,7 @@ class TenHalfPlugin(Plugin):
         if g.dealer_id > 0 and not g.dealer_done():
             active_names.append(g.dealer_name)
         if active_names and not g.status_note:
-            g.status_note = "等待操作：" + "、".join(active_names)
+            g.status_note = "等待操作：" + "、".join(_display_name(name) for name in active_names)
 
         action = await self._main_action(
             ctx,
@@ -2256,15 +2320,15 @@ class TenHalfPlugin(Plugin):
             actions.append(_answer_action(payload, f"要到 {card.display()}，当前 {_fv(p.value)}点。"))
         if p.value > 10.5 + 1e-9:
             p.busted = True
-            g.status_note = f"{p.name} 要牌后爆牌，自动结束本回合。"
+            g.status_note = f"{_display_name(p.name)} 要牌后爆牌，自动结束本回合。"
         elif p.is_five_small:
             p.stood = True
-            g.status_note = f"{p.name} 五小，自动停牌。"
+            g.status_note = f"{_display_name(p.name)} 五小，自动停牌。"
         elif p.is_natural:
             p.stood = True
-            g.status_note = f"{p.name} 十点半，自动停牌。"
+            g.status_note = f"{_display_name(p.name)} 十点半，自动停牌。"
         else:
-            g.status_note = f"{p.name} 已要牌，当前 {_cards_brief(p.cards)}。"
+            g.status_note = f"{_display_name(p.name)} 已要牌，当前 {_cards_brief(p.cards)}。"
 
         actions.extend(
             await self._ix_refresh_or_settle(
@@ -2295,7 +2359,7 @@ class TenHalfPlugin(Plugin):
             await ctx.log("info",
                 f"[ten_half] player_action: uid={p.user_id}, name={p.name}, "
                 f"action=stand, value={_fv(p.value)}, chat_id={cid}")
-        g.status_note = f"{p.name} 停牌，{_cards_brief(p.cards)}。"
+        g.status_note = f"{_display_name(p.name)} 停牌，{_cards_brief(p.cards)}。"
         actions: list[dict[str, Any]] = []
         if payload is not None:
             actions.append(_answer_action(payload, f"已停牌，{_cards_brief(p.cards)}。"))
@@ -2338,10 +2402,10 @@ class TenHalfPlugin(Plugin):
             actions.append(_answer_action(payload, f"加倍要到 {card.display()}，当前 {_fv(p.value)}点。"))
         if p.value > 10.5 + 1e-9:
             p.busted = True
-            g.status_note = f"{p.name} 加倍后爆牌，下注按 {g.bet * 2} 计算。"
+            g.status_note = f"{_display_name(p.name)} 加倍后爆牌，下注按 {g.bet * 2} 计算。"
         else:
             p.stood = True
-            g.status_note = f"{p.name} 加倍后停牌，下注按 {g.bet * 2} 计算。"
+            g.status_note = f"{_display_name(p.name)} 加倍后停牌，下注按 {g.bet * 2} 计算。"
 
         actions.extend(await self._ix_refresh_or_settle(cid, g, ctx))
         return actions
@@ -2357,7 +2421,7 @@ class TenHalfPlugin(Plugin):
                 f"all_bust={all_bust}, chat_id={cid}")
 
         if all_bust:
-            g.status_note = f"所有玩家都爆牌，{g.dealer_name} 自动获胜。"
+            g.status_note = f"所有玩家都爆牌，{_display_name(g.dealer_name)} 自动获胜。"
         else:
             draw_notes: list[str] = []
             while g.dealer_val() <= 5.0 + 1e-9:
@@ -2375,10 +2439,10 @@ class TenHalfPlugin(Plugin):
                     break
             if g.dealer_busted():
                 suffix = f"，要牌 {'、'.join(draw_notes)}" if draw_notes else ""
-                g.status_note = f"{g.dealer_name}{suffix} 后爆牌。"
+                g.status_note = f"{_display_name(g.dealer_name)}{suffix} 后爆牌。"
             else:
                 suffix = f"，要牌 {'、'.join(draw_notes)}" if draw_notes else ""
-                g.status_note = f"{g.dealer_name}{suffix} 后停牌（{_fv(g.dealer_val())}点）。"
+                g.status_note = f"{_display_name(g.dealer_name)}{suffix} 后停牌（{_fv(g.dealer_val())}点）。"
 
         actions: list[dict[str, Any]] = []
         actions.extend(await self._ix_settle(cid, g, ctx))
@@ -2402,7 +2466,7 @@ class TenHalfPlugin(Plugin):
         lines = [
             f"🏆 <b>十点半结算 · 牌桌 <code>{g.game_id}</code></b>",
             f"💰 总底注池: <b>{total_pot}</b>",
-            f"🎰 庄家 <b>{_html(g.dealer_name)}</b>: {_dealer_public_brief(g, reveal=True)}",
+            f"🎰 庄家 <b>{_html_name(g.dealer_name)}</b>: {_dealer_public_brief(g, reveal=True)}",
             "",
             "👥 玩家",
         ]
@@ -2437,7 +2501,7 @@ class TenHalfPlugin(Plugin):
                 html_mode=True,
             )
 
-            lines.append(f"• <b>{_html(p.name)}</b>: {_cards_brief(p.cards)} → {outcome_display}")
+            lines.append(f"• <b>{_html_name(p.name)}</b>: {_cards_brief(p.cards)} → {outcome_display}")
 
             pr = {
                 "user_id": p.user_id,
@@ -2479,7 +2543,7 @@ class TenHalfPlugin(Plugin):
             player_results.append(dealer_result)
             lines.extend([
                 "",
-                f"🎰 庄家 <b>{_html(g.dealer_name)}</b> 🎉是赢家 获得 <b>{dealer_reward}</b>",
+                f"🎰 庄家 <b>{_html_name(g.dealer_name)}</b> 🎉是赢家 获得 <b>{dealer_reward}</b>",
             ])
             if ctx and ctx.log:
                 await ctx.log(
