@@ -3,12 +3,13 @@
   "display_name": "拼手气口令红包",
   "description": "纯 UserBot 口令红包插件，支持多红包并行、红包代码管理和图片财富密码",
   "author": "Anoyou",
-  "version": "1.3.7",
+  "version": "1.3.8",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
     "edit_message",
     "read_chat",
+    "resolve_entity",
     "delete_message",
     "send_file"
   ],

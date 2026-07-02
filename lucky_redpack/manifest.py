@@ -112,12 +112,12 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.3.7",
+    version="1.3.8",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="纯 UserBot 口令红包插件，支持多红包并行、红包代码管理和图片财富密码",
-    permissions=["send_message", "edit_message", "read_chat", "delete_message", "send_file"],
+    permissions=["send_message", "edit_message", "read_chat", "resolve_entity", "delete_message", "send_file"],
     category="interactive",
     config_schema=CONFIG_SCHEMA,
 )

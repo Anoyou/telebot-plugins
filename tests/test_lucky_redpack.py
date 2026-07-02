@@ -143,6 +143,13 @@ class FakeClient:
         return self.entities.get(entity_id)
 
 
+class PermissionDeniedEntityClient(FakeClient):
+    def __getattribute__(self, name):
+        if name == "get_entity":
+            raise PermissionError("缺少权限调用 client.get_entity")
+        return super().__getattribute__(name)
+
+
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
@@ -358,6 +365,13 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_new_suffix_excludes_confusable_chars(self) -> None:
+        plugin = plugin_module.LuckyRedpackPlugin()
+        suffixes = [plugin._new_suffix() for _ in range(200)]
+
+        self.assertTrue(suffixes)
+        self.assertTrue(all(not (set(suffix) & plugin_module.CONFUSABLE_SUFFIX_CHARS) for suffix in suffixes))
+
     def test_creator_can_claim_with_outgoing_message_by_default(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
@@ -381,6 +395,50 @@ class LuckyRedpackTest(unittest.TestCase):
 
             self.assertEqual(ctx.client.sent[0]["reply_to"], claim_event.id)
             self.assertRegex(ctx.client.sent[0]["text"], r"^\+\d+$")
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_entity_lookup_permission_error_falls_back_to_payload_name(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = PermissionDeniedEntityClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            chat_id = -1003806095342
+            await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "command", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2848, "text": "rp 测试 100 2"},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 1682400007, "display_name": "发起人"},
+                },
+            )
+            pack = plugin._packs[chat_id][0]
+
+            actions = await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2850, "text": pack.current_password},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(plugin._packs[chat_id][0].claims[0].display_name, "领取者")
 
             await plugin.on_shutdown(ctx)
 

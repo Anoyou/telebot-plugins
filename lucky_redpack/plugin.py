@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.7"
+PLUGIN_VERSION = "1.3.8"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -78,7 +78,8 @@ DEFAULT_IMAGE_PASSWORD_ENABLED = False
 DEFAULT_ALLOW_OWNER_CLAIM = True
 MAX_AMOUNT = 999_999_999
 MAX_COUNT = 500
-SUFFIX_CHARS = string.ascii_uppercase + string.digits
+CONFUSABLE_SUFFIX_CHARS = frozenset({"1", "2", "I", "L", "Z"})
+SUFFIX_CHARS = "".join(char for char in string.ascii_uppercase + string.digits if char not in CONFUSABLE_SUFFIX_CHARS)
 PACK_CODE_CHARS = string.ascii_uppercase + string.digits
 PASSWORD_CONFUSABLE_CHARS = str.maketrans({
     "z": "2",
@@ -1694,10 +1695,10 @@ class LuckyRedpackPlugin(Plugin):
     async def _lookup_sender_entity(self, ctx: PluginContext, sender_id: int) -> Any | None:
         if not sender_id or ctx.client is None:
             return None
-        getter = getattr(ctx.client, "get_entity", None)
-        if not callable(getter):
-            return None
         try:
+            getter = getattr(ctx.client, "get_entity", None)
+            if not callable(getter):
+                return None
             return await getter(sender_id)
         except Exception as exc:
             if ctx.log:
