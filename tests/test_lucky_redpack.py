@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -139,6 +141,18 @@ class FakeRedis:
 
 
 class LuckyRedpackTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._old_state_dir = os.environ.get("LUCKY_REDPACK_STATE_DIR")
+        self._state_dir = tempfile.TemporaryDirectory(prefix="lucky_redpack_test_")
+        os.environ["LUCKY_REDPACK_STATE_DIR"] = self._state_dir.name
+
+    def tearDown(self) -> None:
+        if self._old_state_dir is None:
+            os.environ.pop("LUCKY_REDPACK_STATE_DIR", None)
+        else:
+            os.environ["LUCKY_REDPACK_STATE_DIR"] = self._old_state_dir
+        self._state_dir.cleanup()
+
     def test_parse_create_args_supports_keyword_amount_count(self) -> None:
         keyword, amount, count, error = plugin_module.parse_create_args(["发财", "88888", "10"], 100, 2)
 
@@ -525,6 +539,68 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
             self.assertEqual(claim_ctx.client.deleted[0]["message_ids"], [created_pack.message_id])
             self.assertIn("领取详情", claim_ctx.client.sent[-1]["text"])
+
+            await creator_plugin.on_shutdown(create_ctx)
+            await claim_plugin.on_shutdown(claim_ctx)
+
+        asyncio.run(run_case())
+
+    def test_file_state_allows_claim_from_different_plugin_instance_without_redis(self) -> None:
+        async def run_case() -> None:
+            creator_plugin = plugin_module.LuckyRedpackPlugin()
+            claim_plugin = plugin_module.LuckyRedpackPlugin()
+            create_ctx = PluginContext()
+            claim_ctx = PluginContext()
+            create_ctx.client = FakeClient()
+            claim_ctx.client = FakeClient()
+            shared_config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            create_ctx.config = dict(shared_config)
+            claim_ctx.config = dict(shared_config)
+            await creator_plugin.on_startup(create_ctx)
+            await claim_plugin.on_startup(claim_ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=-1003806095342, sender_id=1, outgoing=True)
+            await creator_plugin._cmd_handler(create_ctx.client, command_event, ["测试", "100", "2"], 1, create_ctx)
+            created_pack = creator_plugin._packs[-1003806095342][0]
+            password = created_pack.current_password
+
+            self.assertNotIn(-1003806095342, claim_plugin._packs)
+            actions = await claim_plugin.on_event(
+                claim_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -1003806095342, "message_id": 2821, "text": password},
+                    "chat": {"id": -1003806095342},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0]["type"], "send_message")
+            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["reply_to_message_id"], 2821)
+            self.assertRegex(actions[0]["text"], r"^\+\d+$")
+            self.assertEqual(claim_ctx.client.deleted[0]["message_ids"], [created_pack.message_id])
+            self.assertIn("领取详情", claim_ctx.client.sent[-1]["text"])
+
+            repeat_actions = await claim_plugin.on_event(
+                claim_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -1003806095342, "message_id": 2822, "text": password},
+                    "chat": {"id": -1003806095342},
+                    "sender": {"user_id": 999, "display_name": "另一个人"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+            self.assertEqual(repeat_actions, [])
 
             await creator_plugin.on_shutdown(create_ctx)
             await claim_plugin.on_shutdown(claim_ctx)

@@ -7,9 +7,11 @@ UserBot 回复领取者消息，以便复用平台现有的转账链路。
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import html
 import inspect
 import json
+import os
 import random
 import shlex
 import string
@@ -20,6 +22,11 @@ from pathlib import Path
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-Unix fallback
+    fcntl = None
 
 try:
     from app.worker.command import current_command_prefix
@@ -59,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.3.1"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -76,6 +83,8 @@ PACK_CODE_CHARS = string.ascii_uppercase + string.digits
 IMAGE_WIDTH = 980
 IMAGE_HEIGHT = 320
 PLUGIN_DIR = Path(__file__).resolve().parent
+STATE_DIR_ENV = "LUCKY_REDPACK_STATE_DIR"
+DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "telepilot_lucky_redpack_state"
 BUNDLED_FONT_CANDIDATES = [
     PLUGIN_DIR.parent / "redpack-byRBQ" / "assets" / "font.ttf",
 ]
@@ -760,6 +769,39 @@ def _pack_from_payload(payload: dict[str, Any]) -> LuckyRedpack | None:
     return pack if pack.pack_code and pack.chat_id else None
 
 
+def _packs_from_json(raw: Any) -> list[LuckyRedpack]:
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="ignore")
+    if not raw:
+        return []
+    try:
+        data = json.loads(str(raw))
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    packs: list[LuckyRedpack] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        pack = _pack_from_payload(item)
+        if pack is not None:
+            packs.append(pack)
+    return packs
+
+
+def _packs_to_json(packs: list[LuckyRedpack]) -> str:
+    return json.dumps([_pack_to_payload(pack) for pack in packs], ensure_ascii=False)
+
+
+def _looks_like_password_attempt(text: str, suffix_length: int) -> bool:
+    normalized = _normalize_password(text)
+    if len(normalized) <= suffix_length or len(normalized) > 80:
+        return False
+    suffix = normalized[-suffix_length:].upper()
+    return all(char in SUFFIX_CHARS for char in suffix)
+
+
 @register
 class LuckyRedpackPlugin(Plugin):
     key = PLUGIN_KEY
@@ -834,65 +876,132 @@ class LuckyRedpackPlugin(Plugin):
     def _state_key(self, account_id: int, chat_id: int) -> str:
         return f"lucky_redpack:{int(account_id)}:{int(chat_id)}:packs"
 
+    def _state_dir(self) -> Path:
+        configured = str(os.environ.get(STATE_DIR_ENV) or "").strip()
+        return Path(configured).expanduser() if configured else DEFAULT_STATE_DIR
+
+    def _state_file(self, account_id: int, chat_id: int) -> Path:
+        return self._state_dir() / f"{int(account_id)}_{int(chat_id)}.json"
+
+    @contextmanager
+    def _state_file_lock(self, account_id: int, chat_id: int):
+        lock_file = self._state_dir() / f"{int(account_id)}_{int(chat_id)}.lock"
+        lock_handle = None
+        try:
+            lock_file.parent.mkdir(parents=True, exist_ok=True)
+            lock_handle = lock_file.open("a+", encoding="utf-8")
+            if fcntl is not None:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if lock_handle is not None:
+                try:
+                    if fcntl is not None:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    lock_handle.close()
+
+    def _load_file_packs(self, account_id: int, chat_id: int) -> list[LuckyRedpack]:
+        path = self._state_file(account_id, chat_id)
+        if not path.exists():
+            return []
+        try:
+            return _packs_from_json(path.read_text(encoding="utf-8"))
+        except OSError:
+            return []
+
+    def _save_file_packs(self, account_id: int, chat_id: int, packs: list[LuckyRedpack]) -> None:
+        path = self._state_file(account_id, chat_id)
+        if not packs:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(f".{os.getpid()}.tmp")
+            tmp_path.write_text(_packs_to_json(packs), encoding="utf-8")
+            os.replace(tmp_path, path)
+        except OSError:
+            return
+
+    def _active_from(self, packs: list[LuckyRedpack]) -> list[LuckyRedpack]:
+        return [pack for pack in packs if not pack.is_finished() and not pack.is_expired()]
+
+    def _sync_memory_packs(self, chat_id: int, packs: list[LuckyRedpack]) -> None:
+        if packs:
+            self._packs[chat_id] = packs
+        else:
+            self._packs.pop(chat_id, None)
+
+    def _sync_loaded_packs(self, chat_id: int, packs: list[LuckyRedpack]) -> list[LuckyRedpack]:
+        existing_by_code = {pack.pack_code: pack for pack in self._packs.get(chat_id, [])}
+        merged: list[LuckyRedpack] = []
+        for pack in packs:
+            existing = existing_by_code.get(pack.pack_code)
+            if existing is not None and existing is not pack:
+                for field_name in pack.__dataclass_fields__:
+                    setattr(existing, field_name, getattr(pack, field_name))
+                merged.append(existing)
+            else:
+                merged.append(pack)
+        self._sync_memory_packs(chat_id, merged)
+        return merged
+
     async def _load_active_packs(self, ctx: PluginContext, chat_id: int) -> list[LuckyRedpack]:
         redis = getattr(ctx, "redis", None)
-        if redis is None:
-            return self._active_packs(chat_id)
-        raw = await redis.get(self._state_key(ctx.account_id, chat_id))
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8", errors="ignore")
         packs: list[LuckyRedpack] = []
-        if raw:
+        if redis is not None:
             try:
-                data = json.loads(str(raw))
-            except (TypeError, ValueError):
-                data = []
-            if isinstance(data, list):
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-                    pack = _pack_from_payload(item)
-                    if pack is not None:
-                        packs.append(pack)
-        active = [pack for pack in packs if not pack.is_finished() and not pack.is_expired()]
-        self._packs[chat_id] = active
+                packs = _packs_from_json(await redis.get(self._state_key(ctx.account_id, chat_id)))
+            except Exception as exc:
+                if ctx.log:
+                    await ctx.log("warn", f"[lucky_redpack] 读取 Redis 红包状态失败，改用本地状态：{type(exc).__name__}")
+                packs = []
+        if not packs:
+            packs = self._load_file_packs(ctx.account_id, chat_id)
+        if not packs:
+            packs = self._active_packs(chat_id)
+        active = self._active_from(packs)
+        active = self._sync_loaded_packs(chat_id, active)
         if len(active) != len(packs):
             await self._save_active_packs(ctx, chat_id, active)
         return active
 
     async def _save_active_packs(self, ctx: PluginContext, chat_id: int, packs: list[LuckyRedpack]) -> None:
-        active = [pack for pack in packs if not pack.is_finished() and not pack.is_expired()]
-        if active:
-            self._packs[chat_id] = active
-        else:
-            self._packs.pop(chat_id, None)
+        active = self._active_from(packs)
+        self._sync_memory_packs(chat_id, active)
+        self._save_file_packs(ctx.account_id, chat_id, active)
         redis = getattr(ctx, "redis", None)
         if redis is None:
             return
         key = self._state_key(ctx.account_id, chat_id)
-        if not active:
-            await redis.delete(key)
-            return
-        ttl = max(30, int(max(pack.expires_at for pack in active) - time.time()) + 60)
-        await redis.set(
-            key,
-            json.dumps([_pack_to_payload(pack) for pack in active], ensure_ascii=False),
-            ex=ttl,
-        )
+        try:
+            if not active:
+                await redis.delete(key)
+                return
+            ttl = max(30, int(max(pack.expires_at for pack in active) - time.time()) + 60)
+            await redis.set(key, _packs_to_json(active), ex=ttl)
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[lucky_redpack] 写入 Redis 红包状态失败，已保留本地状态：{type(exc).__name__}")
 
     async def _persist_pack(self, ctx: PluginContext, pack: LuckyRedpack) -> None:
-        packs = await self._load_active_packs(ctx, pack.chat_id)
-        replaced = False
-        next_packs: list[LuckyRedpack] = []
-        for item in packs:
-            if item.pack_code == pack.pack_code:
-                next_packs.append(pack)
-                replaced = True
-            else:
-                next_packs.append(item)
-        if not replaced and not pack.is_finished() and not pack.is_expired():
-            next_packs.append(pack)
-        await self._save_active_packs(ctx, pack.chat_id, next_packs)
+        async with self._get_lock(pack.chat_id):
+            with self._state_file_lock(ctx.account_id, pack.chat_id):
+                packs = await self._load_active_packs(ctx, pack.chat_id)
+                replaced = False
+                next_packs: list[LuckyRedpack] = []
+                for item in packs:
+                    if item.pack_code == pack.pack_code:
+                        next_packs.append(pack)
+                        replaced = True
+                    else:
+                        next_packs.append(item)
+                if not replaced and not pack.is_finished() and not pack.is_expired():
+                    next_packs.append(pack)
+                await self._save_active_packs(ctx, pack.chat_id, next_packs)
 
     def _find_pack_by_code(self, chat_id: int, pack_code: str) -> LuckyRedpack | None:
         target = str(pack_code or "").strip().casefold()
@@ -923,7 +1032,8 @@ class LuckyRedpackPlugin(Plugin):
         self._allow_owner_claim = bool(cfg.get("allow_owner_claim", DEFAULT_ALLOW_OWNER_CLAIM))
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
-            await ctx.log("info", f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}")
+            storage = "redis+file" if getattr(ctx, "redis", None) is not None else "file"
+            await ctx.log("info", f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}，状态存储：{storage}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for task in list(self._tasks):
@@ -990,21 +1100,23 @@ class LuckyRedpackPlugin(Plugin):
                 await self._reply(event, f"请指定红包代码。例：{current_command_prefix(fallback=',')}{self._command} off ABC123")
                 return
             async with self._get_lock(chat_id):
-                packs = await self._load_active_packs(ctx, chat_id)
-                pack = next((item for item in packs if item.pack_code.casefold() == pack_code.casefold()), None)
-                if not pack:
-                    await self._reply(event, f"未找到进行中的红包：{pack_code}")
-                    return
-                packs = [item for item in packs if item is not pack]
-                await self._save_active_packs(ctx, chat_id, packs)
+                with self._state_file_lock(ctx.account_id, chat_id):
+                    packs = await self._load_active_packs(ctx, chat_id)
+                    pack = next((item for item in packs if item.pack_code.casefold() == pack_code.casefold()), None)
+                    if not pack:
+                        await self._reply(event, f"未找到进行中的红包：{pack_code}")
+                        return
+                    packs = [item for item in packs if item is not pack]
+                    await self._save_active_packs(ctx, chat_id, packs)
             if pack.message_id:
                 await self._delete_message(ctx, chat_id, pack.message_id)
             await self._reply(event, f"已关闭红包 {pack.pack_code}。")
             return
         if action in {"clear", "清空"}:
             async with self._get_lock(chat_id):
-                existed = await self._load_active_packs(ctx, chat_id)
-                await self._save_active_packs(ctx, chat_id, [])
+                with self._state_file_lock(ctx.account_id, chat_id):
+                    existed = await self._load_active_packs(ctx, chat_id)
+                    await self._save_active_packs(ctx, chat_id, [])
             for pack in existed:
                 if pack.message_id:
                     await self._delete_message(ctx, chat_id, pack.message_id)
@@ -1035,8 +1147,9 @@ class LuckyRedpackPlugin(Plugin):
         creator_id = _sender_id_from_event(event)
         now = time.time()
         async with self._get_lock(chat_id):
-            existing_packs = await self._load_active_packs(ctx, chat_id)
-            pack_code = self._new_pack_code_for_existing({item.pack_code for item in existing_packs})
+            with self._state_file_lock(ctx.account_id, chat_id):
+                existing_packs = await self._load_active_packs(ctx, chat_id)
+                pack_code = self._new_pack_code_for_existing({item.pack_code for item in existing_packs})
         pack = LuckyRedpack(
             pack_code=pack_code,
             chat_id=chat_id,
@@ -1064,9 +1177,12 @@ class LuckyRedpackPlugin(Plugin):
             return
         pack.message_id = _message_id_from_event(sent) if sent is not None else _message_id_from_event(event)
         async with self._get_lock(chat_id):
-            packs = await self._load_active_packs(ctx, chat_id)
-            packs.append(pack)
-            await self._save_active_packs(ctx, chat_id, packs)
+            with self._state_file_lock(ctx.account_id, chat_id):
+                packs = await self._load_active_packs(ctx, chat_id)
+                if any(item.pack_code == pack.pack_code for item in packs):
+                    pack.pack_code = self._new_pack_code_for_existing({item.pack_code for item in packs})
+                packs.append(pack)
+                await self._save_active_packs(ctx, chat_id, packs)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
         if self._delete_command_message:
             await self._delete_event(ctx, event)
@@ -1112,63 +1228,71 @@ class LuckyRedpackPlugin(Plugin):
         pack_to_resend: LuckyRedpack | None = None
         normalized_text = _normalize_password(text)
         async with self._get_lock(chat_id):
-            packs = await self._load_active_packs(ctx, chat_id)
-            pack = next(
-                (item for item in reversed(packs) if normalized_text == _normalize_password(item.current_password)),
-                None,
-            )
-            if not pack or pack.is_finished():
-                if ctx.log and packs and any(normalized_text.startswith(_normalize_password(item.base_keyword)) for item in packs):
-                    active_codes = ",".join(f"{item.pack_code}:{item.remaining_count}/{item.total_count}" for item in packs[-5:])
-                    await ctx.log(
-                        "info",
-                        f"[lucky_redpack] 领取口令未命中：chat={chat_id} msg={claim_message_id} active={active_codes}",
-                    )
-                return [], None
-            if pack.is_expired():
-                packs = [item for item in packs if item.pack_code != pack.pack_code]
-                await self._save_active_packs(ctx, chat_id, packs)
-                if pack.message_id:
-                    actions.append(_delete_action(pack.message_id, chat_id=chat_id))
-                actions.append(_send_action(render_settlement(pack, expired=True), send_via="userbot_reply"))
-                return actions, None
-            if not sender_id:
-                if ctx.log:
-                    await ctx.log("warn", f"[lucky_redpack] 领取口令命中但缺少发送者 ID：chat={chat_id} msg={claim_message_id}")
-                return [], None
-            if sender_id == pack.creator_user_id and not self._allow_owner_claim:
-                return [], None
-            if sender_is_bot:
-                return [], None
-            if sender_id in pack.claimed_user_ids:
-                return [], None
-
-            claim_amount = calculate_random_claim_amount(pack)
-            if claim_amount <= 0:
-                return [], None
-            pack.remaining_amount = max(0, pack.remaining_amount - claim_amount)
-            pack.remaining_count = max(0, pack.remaining_count - 1)
-            pack.claimed_user_ids.add(sender_id)
-            pack.claims.append(
-                ClaimRecord(
-                    user_id=sender_id,
-                    display_name=sender_name or str(sender_id),
-                    amount=claim_amount,
-                    message_id=claim_message_id,
+            with self._state_file_lock(ctx.account_id, chat_id):
+                packs = await self._load_active_packs(ctx, chat_id)
+                pack = next(
+                    (item for item in reversed(packs) if normalized_text == _normalize_password(item.current_password)),
+                    None,
                 )
-            )
-            if claim_message_id:
-                actions.append(_send_action(f"+{claim_amount}", reply_to_message_id=claim_message_id, send_via="userbot_reply", parse_mode=None))
-            if pack.is_finished():
-                packs = [item for item in packs if item.pack_code != pack.pack_code]
-                await self._save_active_packs(ctx, chat_id, packs)
-                if pack.message_id:
-                    actions.append(_delete_action(pack.message_id, chat_id=chat_id))
-                actions.append(_send_action(render_settlement(pack), send_via="userbot_reply"))
-            else:
-                pack.current_suffix = self._new_suffix(pack)
-                pack.used_passwords.add(_normalize_password(pack.current_password))
-                pack_to_resend = pack
+                if not pack or pack.is_finished():
+                    if ctx.log:
+                        if packs and any(normalized_text.startswith(_normalize_password(item.base_keyword)) for item in packs):
+                            active_codes = ",".join(f"{item.pack_code}:{item.remaining_count}/{item.total_count}" for item in packs[-5:])
+                            await ctx.log(
+                                "info",
+                                f"[lucky_redpack] 领取口令未命中：chat={chat_id} msg={claim_message_id} active={active_codes}",
+                            )
+                        elif not packs and _looks_like_password_attempt(text, self._suffix_length):
+                            await ctx.log(
+                                "warn",
+                                f"[lucky_redpack] 领取口令未找到红包状态：chat={chat_id} msg={claim_message_id}",
+                            )
+                    return [], None
+                if pack.is_expired():
+                    packs = [item for item in packs if item.pack_code != pack.pack_code]
+                    await self._save_active_packs(ctx, chat_id, packs)
+                    if pack.message_id:
+                        actions.append(_delete_action(pack.message_id, chat_id=chat_id))
+                    actions.append(_send_action(render_settlement(pack, expired=True), send_via="userbot_reply"))
+                    return actions, None
+                if not sender_id:
+                    if ctx.log:
+                        await ctx.log("warn", f"[lucky_redpack] 领取口令命中但缺少发送者 ID：chat={chat_id} msg={claim_message_id}")
+                    return [], None
+                if sender_id == pack.creator_user_id and not self._allow_owner_claim:
+                    return [], None
+                if sender_is_bot:
+                    return [], None
+                if sender_id in pack.claimed_user_ids:
+                    return [], None
+
+                claim_amount = calculate_random_claim_amount(pack)
+                if claim_amount <= 0:
+                    return [], None
+                pack.remaining_amount = max(0, pack.remaining_amount - claim_amount)
+                pack.remaining_count = max(0, pack.remaining_count - 1)
+                pack.claimed_user_ids.add(sender_id)
+                pack.claims.append(
+                    ClaimRecord(
+                        user_id=sender_id,
+                        display_name=sender_name or str(sender_id),
+                        amount=claim_amount,
+                        message_id=claim_message_id,
+                    )
+                )
+                if claim_message_id:
+                    actions.append(_send_action(f"+{claim_amount}", reply_to_message_id=claim_message_id, send_via="userbot_reply", parse_mode=None))
+                if pack.is_finished():
+                    packs = [item for item in packs if item.pack_code != pack.pack_code]
+                    await self._save_active_packs(ctx, chat_id, packs)
+                    if pack.message_id:
+                        actions.append(_delete_action(pack.message_id, chat_id=chat_id))
+                    actions.append(_send_action(render_settlement(pack), send_via="userbot_reply"))
+                else:
+                    pack.current_suffix = self._new_suffix(pack)
+                    pack.used_passwords.add(_normalize_password(pack.current_password))
+                    await self._save_active_packs(ctx, chat_id, packs)
+                    pack_to_resend = pack
 
         if actions and ctx.log:
             await ctx.log(
@@ -1316,13 +1440,14 @@ class LuckyRedpackPlugin(Plugin):
     async def _auto_expire(self, chat_id: int, ctx: PluginContext, created_at: float) -> None:
         await asyncio.sleep(self._ttl_seconds)
         async with self._get_lock(chat_id):
-            packs = await self._load_active_packs(ctx, chat_id)
-            pack = next((item for item in packs if item.created_at == created_at), None)
-            if not pack or pack.created_at != created_at or pack.is_finished():
-                return
-            packs = [item for item in packs if item.pack_code != pack.pack_code]
-            await self._save_active_packs(ctx, chat_id, packs)
-            settlement = render_settlement(pack, expired=True)
+            with self._state_file_lock(ctx.account_id, chat_id):
+                packs = await self._load_active_packs(ctx, chat_id)
+                pack = next((item for item in packs if item.created_at == created_at), None)
+                if not pack or pack.created_at != created_at or pack.is_finished():
+                    return
+                packs = [item for item in packs if item.pack_code != pack.pack_code]
+                await self._save_active_packs(ctx, chat_id, packs)
+                settlement = render_settlement(pack, expired=True)
         if ctx.client is not None:
             await ctx.client.send_message(chat_id, settlement, reply_to=pack.message_id)
 
