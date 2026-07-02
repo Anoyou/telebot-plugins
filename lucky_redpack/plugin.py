@@ -58,7 +58,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.2.3"
+PLUGIN_VERSION = "1.2.4"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -143,6 +143,151 @@ def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return min(max(parsed, minimum), maximum)
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _payload_event(payload: dict[str, Any]) -> dict[str, Any]:
+    return _dict(payload.get("event"))
+
+
+def _payload_message(payload: dict[str, Any]) -> dict[str, Any]:
+    return _dict(payload.get("message"))
+
+
+def _payload_source(payload: dict[str, Any]) -> dict[str, Any]:
+    return _dict(payload.get("source"))
+
+
+def _payload_actor(payload: dict[str, Any]) -> dict[str, Any]:
+    return _dict(payload.get("actor"))
+
+
+def _payload_reply_to(payload: dict[str, Any]) -> dict[str, Any]:
+    return _dict(payload.get("reply_to"))
+
+
+def _payload_event_type(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    trigger = _dict(payload.get("trigger"))
+    message = _payload_message(payload)
+    return str(
+        payload.get("event_type")
+        or event.get("type")
+        or source.get("event_type")
+        or source.get("type")
+        or trigger.get("event")
+        or trigger.get("type")
+        or message.get("type")
+        or ""
+    ).strip()
+
+
+def _payload_chat_id(payload: dict[str, Any]) -> int:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    message = _payload_message(payload)
+    session = _dict(payload.get("session"))
+    chat = _dict(payload.get("chat"))
+    try:
+        return int(
+            payload.get("chat_id")
+            or message.get("chat_id")
+            or chat.get("id")
+            or event.get("chat_id")
+            or source.get("chat_id")
+            or session.get("chat_id")
+            or 0
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _payload_message_id(payload: dict[str, Any]) -> int | None:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    message = _payload_message(payload)
+    reply_to = _payload_reply_to(payload)
+    try:
+        value = int(
+            payload.get("message_id")
+            or payload.get("source_message_id")
+            or message.get("message_id")
+            or message.get("id")
+            or reply_to.get("message_id")
+            or event.get("message_id")
+            or event.get("id")
+            or source.get("message_id")
+            or 0
+        )
+    except (TypeError, ValueError):
+        value = 0
+    return value or None
+
+
+def _payload_message_text(payload: dict[str, Any]) -> str:
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    message = _payload_message(payload)
+    trigger = _dict(payload.get("trigger"))
+    return str(
+        payload.get("message_text")
+        or payload.get("text")
+        or message.get("text")
+        or message.get("raw_text")
+        or event.get("text")
+        or event.get("raw_text")
+        or source.get("text")
+        or trigger.get("text")
+        or ""
+    ).strip()
+
+
+def _payload_sender_id(payload: dict[str, Any]) -> int:
+    actor = _payload_actor(payload)
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    message = _payload_message(payload)
+    try:
+        return int(
+            actor.get("user_id")
+            or actor.get("id")
+            or payload.get("sender_user_id")
+            or event.get("user_id")
+            or event.get("sender_id")
+            or message.get("sender_id")
+            or source.get("user_id")
+            or 0
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+def _payload_sender_name(payload: dict[str, Any], sender_id: int) -> str:
+    actor = _payload_actor(payload)
+    event = _payload_event(payload)
+    source = _payload_source(payload)
+    message = _payload_message(payload)
+    name = (
+        actor.get("display_name")
+        or actor.get("name")
+        or payload.get("sender_name")
+        or event.get("display_name")
+        or message.get("display_name")
+        or source.get("display_name")
+        or sender_id
+        or "玩家"
+    )
+    return str(name).strip() or "玩家"
+
+
+def _payload_actor_is_bot(payload: dict[str, Any]) -> bool:
+    actor = _payload_actor(payload)
+    message = _payload_message(payload)
+    return bool(actor.get("is_bot") or message.get("sender_is_bot"))
 
 
 def _chat_id_from_event(event: Any) -> int:
@@ -492,6 +637,34 @@ def render_settlement(pack: LuckyRedpack, *, expired: bool = False) -> str:
     return "\n".join(lines)
 
 
+def _send_action(
+    text: str,
+    *,
+    reply_to_message_id: int | None = None,
+    send_via: str = "userbot_reply",
+    parse_mode: str | None = "html",
+) -> dict[str, Any]:
+    action: dict[str, Any] = {
+        "type": "send_message",
+        "text": text,
+        "send_via": send_via,
+    }
+    if parse_mode:
+        action["parse_mode"] = parse_mode
+    if reply_to_message_id:
+        action["reply_to_message_id"] = reply_to_message_id
+    return action
+
+
+def _delete_action(message_id: int, *, chat_id: int, send_via: str = "userbot_reply") -> dict[str, Any]:
+    return {
+        "type": "delete_message",
+        "message_id": int(message_id),
+        "chat_id": int(chat_id),
+        "send_via": send_via,
+    }
+
+
 @register
 class LuckyRedpackPlugin(Plugin):
     key = PLUGIN_KEY
@@ -601,6 +774,30 @@ class LuckyRedpackPlugin(Plugin):
         self._locks.clear()
         if ctx.log:
             await ctx.log("info", "[lucky_redpack] 已停止")
+
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Event Bus 主入口，0.33+ 运行态优先从这里处理领取口令。"""
+        if _payload_event_type(payload) != "message":
+            return []
+        text = _payload_message_text(payload)
+        if not text or text.startswith((",", "/", "，")):
+            return []
+        chat_id = _payload_chat_id(payload)
+        if not chat_id:
+            return []
+        sender_id = _payload_sender_id(payload)
+        actions, pack_to_resend = await self._claim_password(
+            ctx,
+            text=text,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            sender_name=_payload_sender_name(payload, sender_id),
+            sender_is_bot=_payload_actor_is_bot(payload),
+            claim_message_id=_payload_message_id(payload),
+        )
+        if pack_to_resend is not None:
+            await self._resend_pack_message(ctx, pack_to_resend)
+        return actions or []
 
     async def _cmd_handler(
         self,
@@ -717,82 +914,114 @@ class LuckyRedpackPlugin(Plugin):
         chat_id = _chat_id_from_event(event)
         if not chat_id:
             return
+        sender = await self._sender(event)
+        sender_id = int(getattr(sender, "id", 0) or _sender_id_from_event(event))
+        display_name = public_entity_display_name(sender, fallback_id=sender_id, default="玩家")
+        actions, pack_to_resend = await self._claim_password(
+            ctx,
+            text=text,
+            chat_id=chat_id,
+            sender_id=sender_id,
+            sender_name=display_name,
+            sender_is_bot=bool(getattr(sender, "is_bot", False)),
+            claim_message_id=_message_id_from_event(event),
+        )
+        await self._apply_legacy_actions(ctx, chat_id, actions)
+        if pack_to_resend is not None:
+            await self._resend_pack_message(ctx, pack_to_resend)
+
+    async def _claim_password(
+        self,
+        ctx: PluginContext,
+        *,
+        text: str,
+        chat_id: int,
+        sender_id: int,
+        sender_name: str,
+        sender_is_bot: bool,
+        claim_message_id: int | None,
+    ) -> tuple[list[dict[str, Any]], LuckyRedpack | None]:
+        actions: list[dict[str, Any]] = []
+        pack_to_resend: LuckyRedpack | None = None
+        normalized_text = _normalize_password(text)
         async with self._get_lock(chat_id):
             packs = self._active_packs(chat_id)
             pack = next(
-                (
-                    item
-                    for item in reversed(packs)
-                    if _normalize_password(text) == _normalize_password(item.current_password)
-                ),
+                (item for item in reversed(packs) if normalized_text == _normalize_password(item.current_password)),
                 None,
             )
             if not pack or pack.is_finished():
-                return
+                if ctx.log and packs and any(normalized_text.startswith(_normalize_password(item.base_keyword)) for item in packs):
+                    active_codes = ",".join(f"{item.pack_code}:{item.remaining_count}/{item.total_count}" for item in packs[-5:])
+                    await ctx.log(
+                        "info",
+                        f"[lucky_redpack] 领取口令未命中：chat={chat_id} msg={claim_message_id} active={active_codes}",
+                    )
+                return [], None
             if pack.is_expired():
                 self._remove_pack(chat_id, pack)
-                settlement = render_settlement(pack, expired=True)
-                send_after_lock = [("delete", "", pack.message_id), ("send", settlement, None)]
-                pack_to_resend: LuckyRedpack | None = None
-                claim_amount = 0
-                claim_message_id = None
-                finished = False
-            else:
-                send_after_lock = []
-                pack_to_resend = None
-                claim_amount = 0
-                claim_message_id = None
-                finished = False
-                if _normalize_password(text) != _normalize_password(pack.current_password):
-                    return
-                sender = await self._sender(event)
-                sender_id = int(getattr(sender, "id", 0) or _sender_id_from_event(event))
-                if not sender_id:
-                    return
-                if sender_id == pack.creator_user_id and not self._allow_owner_claim:
-                    return
-                if getattr(sender, "is_bot", False):
-                    return
-                if sender_id in pack.claimed_user_ids:
-                    return
+                if pack.message_id:
+                    actions.append(_delete_action(pack.message_id, chat_id=chat_id))
+                actions.append(_send_action(render_settlement(pack, expired=True), send_via="userbot_reply"))
+                return actions, None
+            if not sender_id:
+                if ctx.log:
+                    await ctx.log("warn", f"[lucky_redpack] 领取口令命中但缺少发送者 ID：chat={chat_id} msg={claim_message_id}")
+                return [], None
+            if sender_id == pack.creator_user_id and not self._allow_owner_claim:
+                return [], None
+            if sender_is_bot:
+                return [], None
+            if sender_id in pack.claimed_user_ids:
+                return [], None
 
-                claim_amount = calculate_random_claim_amount(pack)
-                if claim_amount <= 0:
-                    return
-                claim_message_id = _message_id_from_event(event)
-                display_name = public_entity_display_name(sender, fallback_id=sender_id, default="玩家")
-                pack.remaining_amount = max(0, pack.remaining_amount - claim_amount)
-                pack.remaining_count = max(0, pack.remaining_count - 1)
-                pack.claimed_user_ids.add(sender_id)
-                pack.claims.append(
-                    ClaimRecord(
-                        user_id=sender_id,
-                        display_name=display_name,
-                        amount=claim_amount,
-                        message_id=claim_message_id,
-                    )
+            claim_amount = calculate_random_claim_amount(pack)
+            if claim_amount <= 0:
+                return [], None
+            pack.remaining_amount = max(0, pack.remaining_amount - claim_amount)
+            pack.remaining_count = max(0, pack.remaining_count - 1)
+            pack.claimed_user_ids.add(sender_id)
+            pack.claims.append(
+                ClaimRecord(
+                    user_id=sender_id,
+                    display_name=sender_name or str(sender_id),
+                    amount=claim_amount,
+                    message_id=claim_message_id,
                 )
-                finished = pack.is_finished()
-                if finished:
-                    self._remove_pack(chat_id, pack)
-                    send_after_lock.append(("delete", "", pack.message_id))
-                    send_after_lock.append(("send", render_settlement(pack), None))
-                else:
-                    pack.current_suffix = self._new_suffix(pack)
-                    pack.used_passwords.add(_normalize_password(pack.current_password))
-                    pack_to_resend = pack
+            )
+            if claim_message_id:
+                actions.append(_send_action(f"+{claim_amount}", reply_to_message_id=claim_message_id, send_via="userbot_reply", parse_mode=None))
+            if pack.is_finished():
+                self._remove_pack(chat_id, pack)
+                if pack.message_id:
+                    actions.append(_delete_action(pack.message_id, chat_id=chat_id))
+                actions.append(_send_action(render_settlement(pack), send_via="userbot_reply"))
+            else:
+                pack.current_suffix = self._new_suffix(pack)
+                pack.used_passwords.add(_normalize_password(pack.current_password))
+                pack_to_resend = pack
 
-        if claim_amount and claim_message_id:
-            await ctx.client.send_message(chat_id, f"+{claim_amount}", reply_to=claim_message_id)
-        if pack_to_resend is not None:
-            await self._resend_pack_message(ctx, pack_to_resend)
-        for action, text_value, reply_to in send_after_lock:
-            if action == "send":
-                await ctx.client.send_message(chat_id, text_value, reply_to=reply_to)
-            elif action == "delete" and reply_to:
-                await self._delete_message(ctx, chat_id, int(reply_to))
-        if finished:
+        if actions and ctx.log:
+            await ctx.log(
+                "info",
+                f"[lucky_redpack] 领取成功：chat={chat_id} msg={claim_message_id} user={sender_id}",
+            )
+        return actions, pack_to_resend
+
+    async def _apply_legacy_actions(self, ctx: PluginContext, chat_id: int, actions: list[dict[str, Any]]) -> None:
+        if ctx.client is None:
             return
+        for action in actions:
+            action_type = action.get("type")
+            if action_type == "send_message":
+                kwargs: dict[str, Any] = {}
+                if action.get("reply_to_message_id"):
+                    kwargs["reply_to"] = action["reply_to_message_id"]
+                if action.get("parse_mode"):
+                    kwargs["parse_mode"] = action["parse_mode"]
+                await ctx.client.send_message(chat_id, str(action.get("text") or ""), **kwargs)
+            elif action_type == "delete_message" and action.get("message_id"):
+                await self._delete_message(ctx, chat_id, int(action["message_id"]))
 
     def _validate_amount_count(self, amount: int, count: int) -> str | None:
         if amount < count * self._min_share_amount:

@@ -103,6 +103,7 @@ EVENT_SUBSCRIPTIONS = [
         "events": ["message"],
         "source": ["userbot"],
         "scope": "all_allowed_chats",
+        "entry_key": "claim_lucky_redpack",
         "description": "监听群友发送的财富密码，并由 UserBot 回复 +金额。",
     },
 ]
@@ -111,7 +112,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.2.3",
+    version="1.2.4",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

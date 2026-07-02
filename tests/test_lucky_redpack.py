@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 import types
 import unittest
@@ -379,6 +380,60 @@ class LuckyRedpackTest(unittest.TestCase):
             await plugin.on_shutdown(ctx)
 
         asyncio.run(run_case())
+
+    def test_event_bus_claim_returns_userbot_reply_action_and_resends_pack(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, command_event, ["测试", "100", "2"], 1, ctx)
+            pack = plugin._packs[100][0]
+            old_redpack_message_id = pack.message_id
+            password = pack.current_password
+
+            actions = await plugin.on_event(
+                ctx,
+                {
+                    "event_type": "message",
+                    "chat_id": 100,
+                    "message_id": 2001,
+                    "message_text": password,
+                    "actor": {"user_id": 2, "display_name": "玩家二", "is_bot": False},
+                },
+            )
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0]["type"], "send_message")
+            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["reply_to_message_id"], 2001)
+            self.assertRegex(actions[0]["text"], r"^\+\d+$")
+            self.assertEqual(ctx.client.deleted[0]["message_ids"], [old_redpack_message_id])
+            self.assertIn("领取详情", ctx.client.sent[-1]["text"])
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_message_subscription_declares_event_bus_entry_key(self) -> None:
+        manifest = json.loads((ROOT / "lucky_redpack" / "plugin.json").read_text())
+        message_subscriptions = [
+            item
+            for item in manifest["event_subscriptions"]
+            if "message" in item.get("events", []) and "userbot" in item.get("source", [])
+        ]
+
+        self.assertTrue(message_subscriptions)
+        self.assertTrue(all(item.get("entry_key") == "claim_lucky_redpack" for item in message_subscriptions))
 
     def test_last_claim_finishes_with_remaining_amount(self) -> None:
         pack = plugin_module.LuckyRedpack(
