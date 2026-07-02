@@ -58,7 +58,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.2.1"
+PLUGIN_VERSION = "1.2.2"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -588,7 +588,7 @@ class LuckyRedpackPlugin(Plugin):
         self._allow_owner_claim = bool(cfg.get("allow_owner_claim", False))
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
-            await ctx.log("info", f"[lucky_redpack] 已启动，指令：{self._command}")
+            await ctx.log("info", f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for task in list(self._tasks):
@@ -803,7 +803,7 @@ class LuckyRedpackPlugin(Plugin):
 
     def _help_text(self) -> str:
         return (
-            "🧧 拼手气口令红包\n"
+            f"🧧 拼手气口令红包 v{PLUGIN_VERSION}\n"
             f"{self._usage_example()}\n"
             f"{current_command_prefix(fallback=',')}{self._command} img 发财 88888 10 发送图片财富密码红包\n"
             f"{current_command_prefix(fallback=',')}{self._command} text 发财 88888 10 发送文字财富密码红包\n"
