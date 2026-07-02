@@ -8,14 +8,14 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": "管理员发送 {prefix}{command} 发财 88888 10 创建红包；群友发送财富密码领取，插件会用 UserBot 回复 +金额；财富密码每被领一次会随机刷新。",
+    "x-usage-guide": "管理员发送 {prefix}{command} 发财 88888 10 创建文字财富密码红包；发送 {prefix}{command} img 发财 88888 10 创建图片财富密码红包；群友发送财富密码领取，插件会用 UserBot 回复 +金额；财富密码每被领一次会随机刷新。",
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
             "type": "string",
             "title": "玩法说明",
             "readOnly": True,
-            "default": "管理员发送 {prefix}{command} 发财 88888 10 创建拼手气红包。\n群友发送当前财富密码即可领取，例如：发财A7K9。\n每领取一次财富密码都会随机刷新，金额消息固定由 UserBot 回复领取者消息发送。",
+            "default": "管理员发送 {prefix}{command} 发财 88888 10 创建拼手气红包。\n使用 {prefix}{command} img 发财 88888 10 可强制用图片显示财富密码；使用 {prefix}{command} text 发财 88888 10 可强制用文字显示。\n群友发送当前财富密码即可领取，例如：发财A7K9。\n每领取一次财富密码都会随机刷新，金额消息固定由 UserBot 回复领取者消息发送。",
             "description": "只读说明；实际系统前缀由 TelePilot 当前命令前缀决定。",
         },
         "command": {
@@ -63,6 +63,12 @@ CONFIG_SCHEMA = {
             "minimum": 30,
             "maximum": 86400,
         },
+        "image_password_enabled": {
+            "type": "boolean",
+            "title": "默认使用图片财富密码",
+            "default": False,
+            "description": "开启后默认把财富密码显示为图片，避免被直接复制文本识别；也可以用 img/text 指令参数临时覆盖。",
+        },
         "allow_owner_claim": {
             "type": "boolean",
             "title": "允许发起人领取",
@@ -81,10 +87,11 @@ CONFIG_SCHEMA = {
         "min_share_amount",
         "suffix_length",
         "ttl_seconds",
+        "image_password_enabled",
     ],
 }
 
-USAGE = "管理员发送 {prefix}{command} 发财 88888 10 创建红包；群友发送财富密码领取，插件会用 UserBot 回复 +金额；财富密码每被领一次会随机刷新。本插件不提供交互 Bot 入口，资金动作只走 UserBot。"
+USAGE = "管理员发送 {prefix}{command} 发财 88888 10 创建红包；发送 {prefix}{command} img 发财 88888 10 可用图片显示财富密码；群友发送财富密码领取，插件会用 UserBot 回复 +金额；财富密码每被领一次会随机刷新。本插件不提供交互 Bot 入口，资金动作只走 UserBot。"
 EVENT_SUBSCRIPTIONS = [
     {
         "events": ["command"],
@@ -104,12 +111,12 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.0.1",
+    version="1.1.0",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
-    description="纯 UserBot 口令红包插件，财富密码由基础口令加随机码组成，每领取一次自动刷新",
-    permissions=["send_message", "edit_message", "read_chat", "delete_message"],
+    description="纯 UserBot 口令红包插件，财富密码由基础口令加随机码组成，每领取一次自动刷新，可用图片显示财富密码",
+    permissions=["send_message", "edit_message", "read_chat", "delete_message", "send_file"],
     category="interactive",
     config_schema=CONFIG_SCHEMA,
 )

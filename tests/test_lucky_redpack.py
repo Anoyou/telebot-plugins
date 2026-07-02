@@ -84,8 +84,9 @@ class FakeMessage:
         self.replies: list[FakeMessage] = []
         self.sender = types.SimpleNamespace(id=sender_id, first_name=f"用户{sender_id}", username="", is_bot=False)
 
-    async def reply(self, text: str):
+    async def reply(self, text: str, **kwargs):
         msg = FakeMessage(text, chat_id=self.chat_id, sender_id=0, outgoing=True)
+        msg.kwargs = kwargs
         self.replies.append(msg)
         return msg
 
@@ -99,14 +100,25 @@ class FakeMessage:
 class FakeClient:
     def __init__(self) -> None:
         self.sent: list[dict] = []
+        self.files: list[dict] = []
         self.edited: list[dict] = []
+        self.deleted: list[dict] = []
 
     async def send_message(self, chat_id, text, **kwargs):
-        self.sent.append({"chat_id": chat_id, "text": text, **kwargs})
-        return FakeMessage(text, chat_id=chat_id, sender_id=0, outgoing=True)
+        msg = FakeMessage(text, chat_id=chat_id, sender_id=0, outgoing=True)
+        self.sent.append({"chat_id": chat_id, "text": text, "message_id": msg.id, **kwargs})
+        return msg
+
+    async def send_file(self, chat_id, file, **kwargs):
+        msg = FakeMessage(kwargs.get("caption", ""), chat_id=chat_id, sender_id=0, outgoing=True)
+        self.files.append({"chat_id": chat_id, "file": file, "message_id": msg.id, **kwargs})
+        return msg
 
     async def edit_message(self, chat_id, message_id, text, **kwargs):
         self.edited.append({"chat_id": chat_id, "message_id": message_id, "text": text, **kwargs})
+
+    async def delete_messages(self, chat_id, message_ids):
+        self.deleted.append({"chat_id": chat_id, "message_ids": list(message_ids)})
 
 
 class LuckyRedpackTest(unittest.TestCase):
@@ -143,7 +155,33 @@ class LuckyRedpackTest(unittest.TestCase):
         self.assertNotIn("是口令", text)
         self.assertNotIn("随机码）", text)
 
-    def test_claim_sends_userbot_transfer_reply_and_refreshes_password(self) -> None:
+    def test_render_message_uses_folded_claim_details(self) -> None:
+        pack = plugin_module.LuckyRedpack(
+            chat_id=1,
+            creator_user_id=10,
+            base_keyword="发财",
+            total_amount=666,
+            total_count=3,
+            min_share_amount=1,
+            suffix_length=4,
+            created_at=1,
+            expires_at=999,
+            current_suffix="8ZB9",
+            remaining_amount=111,
+            remaining_count=1,
+        )
+        pack.claims.append(plugin_module.ClaimRecord(user_id=2, display_name="用户<2>", amount=222, message_id=10))
+        pack.claims.append(plugin_module.ClaimRecord(user_id=3, display_name="用户3", amount=333, message_id=11))
+
+        text = plugin_module.render_redpack_message(pack)
+
+        self.assertIn("已领取：2 人", text)
+        self.assertIn("<blockquote expandable>领取详情：", text)
+        self.assertIn("1. 用户&lt;2&gt; +222", text)
+        self.assertIn("2. 用户3 +333 🏆", text)
+        self.assertTrue(text.endswith("</blockquote>"))
+
+    def test_claim_sends_userbot_transfer_reply_and_resends_redpack_message(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
             ctx = PluginContext()
@@ -161,17 +199,86 @@ class LuckyRedpackTest(unittest.TestCase):
             await plugin._cmd_handler(ctx.client, command_event, ["发财", "100", "2"], 1, ctx)
             pack = plugin._packs[100]
             first_password = pack.current_password
+            old_redpack_message_id = pack.message_id
 
             claim_event = FakeMessage(first_password, chat_id=100, sender_id=2, outgoing=False)
             await plugin.on_message(ctx, claim_event)
 
-            self.assertEqual(len(ctx.client.sent), 1)
-            self.assertEqual(ctx.client.sent[0]["reply_to"], claim_event.id)
-            self.assertRegex(ctx.client.sent[0]["text"], r"^\+\d+$")
-            self.assertEqual(len(ctx.client.edited), 1)
+            self.assertEqual(len(ctx.client.sent), 3)
+            self.assertEqual(ctx.client.sent[1]["reply_to"], claim_event.id)
+            self.assertRegex(ctx.client.sent[1]["text"], r"^\+\d+$")
+            self.assertEqual(len(ctx.client.edited), 0)
+            self.assertEqual(ctx.client.deleted[0]["message_ids"], [old_redpack_message_id])
             self.assertNotEqual(pack.current_password, first_password)
-            self.assertIn("财富密码：", ctx.client.edited[0]["text"])
+            self.assertIn("财富密码：", ctx.client.sent[2]["text"])
+            self.assertIn("<blockquote expandable>领取详情：", ctx.client.sent[2]["text"])
+            self.assertEqual(ctx.client.sent[2]["parse_mode"], "html")
 
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_image_mode_sends_password_as_file_without_caption_password(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+            original_builder = plugin_module.build_password_image
+            try:
+                fake_path = ROOT / "tests" / "_fake_lucky_redpack.png"
+                fake_path.write_bytes(b"png")
+
+                def fake_build_password_image(password):
+                    fake_path.write_bytes(password.encode("utf-8"))
+                    return fake_path
+
+                plugin_module.build_password_image = fake_build_password_image
+                command_event = FakeMessage(",rp img 发财 100 2", chat_id=100, sender_id=1, outgoing=True)
+                await plugin._cmd_handler(ctx.client, command_event, ["img", "发财", "100", "2"], 1, ctx)
+
+                pack = plugin._packs[100]
+                self.assertTrue(pack.image_mode)
+                self.assertEqual(len(ctx.client.files), 1)
+                self.assertIn("财富密码：见图片", ctx.client.files[0]["caption"])
+                self.assertNotIn(pack.current_password, ctx.client.files[0]["caption"])
+                self.assertEqual(ctx.client.files[0]["parse_mode"], "html")
+            finally:
+                plugin_module.build_password_image = original_builder
+                fake_path = ROOT / "tests" / "_fake_lucky_redpack.png"
+                if fake_path.exists():
+                    fake_path.unlink()
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_delete_command_message_falls_back_to_client_delete_messages(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+                "delete_command_message": True,
+            }
+            await plugin.on_startup(ctx)
+
+            command_event = FakeMessage(",rp 发财 100 2", chat_id=100, sender_id=1, outgoing=True)
+            command_event.delete = None
+            await plugin._cmd_handler(ctx.client, command_event, ["发财", "100", "2"], 1, ctx)
+
+            self.assertEqual(ctx.client.deleted[0]["message_ids"], [command_event.id])
             await plugin.on_shutdown(ctx)
 
         asyncio.run(run_case())

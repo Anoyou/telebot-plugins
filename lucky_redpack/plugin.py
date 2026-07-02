@@ -7,11 +7,15 @@ UserBot 回复领取者消息，以便复用平台现有的转账链路。
 from __future__ import annotations
 
 import asyncio
+import html
+import inspect
 import random
 import shlex
 import string
+import tempfile
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
@@ -45,8 +49,16 @@ except ImportError:  # pragma: no cover - older TelePilot compatibility
                 return str(entity_id)
         return str(fallback_id) if fallback_id not in (None, "") else default
 
+try:
+    from PIL import Image, ImageDraw, ImageFont
 
-PLUGIN_VERSION = "1.0.1"
+    HAS_PIL = True
+except ImportError:  # pragma: no cover - depends on worker environment
+    Image = ImageDraw = ImageFont = None
+    HAS_PIL = False
+
+
+PLUGIN_VERSION = "1.1.0"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -54,9 +66,32 @@ DEFAULT_COUNT = 10
 DEFAULT_MIN_SHARE_AMOUNT = 1
 DEFAULT_SUFFIX_LENGTH = 4
 DEFAULT_TTL_SECONDS = 3600
+DEFAULT_IMAGE_PASSWORD_ENABLED = False
 MAX_AMOUNT = 999_999_999
 MAX_COUNT = 500
 SUFFIX_CHARS = string.ascii_uppercase + string.digits
+IMAGE_WIDTH = 980
+IMAGE_HEIGHT = 320
+PLUGIN_DIR = Path(__file__).resolve().parent
+BUNDLED_FONT_CANDIDATES = [
+    PLUGIN_DIR.parent / "redpack-byRBQ" / "assets" / "font.ttf",
+]
+FONT_CANDIDATES = [
+    "/System/Library/Fonts/STHeiti Medium.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+]
+FONT_SEARCH_DIRS = ["/usr/share/fonts", "/usr/local/share/fonts", str(Path.home() / ".fonts")]
+FONT_SEARCH_KEYWORDS = ["notosanscjk", "notoserifcjk", "sourcehansans", "wqy", "wenquanyi", "pingfang"]
+FONT_EXTENSIONS = {".ttf", ".ttc", ".otf"}
+_font_path_cache: str | None = None
+_font_search_done = False
+_image_last_error = ""
 
 
 @dataclass
@@ -79,6 +114,7 @@ class LuckyRedpack:
     suffix_length: int
     created_at: float
     expires_at: float
+    image_mode: bool = False
     message_id: int | None = None
     current_suffix: str = ""
     remaining_amount: int = 0
@@ -144,6 +180,12 @@ def _message_id_from_event(event: Any) -> int | None:
     except (TypeError, ValueError):
         value = 0
     return value or None
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def _is_outgoing_event(event: Any) -> bool:
@@ -228,16 +270,205 @@ def calculate_random_claim_amount(pack: LuckyRedpack) -> int:
     return random.randint(min_amount, upper_bound)
 
 
+def _html(value: Any) -> str:
+    return html.escape(str(value), quote=False)
+
+
+def _set_image_error(reason: str) -> None:
+    global _image_last_error
+    _image_last_error = str(reason or "").strip()
+
+
+def get_image_error() -> str:
+    return _image_last_error or "未知原因"
+
+
+def _can_font_render_text(font_path: str, text: str) -> bool:
+    if not HAS_PIL or not font_path:
+        return False
+    try:
+        font = ImageFont.truetype(font_path, 72)
+        mask = font.getmask(text or "图")
+        return mask.getbbox() is not None
+    except Exception:
+        return False
+
+
+def _find_font_path(sample_text: str) -> str | None:
+    global _font_path_cache, _font_search_done
+
+    if _font_path_cache and _can_font_render_text(_font_path_cache, sample_text):
+        return _font_path_cache
+
+    for candidate in [*BUNDLED_FONT_CANDIDATES, *[Path(path) for path in FONT_CANDIDATES]]:
+        if candidate.exists() and _can_font_render_text(str(candidate), sample_text):
+            _font_path_cache = str(candidate)
+            return _font_path_cache
+
+    if _font_search_done:
+        return _font_path_cache
+    _font_search_done = True
+
+    for search_dir in FONT_SEARCH_DIRS:
+        directory = Path(search_dir)
+        if not directory.exists():
+            continue
+        try:
+            for candidate in directory.rglob("*"):
+                if not candidate.is_file() or candidate.suffix.lower() not in FONT_EXTENSIONS:
+                    continue
+                lowered_name = candidate.name.lower()
+                if not any(keyword in lowered_name for keyword in FONT_SEARCH_KEYWORDS):
+                    continue
+                if _can_font_render_text(str(candidate), sample_text):
+                    _font_path_cache = str(candidate)
+                    return _font_path_cache
+        except Exception:
+            continue
+    return _font_path_cache
+
+
+def _load_password_font(password: str, size: int) -> Any:
+    if not HAS_PIL:
+        return None
+    font_path = _find_font_path(password)
+    if font_path:
+        try:
+            return ImageFont.truetype(font_path, size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def build_password_image(password: str) -> Path | None:
+    if not HAS_PIL:
+        _set_image_error("未安装 Pillow/PIL，请在 TelePilot worker 环境安装 Pillow 后重启")
+        return None
+
+    password = str(password or "").strip()
+    if not password:
+        _set_image_error("财富密码为空")
+        return None
+
+    try:
+        scale = 2
+        work_width = IMAGE_WIDTH * scale
+        work_height = IMAGE_HEIGHT * scale
+        image = Image.new("RGBA", (work_width, work_height), (250, 248, 244, 255))
+        draw = ImageDraw.Draw(image)
+
+        for band in range(6):
+            top = band * work_height // 6
+            bottom = (band + 1) * work_height // 6
+            draw.rectangle(
+                (0, top, work_width, bottom),
+                fill=(248 + random.randint(-5, 5), 244 + random.randint(-4, 6), 238 + random.randint(-4, 8), 255),
+            )
+
+        for _ in range(950):
+            x = random.randint(0, work_width - 1)
+            y = random.randint(0, work_height - 1)
+            radius = random.randint(2, 7)
+            draw.ellipse(
+                (x, y, x + radius, y + radius),
+                fill=(
+                    random.randint(120, 240),
+                    random.randint(110, 220),
+                    random.randint(95, 210),
+                    random.randint(28, 88),
+                ),
+            )
+
+        for _ in range(26):
+            x1 = random.randint(-80, work_width)
+            y1 = random.randint(0, work_height)
+            x2 = x1 + random.randint(100, 340)
+            y2 = y1 + random.randint(-120, 120)
+            draw.line(
+                (x1, y1, x2, y2),
+                fill=(
+                    random.randint(70, 180),
+                    random.randint(70, 180),
+                    random.randint(70, 180),
+                    random.randint(55, 125),
+                ),
+                width=random.randint(4, 9),
+            )
+
+        length = max(1, len(password))
+        font_size = 176 if length <= 8 else 142 if length <= 12 else 116 if length <= 18 else 92
+        font = _load_password_font(password, font_size)
+        if font is None:
+            _set_image_error("没有可用字体")
+            return None
+
+        chars = list(password)
+        layers: list[Image.Image] = []
+        total_width = 0
+        for char in chars:
+            bbox = draw.textbbox((0, 0), char, font=font)
+            width = max(font_size // 2, bbox[2] - bbox[0])
+            height = max(font_size, bbox[3] - bbox[1])
+            layer = Image.new("RGBA", (width + 56, height + 58), (0, 0, 0, 0))
+            layer_draw = ImageDraw.Draw(layer)
+            color = random.choice([(34, 48, 96, 255), (128, 42, 42, 255), (34, 102, 74, 255), (112, 69, 20, 255)])
+            layer_draw.text((34, 34), char, font=font, fill=(20, 20, 20, 105), stroke_width=2, stroke_fill=(0, 0, 0, 35))
+            layer_draw.text((28, 26), char, font=font, fill=color, stroke_width=4, stroke_fill=(255, 249, 240, 232))
+            rotated = layer.rotate(random.randint(-14, 14), resample=Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC, expand=True)
+            layers.append(rotated)
+            total_width += rotated.size[0] + 10
+
+        x = max(24, (work_width - total_width) // 2)
+        center_y = work_height // 2
+        for layer in layers:
+            y = center_y - layer.size[1] // 2 + random.randint(-18, 18)
+            image.alpha_composite(layer, dest=(x, y))
+            x += layer.size[0] + random.randint(4, 16)
+
+        for _ in range(240):
+            x = random.randint(0, work_width - 1)
+            y = random.randint(0, work_height - 1)
+            radius = random.randint(3, 8)
+            draw.ellipse((x, y, x + radius, y + radius), fill=(random.randint(110, 240), random.randint(110, 240), random.randint(110, 240), random.randint(18, 58)))
+
+        resampling = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+        final_image = image.resize((IMAGE_WIDTH, IMAGE_HEIGHT), resample=resampling)
+        temp_dir = Path(tempfile.mkdtemp(prefix="lucky_redpack_"))
+        target_path = temp_dir / "wealth_password.png"
+        final_image.convert("RGB").save(target_path, format="PNG", optimize=True)
+        _set_image_error("")
+        return target_path
+    except Exception as exc:
+        _set_image_error(f"{type(exc).__name__}: {exc}")
+        return None
+
+
+def render_claim_details(pack: LuckyRedpack) -> str:
+    if not pack.claims:
+        return ""
+    best = max(pack.claims, key=lambda claim: claim.amount)
+    lines = ["领取详情："]
+    for index, claim in enumerate(pack.claims, start=1):
+        suffix = " 🏆" if claim is best else ""
+        lines.append(f"{index}. {_html(claim.display_name)} +{claim.amount}{suffix}")
+    return f"<blockquote expandable>{chr(10).join(lines)}</blockquote>"
+
+
 def render_redpack_message(pack: LuckyRedpack) -> str:
     claimed_count = pack.total_count - pack.remaining_count
-    return (
+    password_line = "财富密码：见图片" if pack.image_mode else f"财富密码：{_html(pack.current_password)}"
+    text = (
         "🧧 拼手气红包\n"
         f"总额：{pack.total_amount}｜剩余：{pack.remaining_count}/{pack.total_count}\n"
-        f"财富密码：{pack.current_password}\n"
+        f"{password_line}\n"
         "发送财富密码即可领取\n"
         "提示：财富密码被领一次会随机变动"
         + (f"\n已领取：{claimed_count} 人" if claimed_count else "")
     )
+    claim_details = render_claim_details(pack)
+    if claim_details:
+        text = f"{text}\n{claim_details}"
+    return text
 
 
 def render_settlement(pack: LuckyRedpack, *, expired: bool = False) -> str:
@@ -272,6 +503,7 @@ class LuckyRedpackPlugin(Plugin):
         self._min_share_amount = DEFAULT_MIN_SHARE_AMOUNT
         self._suffix_length = DEFAULT_SUFFIX_LENGTH
         self._ttl_seconds = DEFAULT_TTL_SECONDS
+        self._image_password_enabled = DEFAULT_IMAGE_PASSWORD_ENABLED
         self._delete_command_message = False
         self._allow_owner_claim = False
         self._packs: dict[int, LuckyRedpack] = {}
@@ -304,6 +536,7 @@ class LuckyRedpackPlugin(Plugin):
         self._min_share_amount = _clamp_int(cfg.get("min_share_amount"), DEFAULT_MIN_SHARE_AMOUNT, 1, MAX_AMOUNT)
         self._suffix_length = _clamp_int(cfg.get("suffix_length"), DEFAULT_SUFFIX_LENGTH, 1, 12)
         self._ttl_seconds = _clamp_int(cfg.get("ttl_seconds"), DEFAULT_TTL_SECONDS, 30, 86400)
+        self._image_password_enabled = bool(cfg.get("image_password_enabled", DEFAULT_IMAGE_PASSWORD_ENABLED))
         self._delete_command_message = bool(cfg.get("delete_command_message", False))
         self._allow_owner_claim = bool(cfg.get("allow_owner_claim", False))
         self.commands = {self._command: self._cmd_handler}
@@ -347,7 +580,16 @@ class LuckyRedpackPlugin(Plugin):
             await self._reply(event, "已清空当前聊天的进行中红包。" if existed else "当前聊天没有进行中的红包。")
             return
 
-        keyword, amount, count, error = parse_create_args(args, self._default_amount, self._default_count)
+        image_mode = self._image_password_enabled
+        create_args = args
+        if action in {"img", "image", "图片"}:
+            image_mode = True
+            create_args = tokens[1:]
+        elif action in {"text", "文字"}:
+            image_mode = False
+            create_args = tokens[1:]
+
+        keyword, amount, count, error = parse_create_args(create_args, self._default_amount, self._default_count)
         if error:
             await self._reply(event, f"{error}\n{self._usage_example()}")
             return
@@ -371,6 +613,7 @@ class LuckyRedpackPlugin(Plugin):
             suffix_length=self._suffix_length,
             created_at=now,
             expires_at=now + self._ttl_seconds,
+            image_mode=image_mode,
             remaining_amount=amount,
             remaining_count=count,
         )
@@ -384,11 +627,18 @@ class LuckyRedpackPlugin(Plugin):
                 return
             self._packs[chat_id] = pack
 
-        sent = await self._reply(event, render_redpack_message(pack))
+        try:
+            sent = await self._send_pack_message(ctx, pack, reply_to=_message_id_from_event(event))
+        except RuntimeError as exc:
+            async with self._get_lock(chat_id):
+                if self._packs.get(chat_id) is pack:
+                    self._packs.pop(chat_id, None)
+            await self._reply(event, f"图片财富密码生成失败：{exc}")
+            return
         pack.message_id = _message_id_from_event(sent) if sent is not None else _message_id_from_event(event)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
         if self._delete_command_message:
-            await self._delete_event(event)
+            await self._delete_event(ctx, event)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         if ctx.client is None:
@@ -409,14 +659,14 @@ class LuckyRedpackPlugin(Plugin):
             if pack.is_expired():
                 self._packs.pop(chat_id, None)
                 settlement = render_settlement(pack, expired=True)
-                send_after_lock = [("send", settlement, None)]
-                pack_to_edit: LuckyRedpack | None = None
+                send_after_lock = [("delete", "", pack.message_id), ("send", settlement, None)]
+                pack_to_resend: LuckyRedpack | None = None
                 claim_amount = 0
                 claim_message_id = None
                 finished = False
             else:
                 send_after_lock = []
-                pack_to_edit = None
+                pack_to_resend = None
                 claim_amount = 0
                 claim_message_id = None
                 finished = False
@@ -452,19 +702,22 @@ class LuckyRedpackPlugin(Plugin):
                 finished = pack.is_finished()
                 if finished:
                     self._packs.pop(chat_id, None)
-                    send_after_lock.append(("send", render_settlement(pack), pack.message_id))
+                    send_after_lock.append(("delete", "", pack.message_id))
+                    send_after_lock.append(("send", render_settlement(pack), None))
                 else:
                     pack.current_suffix = self._new_suffix(pack)
                     pack.used_passwords.add(_normalize_password(pack.current_password))
-                    pack_to_edit = pack
+                    pack_to_resend = pack
 
         if claim_amount and claim_message_id:
             await ctx.client.send_message(chat_id, f"+{claim_amount}", reply_to=claim_message_id)
-        if pack_to_edit is not None:
-            await self._edit_pack_message(ctx, pack_to_edit)
+        if pack_to_resend is not None:
+            await self._resend_pack_message(ctx, pack_to_resend)
         for action, text_value, reply_to in send_after_lock:
             if action == "send":
                 await ctx.client.send_message(chat_id, text_value, reply_to=reply_to)
+            elif action == "delete" and reply_to:
+                await self._delete_message(ctx, chat_id, int(reply_to))
         if finished:
             return
 
@@ -477,6 +730,8 @@ class LuckyRedpackPlugin(Plugin):
         return (
             "🧧 拼手气口令红包\n"
             f"{self._usage_example()}\n"
+            f"{current_command_prefix(fallback=',')}{self._command} img 发财 88888 10 发送图片财富密码红包\n"
+            f"{current_command_prefix(fallback=',')}{self._command} text 发财 88888 10 发送文字财富密码红包\n"
             f"{current_command_prefix(fallback=',')}{self._command} active 查看当前红包\n"
             f"{current_command_prefix(fallback=',')}{self._command} clear 清空当前红包"
         )
@@ -490,13 +745,13 @@ class LuckyRedpackPlugin(Plugin):
             return "当前聊天没有进行中的红包。"
         return render_redpack_message(pack)
 
-    async def _reply(self, event: Any, text: str) -> Any:
+    async def _reply(self, event: Any, text: str, **kwargs: Any) -> Any:
         reply = getattr(event, "reply", None)
         if callable(reply):
-            return await reply(text)
+            return await reply(text, **kwargs)
         respond = getattr(event, "respond", None)
         if callable(respond):
-            return await respond(text)
+            return await respond(text, **kwargs)
         return None
 
     async def _sender(self, event: Any) -> Any:
@@ -507,22 +762,76 @@ class LuckyRedpackPlugin(Plugin):
                 return sender
         return getattr(event, "sender", None) or getattr(getattr(event, "message", None), "sender", None)
 
-    async def _edit_pack_message(self, ctx: PluginContext, pack: LuckyRedpack) -> None:
-        if ctx.client is None or pack.message_id is None:
+    async def _resend_pack_message(self, ctx: PluginContext, pack: LuckyRedpack) -> None:
+        if ctx.client is None:
             return
+        if pack.message_id is not None:
+            await self._delete_message(ctx, pack.chat_id, pack.message_id)
         try:
-            await ctx.client.edit_message(pack.chat_id, pack.message_id, render_redpack_message(pack))
+            sent = await self._send_pack_message(ctx, pack)
+            pack.message_id = _message_id_from_event(sent) or pack.message_id
         except Exception as exc:
             if ctx.log:
-                await ctx.log("warn", f"[lucky_redpack] 红包消息更新失败：{type(exc).__name__}: {exc}")
+                await ctx.log("warn", f"[lucky_redpack] 红包消息重发失败：{type(exc).__name__}: {exc}")
 
-    async def _delete_event(self, event: Any) -> None:
+    async def _send_pack_message(self, ctx: PluginContext, pack: LuckyRedpack, *, reply_to: int | None = None) -> Any:
+        if ctx.client is None:
+            return None
+        caption = render_redpack_message(pack)
+        if not pack.image_mode:
+            return await ctx.client.send_message(pack.chat_id, caption, parse_mode="html", reply_to=reply_to)
+
+        image_path = build_password_image(pack.current_password)
+        if image_path is None:
+            raise RuntimeError(get_image_error())
+        try:
+            send_file = getattr(ctx.client, "send_file", None)
+            if callable(send_file):
+                return await send_file(pack.chat_id, str(image_path), caption=caption, parse_mode="html", reply_to=reply_to, force_document=False)
+            send_photo = getattr(ctx.client, "send_photo", None)
+            if callable(send_photo):
+                return await send_photo(pack.chat_id, str(image_path), caption=caption, parse_mode="html", reply_to=reply_to)
+            raise RuntimeError("当前客户端没有 send_file/send_photo 能力")
+        finally:
+            try:
+                image_path.unlink(missing_ok=True)
+                image_path.parent.rmdir()
+            except Exception:
+                pass
+
+    async def _delete_event(self, ctx: PluginContext, event: Any) -> None:
         delete = getattr(event, "delete", None) or getattr(getattr(event, "message", None), "delete", None)
         if callable(delete):
             try:
                 await delete()
+                return
+            except Exception as exc:
+                if ctx.log:
+                    await ctx.log("warn", f"[lucky_redpack] event.delete 失败：{type(exc).__name__}: {exc}")
+
+        chat_id = _chat_id_from_event(event)
+        message_id = _message_id_from_event(event)
+        if not chat_id or not message_id or ctx.client is None:
+            return
+
+        delete_messages = getattr(ctx.client, "delete_messages", None)
+        if callable(delete_messages):
+            try:
+                await _maybe_await(delete_messages(chat_id, [int(message_id)]))
             except Exception:
                 pass
+
+    async def _delete_message(self, ctx: PluginContext, chat_id: int, message_id: int) -> None:
+        if ctx.client is None:
+            return
+        delete_messages = getattr(ctx.client, "delete_messages", None)
+        if not callable(delete_messages):
+            return
+        try:
+            await _maybe_await(delete_messages(chat_id, [int(message_id)]))
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[lucky_redpack] 删除旧红包消息失败：{type(exc).__name__}: {exc}")
 
     async def _auto_expire(self, chat_id: int, ctx: PluginContext, created_at: float) -> None:
         await asyncio.sleep(self._ttl_seconds)
@@ -545,6 +854,7 @@ __all__ = [
     "PLUGIN_CLASS",
     "calculate_random_claim_amount",
     "parse_create_args",
+    "render_claim_details",
     "render_redpack_message",
     "render_settlement",
 ]
