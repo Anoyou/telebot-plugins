@@ -312,6 +312,50 @@ def _pint(v: Any, d: int, *, minimum: int = 0) -> int:
     return n if n >= minimum else d
 
 
+def _user_id_set(value: Any) -> set[int]:
+    ids: set[int] = set()
+    if isinstance(value, dict):
+        for key in ("user_id", "id", "tg_user_id", "owner_user_id", "account_owner_user_id", "userbot_user_id"):
+            parsed = _pint(value.get(key), 0, minimum=1)
+            if parsed:
+                ids.add(parsed)
+        for key in ("owner_user_ids", "admin_user_ids", "userbot_user_ids"):
+            ids.update(_user_id_set(value.get(key)))
+        return ids
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            ids.update(_user_id_set(item))
+        return ids
+    parsed = _pint(value, 0, minimum=1)
+    if parsed:
+        ids.add(parsed)
+    return ids
+
+
+def _payload_userbot_user_ids(payload: dict[str, Any]) -> set[int]:
+    ids: set[int] = set()
+    for key in ("owner_user_ids", "admin_user_ids", "userbot_user_ids"):
+        ids.update(_user_id_set(payload.get(key)))
+    for key in ("userbot_user_id", "owner_user_id", "account_owner_user_id", "tg_user_id"):
+        ids.update(_user_id_set(payload.get(key)))
+    for envelope_key in ("account", "source", "sender"):
+        envelope = payload.get(envelope_key)
+        if isinstance(envelope, dict):
+            ids.update(_user_id_set({
+                "owner_user_ids": envelope.get("owner_user_ids"),
+                "admin_user_ids": envelope.get("admin_user_ids"),
+                "userbot_user_id": envelope.get("userbot_user_id"),
+                "owner_user_id": envelope.get("owner_user_id"),
+                "account_owner_user_id": envelope.get("account_owner_user_id"),
+                "tg_user_id": envelope.get("tg_user_id"),
+            }))
+    return ids
+
+
+def _is_payload_userbot_actor(payload: dict[str, Any], user_id: int) -> bool:
+    return bool(user_id and user_id in _payload_userbot_user_ids(payload))
+
+
 def _ie_type(p: dict[str, Any]) -> str:
     e, t, s = _pe(p), p.get("trigger") or {}, _ps(p)
     source_type = str(s.get("type") or "").strip()
@@ -790,6 +834,21 @@ def _answer_action(payload: dict[str, Any], text: str, *, show_alert: bool = Fal
         "callback_query_id": _ie_callback_id(payload),
         "text": text,
         "show_alert": show_alert,
+    }
+
+
+def _session_sync_action(g: TenHalfGame, payload: dict[str, Any]) -> dict[str, Any]:
+    participant_ids = sorted({int(uid) for uid, _name in g.lobby_players if int(uid or 0) > 0})
+    return {
+        "type": "start_session",
+        "chat_id": g.chat_id,
+        "entry_key": "start_ten_half",
+        "event_type": _ie_type(payload) or "message",
+        "started_by_user_id": g.host_user_id or g.dealer_id or (participant_ids[0] if participant_ids else None),
+        "started_by_message_id": _ie_mid(payload),
+        "participant_policy": "paid_pool",
+        "paid_user_ids": participant_ids,
+        "participant_user_ids": participant_ids,
     }
 
 
@@ -1383,10 +1442,11 @@ class TenHalfPlugin(Plugin):
 
     def _build_join_notice_text(self, g: TenHalfGame, *, payer_name: str, amount: int) -> str:
         players = [f"• {_html_name(name)}" for _, name in g.lobby_players] or ["• 暂无"]
+        amount_label = "免转账" if g.bet > 0 and amount <= 0 else str(amount)
         lines = [
             f"✅ <b>{_html_name(payer_name)}</b> 加入牌局成功",
             f"🆔 牌桌 ID: <code>{g.game_id}</code>",
-            f"💰 入场金额: {amount}",
+            f"💰 入场金额: {amount_label}",
             f"👥 当前玩家 ({len(g.lobby_players)}/{g.max_players}):",
             *players,
         ]
@@ -1923,11 +1983,15 @@ class TenHalfPlugin(Plugin):
 
             # ── join ──
             if action == "join":
-                result = await self._ix_join(ctx, payload, g, aid, aname)
+                paid_exempt = bool(g.bet > 0 and _is_payload_userbot_actor(payload, aid))
+                if g.bet > 0 and not paid_exempt:
+                    return [_answer_action(payload, "请转账底注加入。", show_alert=True)]
+                result = await self._ix_join(ctx, payload, g, aid, aname, paid_exempt=paid_exempt)
                 if ctx.log:
                     await ctx.log("info",
                         f"[ten_half] player_joined: uid={aid}, name={aname}, "
-                        f"via=button, chat_id={cid}, count={len(g.lobby_players)}/{self._max_players}")
+                        f"via={'userbot_button' if paid_exempt else 'button'}, "
+                        f"chat_id={cid}, count={len(g.lobby_players)}/{g.max_players}")
                 return result
 
             # ── dealer_yes / dealer_no ──
@@ -1951,6 +2015,8 @@ class TenHalfPlugin(Plugin):
     async def _ix_join(
         self, ctx: PluginContext, payload: dict[str, Any],
         g: TenHalfGame, aid: int, aname: str,
+        *,
+        paid_exempt: bool = False,
     ) -> list[dict[str, Any]]:
         """Handle join button press."""
         mid = _ie_mid(payload)
@@ -1981,10 +2047,11 @@ class TenHalfPlugin(Plugin):
         else:
             result = [
                 _send_action(
-                    self._build_join_notice_text(g, payer_name=aname, amount=g.bet),
+                    self._build_join_notice_text(g, payer_name=aname, amount=0 if paid_exempt else g.bet),
                     reply_to_message_id=mid,
                 )
             ]
+        result.append(_session_sync_action(g, payload))
 
         if cnt >= g.max_players and g.dealer_locked:
             result.extend(await self._ix_begin(g.chat_id, g, g.dealer_id, g.dealer_name, ctx, payload=payload))
@@ -2129,7 +2196,8 @@ class TenHalfPlugin(Plugin):
             # ── 大厅 ──
             if g.phase == "lobby":
                 if text in ("加入", "join"):
-                    if g.bet > 0:
+                    paid_exempt = bool(g.bet > 0 and _is_payload_userbot_actor(payload, aid))
+                    if g.bet > 0 and not paid_exempt:
                         # Paid game: hint to pay instead
                         return [
                             _send_action(
@@ -2137,12 +2205,12 @@ class TenHalfPlugin(Plugin):
                                 reply_to_message_id=mid,
                             )
                         ]
-                    # Free game: join directly
-                    result = await self._ix_join(ctx, payload, g, aid, aname)
+                    # Free game or the account userbot in a paid lobby: join directly.
+                    result = await self._ix_join(ctx, payload, g, aid, aname, paid_exempt=paid_exempt)
                     if ctx.log:
                         await ctx.log("info",
                             f"[ten_half] player_joined: uid={aid}, name={aname}, "
-                            f"via=keyword, chat_id={cid}")
+                            f"via={'userbot_keyword' if paid_exempt else 'keyword'}, chat_id={cid}")
                     return result
                 return []
 

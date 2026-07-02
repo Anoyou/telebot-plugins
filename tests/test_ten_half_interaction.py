@@ -97,6 +97,56 @@ def payment_payload(
     }
 
 
+def message_payload(
+    *,
+    user_id: int = 111,
+    name: str = "玩家A",
+    text: str = "加入",
+    message_id: int = 801,
+    owner_user_ids: list[int] | None = None,
+) -> dict:
+    payload = {
+        "event": {"type": "message", "chat_id": -100123, "message_id": message_id, "text": text},
+        "source": {"type": "message", "chat_id": -100123, "message_id": message_id, "text": text},
+        "message": {"chat_id": -100123, "message_id": message_id, "text": text},
+        "actor": {"user_id": user_id, "display_name": name},
+        "sender_user_id": user_id,
+        "sender_name": name,
+        "message_text": text,
+    }
+    if owner_user_ids is not None:
+        payload["owner_user_ids"] = list(owner_user_ids)
+        payload["admin_user_ids"] = list(owner_user_ids)
+        payload["userbot_user_id"] = owner_user_ids[0] if owner_user_ids else None
+    return payload
+
+
+def callback_payload(
+    *,
+    user_id: int = 111,
+    name: str = "玩家A",
+    callback_data: str = "th:join:0",
+    callback_query_id: str = "cb-join",
+    message_id: int = 900,
+    owner_user_ids: list[int] | None = None,
+) -> dict:
+    payload = {
+        "source": {
+            "type": "callback_query",
+            "chat_id": -100123,
+            "message_id": message_id,
+            "callback_query_id": callback_query_id,
+            "callback_data": callback_data,
+        },
+        "actor": {"user_id": user_id, "display_name": name},
+    }
+    if owner_user_ids is not None:
+        payload["owner_user_ids"] = list(owner_user_ids)
+        payload["admin_user_ids"] = list(owner_user_ids)
+        payload["userbot_user_id"] = owner_user_ids[0] if owner_user_ids else None
+    return payload
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.sent: list[dict] = []
@@ -263,6 +313,114 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(plugin._games[-100123].phase, "lobby")
                 self.assertTrue(plugin._games[-100123].dealer_locked)
                 self.assertEqual(plugin._games[-100123].dealer_id, 111)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_paid_lobby_regular_message_join_still_requires_transfer(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    message_payload(user_id=111, name="玩家A", text="加入"),
+                )
+
+                self.assertEqual(len(actions), 1)
+                self.assertEqual(actions[0]["type"], "send_message")
+                self.assertIn("请先转账 <b>100</b>", actions[0]["text"])
+                self.assertEqual(plugin._games[-100123].lobby_players, [])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_paid_lobby_regular_button_join_still_requires_transfer(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-normal-join"),
+                )
+
+                self.assertEqual(actions, [{
+                    "type": "answer_callback",
+                    "callback_query_id": "cb-normal-join",
+                    "text": "请转账底注加入。",
+                    "show_alert": True,
+                }])
+                self.assertEqual(plugin._games[-100123].lobby_players, [])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_paid_lobby_userbot_message_join_is_transfer_exempt_and_syncs_session(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    message_payload(user_id=999, name="owner", text="加入", owner_user_ids=[999]),
+                )
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.lobby_players, [(999, "owner")])
+                self.assertTrue(game.dealer_locked)
+                self.assertEqual(game.dealer_id, 999)
+                self.assertTrue(any("入场金额: 免转账" in action.get("text", "") for action in actions))
+                session_action = next(action for action in actions if action.get("type") == "start_session")
+                self.assertEqual(session_action["paid_user_ids"], [999])
+                self.assertEqual(session_action["participant_user_ids"], [999])
+                self.assertEqual(session_action["started_by_user_id"], 999)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_paid_lobby_userbot_button_join_is_transfer_exempt_and_syncs_session(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(
+                        user_id=999,
+                        name="owner",
+                        callback_query_id="cb-userbot-join",
+                        owner_user_ids=[999],
+                    ),
+                )
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.lobby_players, [(999, "owner")])
+                self.assertEqual(actions[0]["type"], "answer_callback")
+                self.assertIn("加入成功", actions[0]["text"])
+                session_action = next(action for action in actions if action.get("type") == "start_session")
+                self.assertEqual(session_action["paid_user_ids"], [999])
+                self.assertEqual(session_action["participant_user_ids"], [999])
             finally:
                 await plugin.on_shutdown(ctx)
 

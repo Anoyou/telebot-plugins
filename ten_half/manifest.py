@@ -77,7 +77,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.3.4",
+    version="0.3.5",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -104,6 +104,7 @@ MANIFEST = Manifest(
                                   'edit_message',
                                   'delete_message',
                                   'answer_callback',
+                                  'start_session',
                                   'no_session',
                                   'end_session',
                                   'result',
