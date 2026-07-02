@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.2.3"
+PLUGIN_VERSION = "1.2.4"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -58,16 +58,16 @@ EVENT_SUBSCRIPTIONS = [
     {
         "events": ["payment_confirmed"],
         "source": ["external_payment_notice", "userbot"],
-        "scope": "rule_bound",
+        "scope": "all_allowed_chats",
         "entry_key": "join_quick_qa",
-        "description": "付款确认用于报名入场，插件按门槛金额二次校验。",
+        "description": "付款确认用于已有快问快答大厅的报名入场，插件按门槛金额二次校验。",
     },
     {
-        "events": ["message", "callback_query", "session_close"],
+        "events": ["callback_query", "session_close"],
         "source": ["interaction_bot"],
         "scope": "all_allowed_chats",
         "entry_key": "join_quick_qa",
-        "description": "交互 Bot 承接开局、题库选择、三选一抢答、题库草稿保存按钮。",
+        "description": "交互 Bot 承接题库选择、三选一抢答和题库草稿保存按钮；开局消息由规则关键词路由。",
     },
     {
         "events": ["command"],

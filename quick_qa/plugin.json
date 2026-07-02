@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "interactive",
@@ -115,13 +115,12 @@
         "external_payment_notice",
         "userbot"
       ],
-      "scope": "rule_bound",
+      "scope": "all_allowed_chats",
       "entry_key": "join_quick_qa",
-      "description": "付款确认用于报名入场，插件按门槛金额二次校验。"
+      "description": "付款确认用于已有快问快答大厅的报名入场，插件按门槛金额二次校验。"
     },
     {
       "events": [
-        "message",
         "callback_query",
         "session_close"
       ],
@@ -130,7 +129,7 @@
       ],
       "scope": "all_allowed_chats",
       "entry_key": "join_quick_qa",
-      "description": "交互 Bot 承接开局、题库选择、三选一抢答、题库草稿保存按钮。"
+      "description": "交互 Bot 承接题库选择、三选一抢答和题库草稿保存按钮；开局消息由规则关键词路由。"
     },
     {
       "events": [

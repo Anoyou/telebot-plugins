@@ -94,6 +94,17 @@ def callback_payload(data: str, user_id: int, name: str, message_id: int = 500) 
     }
 
 
+def message_payload(text: str, user_id: int, name: str, *, channel: str = "interaction_bot", message_id: int = 700) -> dict:
+    return {
+        "event": {"type": "message", "chat_id": -100123, "message_id": message_id},
+        "source": {"type": "message", "channel": channel, "chat_id": -100123, "message_id": message_id},
+        "message": {"chat_id": -100123, "message_id": message_id, "text": text},
+        "actor": {"user_id": user_id, "display_name": name},
+        "chat_id": -100123,
+        "message_id": message_id,
+    }
+
+
 class QuickQATest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -291,6 +302,59 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_interaction_bot_command_echo_is_ignored(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(account_id=1, config={"command": "qa"})
+            await plugin.on_startup(ctx)
+            try:
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("qa 100 20", 111, "管理员"),
+                )
+
+                self.assertEqual(actions, [])
+                self.assertNotIn(-100123, plugin._games)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_keyword_route_creates_lobby(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(account_id=1, config={"command": "qa", "entry_fee": 100})
+            await plugin.on_startup(ctx)
+            try:
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("我要答题", 111, "玩家A"),
+                )
+
+                self.assertIn(-100123, plugin._games)
+                self.assertTrue(any("快问快答报名中" in action.get("text", "") for action in actions))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_payment_without_lobby_is_ignored(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(account_id=1)
+            await plugin.on_startup(ctx)
+            try:
+                actions = await plugin.on_interaction(ctx, "join_quick_qa", payment_payload(111, "玩家A"))
+
+                self.assertEqual(actions, [])
+                self.assertNotIn(-100123, plugin._games)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_paid_game_selects_kb_and_settles_after_answer(self) -> None:
         self._seed_kb()
 
@@ -307,6 +371,7 @@ class QuickQATest(unittest.TestCase):
             )
             await plugin.on_startup(ctx)
             try:
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("开始答题", 999, "主持人"))
                 await plugin.on_interaction(ctx, "join_quick_qa", payment_payload(111, "玩家A"))
                 await plugin.on_interaction(ctx, "join_quick_qa", payment_payload(222, "玩家B"))
                 game = plugin._games[-100123]
