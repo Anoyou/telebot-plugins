@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.3"
+PLUGIN_VERSION = "1.3.4"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -200,6 +200,10 @@ def _payload_event_type(payload: dict[str, Any]) -> str:
     ).strip()
 
 
+def _is_command_event_type(value: str) -> bool:
+    return str(value or "").strip().casefold() in {"command", "admin_command", "sudo_command"}
+
+
 def _payload_chat_id(payload: dict[str, Any]) -> int:
     event = _payload_event(payload)
     source = _payload_source(payload)
@@ -258,6 +262,34 @@ def _payload_message_text(payload: dict[str, Any]) -> str:
         or trigger.get("text")
         or ""
     ).strip()
+
+
+def _payload_command_args(payload: dict[str, Any], command: str) -> list[str]:
+    message = _payload_message(payload)
+    trigger = _dict(payload.get("trigger"))
+    raw_args = (
+        payload.get("args")
+        or message.get("args")
+        or trigger.get("args")
+        or trigger.get("command_args")
+    )
+    if isinstance(raw_args, list):
+        return [str(item) for item in raw_args if str(item or "").strip()]
+    if isinstance(raw_args, str) and raw_args.strip():
+        return _split_args([raw_args])
+
+    text = _payload_message_text(payload)
+    if not text:
+        return []
+    tokens = _split_args([text])
+    if not tokens:
+        return []
+
+    configured = str(command or "").strip().casefold()
+    first = tokens[0].lstrip(",/，").casefold()
+    if configured and first == configured:
+        return tokens[1:]
+    return tokens
 
 
 def _payload_sender_id(payload: dict[str, Any]) -> int:
@@ -1152,8 +1184,11 @@ class LuckyRedpackPlugin(Plugin):
             await ctx.log("info", "[lucky_redpack] 已停止")
 
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
-        """Event Bus 主入口，0.33+ 运行态优先从这里处理领取口令。"""
-        if _payload_event_type(payload) != "message":
+        """Event Bus 主入口，0.33+ 运行态优先从这里处理命令和领取。"""
+        event_type = _payload_event_type(payload)
+        if _is_command_event_type(event_type):
+            return await self._handle_command_event(ctx, payload)
+        if event_type != "message":
             return []
         text = _payload_message_text(payload)
         if not text or text.startswith((",", "/", "，")):
@@ -1175,6 +1210,129 @@ class LuckyRedpackPlugin(Plugin):
             await self._resend_pack_message(ctx, pack_to_resend)
             await self._persist_pack(ctx, pack_to_resend)
         return actions or []
+
+    async def _handle_command_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        chat_id = _payload_chat_id(payload)
+        if not chat_id:
+            return []
+
+        command_message_id = _payload_message_id(payload)
+        tokens = _payload_command_args(payload, self._command)
+        action = tokens[0].casefold() if tokens else ""
+
+        def reply_action(text: str) -> list[dict[str, Any]]:
+            return [
+                _send_action(
+                    text,
+                    chat_id=chat_id,
+                    reply_to_message_id=command_message_id,
+                    send_via="userbot_reply",
+                    parse_mode="html",
+                )
+            ]
+
+        if action in {"help", "帮助"}:
+            return reply_action(self._help_text())
+        if action in {"active", "状态", "list", "列表"}:
+            return reply_action(await self._active_text(ctx, chat_id))
+        if action in {"off", "关闭"}:
+            pack_code = tokens[1] if len(tokens) >= 2 else ""
+            if not pack_code:
+                return reply_action(f"请指定红包代码。例：{current_command_prefix(fallback=',')}{self._command} off ABC123")
+            async with self._get_lock(chat_id):
+                with self._state_file_lock(ctx.account_id, chat_id):
+                    packs = await self._load_active_packs(ctx, chat_id)
+                    pack = next((item for item in packs if item.pack_code.casefold() == pack_code.casefold()), None)
+                    if not pack:
+                        return reply_action(f"未找到进行中的红包：{pack_code}")
+                    await self._save_active_packs(
+                        ctx,
+                        chat_id,
+                        [item for item in packs if item.pack_code.casefold() != pack.pack_code.casefold()],
+                    )
+            if pack.message_id:
+                await self._delete_message(ctx, chat_id, pack.message_id)
+            return reply_action(f"已关闭红包 {pack.pack_code}。")
+        if action in {"clear", "清空"}:
+            async with self._get_lock(chat_id):
+                with self._state_file_lock(ctx.account_id, chat_id):
+                    existed = await self._load_active_packs(ctx, chat_id)
+                    await self._save_active_packs(ctx, chat_id, [])
+            for pack in existed:
+                if pack.message_id:
+                    await self._delete_message(ctx, chat_id, pack.message_id)
+            return reply_action(f"已清空当前聊天的 {len(existed)} 个进行中红包。" if existed else "当前聊天没有进行中的红包。")
+
+        image_mode = self._image_password_enabled
+        create_args = tokens
+        if action in {"img", "image", "图片"}:
+            image_mode = True
+            create_args = tokens[1:]
+        elif action in {"text", "文字"}:
+            image_mode = False
+            create_args = tokens[1:]
+
+        keyword, amount, count, error = parse_create_args(create_args, self._default_amount, self._default_count)
+        if error:
+            return reply_action(f"{error}\n{self._usage_example()}")
+
+        amount = _clamp_int(amount, self._default_amount, 1, MAX_AMOUNT)
+        count = _clamp_int(count, self._default_count, 1, MAX_COUNT)
+        validation_error = self._validate_amount_count(amount, count)
+        if validation_error:
+            return reply_action(validation_error)
+        if ctx.client is None:
+            return reply_action("UserBot 客户端不可用，无法发送红包。")
+
+        creator_id = _payload_sender_id(payload)
+        now = time.time()
+        async with self._get_lock(chat_id):
+            with self._state_file_lock(ctx.account_id, chat_id):
+                existing_packs = await self._load_active_packs(ctx, chat_id)
+                pack = LuckyRedpack(
+                    pack_code=self._new_pack_code_for_existing({item.pack_code for item in existing_packs}),
+                    chat_id=chat_id,
+                    creator_user_id=creator_id,
+                    base_keyword=keyword,
+                    total_amount=amount,
+                    total_count=count,
+                    min_share_amount=self._min_share_amount,
+                    suffix_length=self._suffix_length,
+                    created_at=now,
+                    expires_at=now + self._ttl_seconds,
+                    image_mode=image_mode,
+                    remaining_amount=amount,
+                    remaining_count=count,
+                )
+                pack.current_suffix = self._new_suffix(pack)
+                pack.used_passwords.add(_normalize_password(pack.current_password))
+                existing_packs.append(pack)
+                await self._save_active_packs(ctx, chat_id, existing_packs)
+                if ctx.log:
+                    storage = "redis+file" if getattr(ctx, "redis", None) is not None else "file"
+                    await ctx.log(
+                        "info",
+                        (
+                            f"[lucky_redpack] 红包状态已保存：code={pack.pack_code} "
+                            f"chat={chat_id} account={ctx.account_id} count={len(existing_packs)} storage={storage}"
+                        ),
+                    )
+
+        try:
+            sent = await self._send_pack_message(ctx, pack, reply_to=command_message_id)
+        except RuntimeError as exc:
+            await self._remove_pack_by_code(ctx, chat_id, pack.pack_code)
+            if ctx.log:
+                await ctx.log("error", f"[lucky_redpack] 图片财富密码生成失败：{exc}")
+            return reply_action(f"图片财富密码生成失败：{exc}")
+
+        sent_message_id = _message_id_from_event(sent)
+        pack.message_id = sent_message_id
+        await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
+        self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
+        if self._delete_command_message and command_message_id:
+            await self._delete_message(ctx, chat_id, command_message_id)
+        return []
 
     async def _cmd_handler(
         self,

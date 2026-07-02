@@ -501,6 +501,69 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_event_bus_command_creates_claimable_pack(self) -> None:
+        async def run_case() -> None:
+            redis = FakeRedis()
+            creator_plugin = plugin_module.LuckyRedpackPlugin()
+            claim_plugin = plugin_module.LuckyRedpackPlugin()
+            create_ctx = PluginContext(redis=redis)
+            claim_ctx = PluginContext(redis=redis)
+            create_ctx.client = FakeClient()
+            claim_ctx.client = FakeClient()
+            shared_config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            create_ctx.config = dict(shared_config)
+            claim_ctx.config = dict(shared_config)
+            await creator_plugin.on_startup(create_ctx)
+            await claim_plugin.on_startup(claim_ctx)
+
+            chat_id = -1003806095342
+            command_actions = await creator_plugin.on_event(
+                create_ctx,
+                {
+                    "source": {"type": "command", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2848, "text": "rp 测试 100 2"},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 1682400007, "display_name": "发起人"},
+                    "trigger": {"entry_key": "", "dispatch_mode": "admin_command"},
+                },
+            )
+
+            self.assertEqual(command_actions, [])
+            self.assertEqual(len(create_ctx.client.sent), 1)
+            self.assertIn("🧧 拼手气红包", create_ctx.client.sent[0]["text"])
+            created_pack = creator_plugin._packs[chat_id][0]
+            password = created_pack.current_password
+            self.assertIsNotNone(created_pack.message_id)
+
+            self.assertNotIn(chat_id, claim_plugin._packs)
+            claim_actions = await claim_plugin.on_event(
+                claim_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": chat_id, "message_id": 2850, "text": password},
+                    "chat": {"id": chat_id},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(len(claim_actions), 1)
+            self.assertEqual(claim_actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(claim_actions[0]["chat_id"], chat_id)
+            self.assertEqual(claim_actions[0]["reply_to_message_id"], 2850)
+            self.assertIn(8629045843, claim_plugin._packs[chat_id][0].claimed_user_ids)
+
+            await creator_plugin.on_shutdown(create_ctx)
+            await claim_plugin.on_shutdown(claim_ctx)
+
+        asyncio.run(run_case())
+
     def test_redis_state_allows_claim_from_different_plugin_instance(self) -> None:
         async def run_case() -> None:
             redis = FakeRedis()
