@@ -132,6 +132,7 @@ class LuckyRedpackTest(unittest.TestCase):
 
     def test_render_message_uses_requested_template(self) -> None:
         pack = plugin_module.LuckyRedpack(
+            pack_code="ABC123",
             chat_id=1,
             creator_user_id=10,
             base_keyword="发财",
@@ -149,6 +150,7 @@ class LuckyRedpackTest(unittest.TestCase):
         text = plugin_module.render_redpack_message(pack)
 
         self.assertIn("🧧 拼手气红包", text)
+        self.assertIn("红包代码：ABC123", text)
         self.assertIn("总额：88888｜剩余：7/10", text)
         self.assertIn("财富密码：发财A7K9", text)
         self.assertIn("发送财富密码即可领取\n提示：财富密码被领一次会随机变动", text)
@@ -157,6 +159,7 @@ class LuckyRedpackTest(unittest.TestCase):
 
     def test_render_message_uses_folded_claim_details(self) -> None:
         pack = plugin_module.LuckyRedpack(
+            pack_code="ABC123",
             chat_id=1,
             creator_user_id=10,
             base_keyword="发财",
@@ -197,7 +200,7 @@ class LuckyRedpackTest(unittest.TestCase):
 
             command_event = FakeMessage(",rp 发财 100 2", chat_id=100, sender_id=1, outgoing=True)
             await plugin._cmd_handler(ctx.client, command_event, ["发财", "100", "2"], 1, ctx)
-            pack = plugin._packs[100]
+            pack = plugin._packs[100][0]
             first_password = pack.current_password
             old_redpack_message_id = pack.message_id
 
@@ -244,7 +247,7 @@ class LuckyRedpackTest(unittest.TestCase):
                 command_event = FakeMessage(",rp img 发财 100 2", chat_id=100, sender_id=1, outgoing=True)
                 await plugin._cmd_handler(ctx.client, command_event, ["img", "发财", "100", "2"], 1, ctx)
 
-                pack = plugin._packs[100]
+                pack = plugin._packs[100][0]
                 self.assertTrue(pack.image_mode)
                 self.assertEqual(len(ctx.client.files), 1)
                 self.assertIn("财富密码：见图片", ctx.client.files[0]["caption"])
@@ -283,8 +286,46 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_multiple_redpacks_can_run_and_list_off_by_code(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            first_event = FakeMessage(",rp 发财 100 2", chat_id=100, sender_id=1, outgoing=True)
+            second_event = FakeMessage(",rp 好运 200 2", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, first_event, ["发财", "100", "2"], 1, ctx)
+            await plugin._cmd_handler(ctx.client, second_event, ["好运", "200", "2"], 1, ctx)
+
+            self.assertEqual(len(plugin._packs[100]), 2)
+            first_pack, second_pack = plugin._packs[100]
+            self.assertNotEqual(first_pack.pack_code, second_pack.pack_code)
+
+            list_event = FakeMessage(",rp list", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, list_event, ["list"], 1, ctx)
+            self.assertIn(first_pack.pack_code, list_event.replies[-1].text)
+            self.assertIn(second_pack.pack_code, list_event.replies[-1].text)
+
+            off_event = FakeMessage(f",rp off {first_pack.pack_code}", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, off_event, ["off", first_pack.pack_code], 1, ctx)
+            self.assertEqual([pack.pack_code for pack in plugin._packs[100]], [second_pack.pack_code])
+            self.assertIn(f"已关闭红包 {first_pack.pack_code}", off_event.replies[-1].text)
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
     def test_last_claim_finishes_with_remaining_amount(self) -> None:
         pack = plugin_module.LuckyRedpack(
+            pack_code="ABC123",
             chat_id=1,
             creator_user_id=1,
             base_keyword="发财",

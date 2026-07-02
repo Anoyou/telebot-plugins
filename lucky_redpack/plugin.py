@@ -58,7 +58,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -70,6 +70,7 @@ DEFAULT_IMAGE_PASSWORD_ENABLED = False
 MAX_AMOUNT = 999_999_999
 MAX_COUNT = 500
 SUFFIX_CHARS = string.ascii_uppercase + string.digits
+PACK_CODE_CHARS = string.ascii_uppercase + string.digits
 IMAGE_WIDTH = 980
 IMAGE_HEIGHT = 320
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -105,6 +106,7 @@ class ClaimRecord:
 
 @dataclass
 class LuckyRedpack:
+    pack_code: str
     chat_id: int
     creator_user_id: int
     base_keyword: str
@@ -459,6 +461,7 @@ def render_redpack_message(pack: LuckyRedpack) -> str:
     password_line = "财富密码：见图片" if pack.image_mode else f"财富密码：{_html(pack.current_password)}"
     text = (
         "🧧 拼手气红包\n"
+        f"红包代码：{pack.pack_code}\n"
         f"总额：{pack.total_amount}｜剩余：{pack.remaining_count}/{pack.total_count}\n"
         f"{password_line}\n"
         "发送财富密码即可领取\n"
@@ -475,6 +478,7 @@ def render_settlement(pack: LuckyRedpack, *, expired: bool = False) -> str:
     title = "🕒 拼手气红包已超时" if expired else "🧧 拼手气红包已领完"
     lines = [
         title,
+        f"红包代码：{pack.pack_code}",
         f"总额：{pack.total_amount}｜已领：{len(pack.claims)}/{pack.total_count}｜剩余：{pack.remaining_amount}",
     ]
     if not pack.claims:
@@ -493,7 +497,17 @@ class LuckyRedpackPlugin(Plugin):
     display_name = "拼手气口令红包"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command"}
+    command_config_keys = {
+        "command",
+        "default_amount",
+        "default_count",
+        "min_share_amount",
+        "suffix_length",
+        "ttl_seconds",
+        "image_password_enabled",
+        "delete_command_message",
+        "allow_owner_claim",
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -506,7 +520,7 @@ class LuckyRedpackPlugin(Plugin):
         self._image_password_enabled = DEFAULT_IMAGE_PASSWORD_ENABLED
         self._delete_command_message = False
         self._allow_owner_claim = False
-        self._packs: dict[int, LuckyRedpack] = {}
+        self._packs: dict[int, list[LuckyRedpack]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
 
@@ -527,6 +541,39 @@ class LuckyRedpackPlugin(Plugin):
             if _normalize_password(password) not in used:
                 return suffix
         return "".join(random.choice(SUFFIX_CHARS) for _ in range(self._suffix_length))
+
+    def _new_pack_code(self, chat_id: int) -> str:
+        existing = {pack.pack_code for pack in self._packs.get(chat_id, [])}
+        for _ in range(100):
+            code = "".join(random.choice(PACK_CODE_CHARS) for _ in range(6))
+            if code not in existing:
+                return code
+        return "".join(random.choice(PACK_CODE_CHARS) for _ in range(8))
+
+    def _active_packs(self, chat_id: int) -> list[LuckyRedpack]:
+        packs = self._packs.get(chat_id, [])
+        active = [pack for pack in packs if not pack.is_finished() and not pack.is_expired()]
+        if active:
+            self._packs[chat_id] = active
+        else:
+            self._packs.pop(chat_id, None)
+        return active
+
+    def _find_pack_by_code(self, chat_id: int, pack_code: str) -> LuckyRedpack | None:
+        target = str(pack_code or "").strip().casefold()
+        if not target:
+            return None
+        for pack in self._active_packs(chat_id):
+            if pack.pack_code.casefold() == target:
+                return pack
+        return None
+
+    def _remove_pack(self, chat_id: int, pack: LuckyRedpack) -> None:
+        packs = [item for item in self._packs.get(chat_id, []) if item is not pack]
+        if packs:
+            self._packs[chat_id] = packs
+        else:
+            self._packs.pop(chat_id, None)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
@@ -574,10 +621,31 @@ class LuckyRedpackPlugin(Plugin):
         if action in {"active", "状态"}:
             await self._reply(event, self._active_text(chat_id))
             return
+        if action in {"list", "列表"}:
+            await self._reply(event, self._active_text(chat_id))
+            return
+        if action in {"off", "关闭"}:
+            pack_code = tokens[1] if len(tokens) >= 2 else ""
+            if not pack_code:
+                await self._reply(event, f"请指定红包代码。例：{current_command_prefix(fallback=',')}{self._command} off ABC123")
+                return
+            async with self._get_lock(chat_id):
+                pack = self._find_pack_by_code(chat_id, pack_code)
+                if not pack:
+                    await self._reply(event, f"未找到进行中的红包：{pack_code}")
+                    return
+                self._remove_pack(chat_id, pack)
+            if pack.message_id:
+                await self._delete_message(ctx, chat_id, pack.message_id)
+            await self._reply(event, f"已关闭红包 {pack.pack_code}。")
+            return
         if action in {"clear", "清空"}:
             async with self._get_lock(chat_id):
-                existed = self._packs.pop(chat_id, None)
-            await self._reply(event, "已清空当前聊天的进行中红包。" if existed else "当前聊天没有进行中的红包。")
+                existed = self._packs.pop(chat_id, [])
+            for pack in existed:
+                if pack.message_id:
+                    await self._delete_message(ctx, chat_id, pack.message_id)
+            await self._reply(event, f"已清空当前聊天的 {len(existed)} 个进行中红包。" if existed else "当前聊天没有进行中的红包。")
             return
 
         image_mode = self._image_password_enabled
@@ -604,6 +672,7 @@ class LuckyRedpackPlugin(Plugin):
         creator_id = _sender_id_from_event(event)
         now = time.time()
         pack = LuckyRedpack(
+            pack_code=self._new_pack_code(chat_id),
             chat_id=chat_id,
             creator_user_id=creator_id,
             base_keyword=keyword,
@@ -621,18 +690,16 @@ class LuckyRedpackPlugin(Plugin):
         pack.used_passwords.add(_normalize_password(pack.current_password))
 
         async with self._get_lock(chat_id):
-            current = self._packs.get(chat_id)
-            if current and not current.is_finished() and not current.is_expired():
-                await self._reply(event, "当前聊天已有进行中的拼手气红包，领完或清空后再发新的。")
-                return
-            self._packs[chat_id] = pack
+            self._active_packs(chat_id)
+            self._packs.setdefault(chat_id, []).append(pack)
 
         try:
             sent = await self._send_pack_message(ctx, pack, reply_to=_message_id_from_event(event))
         except RuntimeError as exc:
             async with self._get_lock(chat_id):
-                if self._packs.get(chat_id) is pack:
-                    self._packs.pop(chat_id, None)
+                self._remove_pack(chat_id, pack)
+            if ctx.log:
+                await ctx.log("error", f"[lucky_redpack] 图片财富密码生成失败：{exc}")
             await self._reply(event, f"图片财富密码生成失败：{exc}")
             return
         pack.message_id = _message_id_from_event(sent) if sent is not None else _message_id_from_event(event)
@@ -653,11 +720,19 @@ class LuckyRedpackPlugin(Plugin):
             return
 
         async with self._get_lock(chat_id):
-            pack = self._packs.get(chat_id)
+            packs = self._active_packs(chat_id)
+            pack = next(
+                (
+                    item
+                    for item in reversed(packs)
+                    if _normalize_password(text) == _normalize_password(item.current_password)
+                ),
+                None,
+            )
             if not pack or pack.is_finished():
                 return
             if pack.is_expired():
-                self._packs.pop(chat_id, None)
+                self._remove_pack(chat_id, pack)
                 settlement = render_settlement(pack, expired=True)
                 send_after_lock = [("delete", "", pack.message_id), ("send", settlement, None)]
                 pack_to_resend: LuckyRedpack | None = None
@@ -701,7 +776,7 @@ class LuckyRedpackPlugin(Plugin):
                 )
                 finished = pack.is_finished()
                 if finished:
-                    self._packs.pop(chat_id, None)
+                    self._remove_pack(chat_id, pack)
                     send_after_lock.append(("delete", "", pack.message_id))
                     send_after_lock.append(("send", render_settlement(pack), None))
                 else:
@@ -732,7 +807,8 @@ class LuckyRedpackPlugin(Plugin):
             f"{self._usage_example()}\n"
             f"{current_command_prefix(fallback=',')}{self._command} img 发财 88888 10 发送图片财富密码红包\n"
             f"{current_command_prefix(fallback=',')}{self._command} text 发财 88888 10 发送文字财富密码红包\n"
-            f"{current_command_prefix(fallback=',')}{self._command} active 查看当前红包\n"
+            f"{current_command_prefix(fallback=',')}{self._command} list 查看当前红包列表\n"
+            f"{current_command_prefix(fallback=',')}{self._command} off ABC123 关闭指定红包\n"
             f"{current_command_prefix(fallback=',')}{self._command} clear 清空当前红包"
         )
 
@@ -740,10 +816,18 @@ class LuckyRedpackPlugin(Plugin):
         return f"用法：{current_command_prefix(fallback=',')}{self._command} 发财 88888 10"
 
     def _active_text(self, chat_id: int) -> str:
-        pack = self._packs.get(chat_id)
-        if not pack or pack.is_finished() or pack.is_expired():
+        packs = self._active_packs(chat_id)
+        if not packs:
             return "当前聊天没有进行中的红包。"
-        return render_redpack_message(pack)
+        lines = ["🧧 当前聊天红包列表"]
+        for index, pack in enumerate(reversed(packs), start=1):
+            mode = "图片" if pack.image_mode else "文字"
+            claimed = pack.total_count - pack.remaining_count
+            lines.append(
+                f"{index}. {pack.pack_code}｜{mode}｜剩余 {pack.remaining_count}/{pack.total_count}｜已领 {claimed}｜总额 {pack.total_amount}"
+            )
+        lines.append(f"关闭红包：{current_command_prefix(fallback=',')}{self._command} off <红包代码>")
+        return "\n".join(lines)
 
     async def _reply(self, event: Any, text: str, **kwargs: Any) -> Any:
         reply = getattr(event, "reply", None)
@@ -836,10 +920,10 @@ class LuckyRedpackPlugin(Plugin):
     async def _auto_expire(self, chat_id: int, ctx: PluginContext, created_at: float) -> None:
         await asyncio.sleep(self._ttl_seconds)
         async with self._get_lock(chat_id):
-            pack = self._packs.get(chat_id)
+            pack = next((item for item in self._packs.get(chat_id, []) if item.created_at == created_at), None)
             if not pack or pack.created_at != created_at or pack.is_finished():
                 return
-            self._packs.pop(chat_id, None)
+            self._remove_pack(chat_id, pack)
             settlement = render_settlement(pack, expired=True)
         if ctx.client is not None:
             await ctx.client.send_message(chat_id, settlement, reply_to=pack.message_id)
