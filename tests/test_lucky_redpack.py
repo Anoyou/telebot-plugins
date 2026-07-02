@@ -106,10 +106,15 @@ class FakeClient:
         self.files: list[dict] = []
         self.edited: list[dict] = []
         self.deleted: list[dict] = []
+        self.on_send_message = None
 
     async def send_message(self, chat_id, text, **kwargs):
         msg = FakeMessage(text, chat_id=chat_id, sender_id=0, outgoing=True)
         self.sent.append({"chat_id": chat_id, "text": text, "message_id": msg.id, **kwargs})
+        if self.on_send_message is not None:
+            result = self.on_send_message(chat_id, text, msg, kwargs)
+            if asyncio.iscoroutine(result):
+                await result
         return msg
 
     async def send_file(self, chat_id, file, **kwargs):
@@ -601,6 +606,66 @@ class LuckyRedpackTest(unittest.TestCase):
                 },
             )
             self.assertEqual(repeat_actions, [])
+
+            await creator_plugin.on_shutdown(create_ctx)
+            await claim_plugin.on_shutdown(claim_ctx)
+
+        asyncio.run(run_case())
+
+    def test_pack_is_claimable_as_soon_as_announcement_is_sent(self) -> None:
+        async def run_case() -> None:
+            redis = FakeRedis()
+            creator_plugin = plugin_module.LuckyRedpackPlugin()
+            claim_plugin = plugin_module.LuckyRedpackPlugin()
+            create_ctx = PluginContext(redis=redis)
+            claim_ctx = PluginContext(redis=redis)
+            create_ctx.client = FakeClient()
+            claim_ctx.client = FakeClient()
+            shared_config = {
+                "command": "rp",
+                "default_amount": 2000,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            create_ctx.config = dict(shared_config)
+            claim_ctx.config = dict(shared_config)
+            await creator_plugin.on_startup(create_ctx)
+            await claim_plugin.on_startup(claim_ctx)
+
+            claim_actions: list[dict] = []
+            claimed_password = ""
+
+            async def claim_during_announcement(chat_id, text, _msg, _kwargs):
+                nonlocal claim_actions, claimed_password
+                if "🧧 拼手气红包" not in text or "财富密码：" not in text:
+                    return
+                claimed_password = text.split("财富密码：", 1)[1].splitlines()[0].strip()
+                claim_actions = await claim_plugin.on_event(
+                    claim_ctx,
+                    {
+                        "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                        "message": {"chat_id": chat_id, "message_id": 2839, "text": claimed_password},
+                        "chat": {"id": chat_id},
+                        "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                        "trigger": {"entry_key": "claim_lucky_redpack"},
+                    },
+                )
+
+            create_ctx.client.on_send_message = claim_during_announcement
+
+            command_event = FakeMessage(",rp 测试 2000 2", chat_id=-1003806095342, sender_id=1, outgoing=True)
+            await creator_plugin._cmd_handler(create_ctx.client, command_event, ["测试", "2000", "2"], 1, create_ctx)
+
+            self.assertEqual(len(claim_actions), 1)
+            self.assertEqual(claim_actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(claim_actions[0]["reply_to_message_id"], 2839)
+
+            packs = await claim_plugin._load_active_packs(claim_ctx, -1003806095342)
+            self.assertEqual(len(packs), 1)
+            self.assertEqual(packs[0].remaining_count, 1)
+            self.assertNotEqual(packs[0].current_password, claimed_password)
+            self.assertEqual(packs[0].claims[0].user_id, 8629045843)
 
             await creator_plugin.on_shutdown(create_ctx)
             await claim_plugin.on_shutdown(claim_ctx)

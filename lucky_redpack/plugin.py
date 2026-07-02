@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.1"
+PLUGIN_VERSION = "1.3.2"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -1003,6 +1003,32 @@ class LuckyRedpackPlugin(Plugin):
                     next_packs.append(pack)
                 await self._save_active_packs(ctx, pack.chat_id, next_packs)
 
+    async def _persist_created_message_id(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        pack_code: str,
+        message_id: int | None,
+    ) -> None:
+        if not message_id:
+            return
+        async with self._get_lock(chat_id):
+            with self._state_file_lock(ctx.account_id, chat_id):
+                packs = await self._load_active_packs(ctx, chat_id)
+                for pack in packs:
+                    if pack.pack_code != pack_code:
+                        continue
+                    if pack.message_id is None:
+                        pack.message_id = message_id
+                        await self._save_active_packs(ctx, chat_id, packs)
+                    return
+
+    async def _remove_pack_by_code(self, ctx: PluginContext, chat_id: int, pack_code: str) -> None:
+        async with self._get_lock(chat_id):
+            with self._state_file_lock(ctx.account_id, chat_id):
+                packs = await self._load_active_packs(ctx, chat_id)
+                await self._save_active_packs(ctx, chat_id, [item for item in packs if item.pack_code != pack_code])
+
     def _find_pack_by_code(self, chat_id: int, pack_code: str) -> LuckyRedpack | None:
         target = str(pack_code or "").strip().casefold()
         if not target:
@@ -1149,40 +1175,37 @@ class LuckyRedpackPlugin(Plugin):
         async with self._get_lock(chat_id):
             with self._state_file_lock(ctx.account_id, chat_id):
                 existing_packs = await self._load_active_packs(ctx, chat_id)
-                pack_code = self._new_pack_code_for_existing({item.pack_code for item in existing_packs})
-        pack = LuckyRedpack(
-            pack_code=pack_code,
-            chat_id=chat_id,
-            creator_user_id=creator_id,
-            base_keyword=keyword,
-            total_amount=amount,
-            total_count=count,
-            min_share_amount=self._min_share_amount,
-            suffix_length=self._suffix_length,
-            created_at=now,
-            expires_at=now + self._ttl_seconds,
-            image_mode=image_mode,
-            remaining_amount=amount,
-            remaining_count=count,
-        )
-        pack.current_suffix = self._new_suffix(pack)
-        pack.used_passwords.add(_normalize_password(pack.current_password))
+                pack = LuckyRedpack(
+                    pack_code=self._new_pack_code_for_existing({item.pack_code for item in existing_packs}),
+                    chat_id=chat_id,
+                    creator_user_id=creator_id,
+                    base_keyword=keyword,
+                    total_amount=amount,
+                    total_count=count,
+                    min_share_amount=self._min_share_amount,
+                    suffix_length=self._suffix_length,
+                    created_at=now,
+                    expires_at=now + self._ttl_seconds,
+                    image_mode=image_mode,
+                    remaining_amount=amount,
+                    remaining_count=count,
+                )
+                pack.current_suffix = self._new_suffix(pack)
+                pack.used_passwords.add(_normalize_password(pack.current_password))
+                existing_packs.append(pack)
+                await self._save_active_packs(ctx, chat_id, existing_packs)
 
         try:
             sent = await self._send_pack_message(ctx, pack, reply_to=_message_id_from_event(event))
         except RuntimeError as exc:
+            await self._remove_pack_by_code(ctx, chat_id, pack.pack_code)
             if ctx.log:
                 await ctx.log("error", f"[lucky_redpack] 图片财富密码生成失败：{exc}")
             await self._reply(event, f"图片财富密码生成失败：{exc}")
             return
-        pack.message_id = _message_id_from_event(sent) if sent is not None else _message_id_from_event(event)
-        async with self._get_lock(chat_id):
-            with self._state_file_lock(ctx.account_id, chat_id):
-                packs = await self._load_active_packs(ctx, chat_id)
-                if any(item.pack_code == pack.pack_code for item in packs):
-                    pack.pack_code = self._new_pack_code_for_existing({item.pack_code for item in packs})
-                packs.append(pack)
-                await self._save_active_packs(ctx, chat_id, packs)
+        sent_message_id = _message_id_from_event(sent) if sent is not None else _message_id_from_event(event)
+        pack.message_id = sent_message_id
+        await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
         if self._delete_command_message:
             await self._delete_event(ctx, event)
