@@ -246,8 +246,10 @@ class QuickQATest(unittest.TestCase):
     def test_plugin_json_allows_legacy_ai_timeout_config(self) -> None:
         data = json.loads((ROOT / "quick_qa" / "plugin.json").read_text())
         timeout_schema = data["config_schema"]["properties"]["ai_timeout_seconds"]
+        entry_fee_schema = data["config_schema"]["properties"]["entry_fee"]
 
         self.assertLessEqual(timeout_schema["minimum"], 90)
+        self.assertEqual(entry_fee_schema["minimum"], 0)
         self.assertEqual(
             plugin_module._ai_timeout_seconds({"ai_timeout_seconds": 90}),
             plugin_module.DEFAULT_AI_TIMEOUT_SECONDS,
@@ -428,6 +430,11 @@ class QuickQATest(unittest.TestCase):
             correct_points=3,
             wrong_points=5,
             reward_ratio=0.9,
+            settlement_base_amount=1000,
+            settlement_point_multiplier=666,
+            settlement_base_points=4,
+            cleanup_delay_seconds=120,
+            payout_interval_seconds=2,
             min_players=2,
             max_players=30,
             max_questions=30,
@@ -441,12 +448,14 @@ class QuickQATest(unittest.TestCase):
             },
         )
 
-        text = plugin._render_finish(game, winner, 180, "题库已用完，按当前最高分结算")
+        settlements = plugin._settlement_items(game)
+        text = plugin._render_finish(game, settlements, "题库已用完，按积分余额结算", settlement_mode="auto")
 
         self.assertIn("本局题目已出完", text)
-        self.assertIn("赢家：玩家A（102 分）", text)
-        self.assertIn("可发奖金：200 × 90% = 180", text)
-        self.assertIn("发放全部可发奖金", text)
+        self.assertIn("基础奖池：1000 × 2 = 2000", text)
+        self.assertIn("可发奖金：2000 × 90% = 1800", text)
+        self.assertIn("玩家A：102 分 → 66268", text)
+        self.assertIn("发奖模式：自动发奖", text)
 
     def test_payment_without_lobby_is_ignored(self) -> None:
         async def scenario() -> None:
@@ -460,6 +469,100 @@ class QuickQATest(unittest.TestCase):
                 self.assertNotIn(-100123, plugin._games)
             finally:
                 await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_free_game_allows_midgame_registration_and_blocks_unregistered_answers(self) -> None:
+        self._seed_kb()
+
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(
+                account_id=1,
+                config={
+                    "entry_fee": 0,
+                    "min_players": 2,
+                    "question_timeout_seconds": 300,
+                    "selection_timeout_seconds": 300,
+                    "max_questions_per_game": 1,
+                    "payout_mode": "announce_only",
+                },
+            )
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("开始答题", 999, "主持人", message_id=700))
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 111, "玩家A", message_id=701))
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 222, "玩家B", message_id=702))
+                game = plugin._games[-100123]
+                self.assertEqual(game.entry_fee, 0)
+                self.assertEqual(game.players[111].join_message_id, 701)
+
+                await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:start:{game.game_id}", 111, "玩家A"))
+                await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:go:{game.game_id}", 111, "玩家A"))
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 333, "玩家C", message_id=703))
+
+                self.assertIn(333, game.players)
+                self.assertEqual(game.players[333].join_message_id, 703)
+
+                question_id = game.current_question.question_id
+                blocked = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    callback_payload(f"qqa:ans:{game.game_id}:{question_id}:0", 444, "未报名", message_id=704),
+                )
+                self.assertTrue(any("还没有报名" in action.get("text", "") for action in blocked))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_auto_payout_replies_to_registration_message_ids(self) -> None:
+        class FakeMessages:
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, **kwargs):
+                self.sent.append(kwargs)
+
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            game = plugin_module.QuickQAGame(
+                game_id="g1",
+                account_id=1,
+                chat_id=-100123,
+                entry_fee=0,
+                initial_points=20,
+                correct_points=3,
+                wrong_points=5,
+                reward_ratio=0.9,
+                settlement_base_amount=1000,
+                settlement_point_multiplier=666,
+                settlement_base_points=4,
+                cleanup_delay_seconds=120,
+                payout_interval_seconds=0,
+                min_players=2,
+                max_players=30,
+                max_questions=30,
+                question_timeout_seconds=45,
+                selection_timeout_seconds=120,
+                host_user_id=999,
+                host_name="主持人",
+                players={
+                    111: plugin_module.Player(user_id=111, name="玩家A", points=5, join_message_id=701),
+                    222: plugin_module.Player(user_id=222, name="玩家B", points=4, join_message_id=702),
+                    333: plugin_module.Player(user_id=333, name="玩家C", points=0),
+                },
+            )
+            messages = FakeMessages()
+            ctx = PluginContext(account_id=1)
+            ctx.messages = messages
+
+            await plugin._send_payouts(ctx, game, plugin._settlement_items(game))
+
+            self.assertEqual(
+                [(item["channel"], item["text"], item["reply_to_message_id"]) for item in messages.sent],
+                [("userbot_reply", "+1666", 701), ("userbot_reply", "+1000", 702)],
+            )
 
         asyncio.run(scenario())
 
@@ -517,8 +620,10 @@ class QuickQATest(unittest.TestCase):
                     callback_payload(f"qqa:ans:{game.game_id}:{question_id}:{correct_index}", 111, "玩家A", message_id=601),
                 )
                 result = next(action for action in right if action.get("type") == "result")
-                self.assertEqual(result["settlement"]["winner_user_id"], 111)
-                self.assertEqual(result["settlement"]["amount"], 180)
+                self.assertEqual(result["settlement"]["items"][0]["user_id"], 111)
+                self.assertEqual(result["settlement"]["items"][0]["amount"], 13654)
+                self.assertEqual(result["settlement"]["items"][1]["user_id"], 222)
+                self.assertEqual(result["settlement"]["amount"], 21980)
                 self.assertNotIn(-100123, plugin._games)
             finally:
                 await plugin.on_shutdown(ctx)

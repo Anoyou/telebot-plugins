@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.2.7"
+PLUGIN_VERSION = "1.3.0"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -12,6 +12,12 @@ DEFAULT_CORRECT_POINTS = 3
 DEFAULT_WRONG_POINTS = 5
 DEFAULT_ENTRY_FEE = 100
 DEFAULT_REWARD_RATIO = 0.9
+DEFAULT_SETTLEMENT_BASE_AMOUNT = 1000
+DEFAULT_SETTLEMENT_POINT_MULTIPLIER = 666
+DEFAULT_SETTLEMENT_BASE_POINTS = 4
+DEFAULT_CLEANUP_DELAY_SECONDS = 120
+DEFAULT_PAYOUT_INTERVAL_SECONDS = 2
+DEFAULT_FREE_JOIN_KEYWORD = "报名"
 DEFAULT_MAX_QUESTIONS_PER_GAME = 50
 DEFAULT_QUESTION_TIMEOUT_SECONDS = 45
 DEFAULT_SELECTION_TIMEOUT_SECONDS = 120
@@ -52,8 +58,9 @@ AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手�
 
 USAGE = (
     "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；"
-    "游戏开局时由随机玩家按钮多选题库。玩家通过转账门槛金额报名，每人默认 20 积分，"
-    "答对加分、答错扣分，扣完出局；剩最后一人或题库用完时通过平台 settlement 公告奖励。"
+    "游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家发送“报名”参与并记录消息 ID；"
+    "付费局通过转账报名。每人默认 20 积分，答对加分、答错扣分，扣完出局；"
+    "结束后按每位玩家积分余额生成发奖列表，可由 userbot 逐条回复报名消息自动发奖。"
 )
 
 EVENT_SUBSCRIPTIONS = [
@@ -62,7 +69,7 @@ EVENT_SUBSCRIPTIONS = [
         "source": ["external_payment_notice", "userbot"],
         "scope": "all_allowed_chats",
         "entry_key": "join_quick_qa",
-        "description": "付款确认用于已有快问快答大厅的报名入场，插件按门槛金额二次校验。",
+        "description": "付款确认用于付费快问快答大厅的报名入场，插件按门槛金额二次校验。",
     },
     {
         "events": ["callback_query", "session_close"],
@@ -101,7 +108,8 @@ CONFIG_SCHEMA = {
             "readOnly": True,
             "default": (
                 "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n"
-                "{prefix}quickqa 100 创建报名大厅\n"
+                "{prefix}quickqa 0 创建免费报名大厅，玩家发送“报名”参与\n"
+                "{prefix}quickqa 100 创建转账报名大厅\n"
                 "{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n"
                 "{prefix}quickqa start 开始选择题库\n"
                 "{prefix}quickqa kb list 查看题库"
@@ -111,7 +119,7 @@ CONFIG_SCHEMA = {
             "type": "integer",
             "title": "默认门槛金额",
             "default": DEFAULT_ENTRY_FEE,
-            "minimum": 1,
+            "minimum": 0,
             "maximum": 10000000,
             "level": "account",
         },
@@ -174,17 +182,57 @@ CONFIG_SCHEMA = {
         "reward_ratio": {
             "type": "number",
             "title": "发奖比例",
-            "description": "总门槛金额的发奖上限，默认 0.9。",
+            "description": "基础奖池的可发奖金展示比例，默认 0.9。",
             "default": DEFAULT_REWARD_RATIO,
             "minimum": 0.01,
             "maximum": 1,
         },
+        "settlement_base_amount": {
+            "type": "integer",
+            "title": "基础奖池单价",
+            "description": "基础奖池 = 本值 × 参与人数，默认 1000。",
+            "default": DEFAULT_SETTLEMENT_BASE_AMOUNT,
+            "minimum": 0,
+            "maximum": 100000000,
+        },
+        "settlement_point_multiplier": {
+            "type": "integer",
+            "title": "积分奖励系数",
+            "description": "单人奖励 = 基础奖池单价 + 本值 × (积分 - 基准积分)。",
+            "default": DEFAULT_SETTLEMENT_POINT_MULTIPLIER,
+            "minimum": 0,
+            "maximum": 100000000,
+        },
+        "settlement_base_points": {
+            "type": "integer",
+            "title": "基准积分",
+            "description": "奖励公式中的基准积分，默认 4。",
+            "default": DEFAULT_SETTLEMENT_BASE_POINTS,
+            "minimum": 0,
+            "maximum": 1000,
+        },
         "payout_mode": {
             "type": "string",
             "title": "结算模式",
-            "default": "announce_only",
+            "default": "auto",
             "enum": ["announce_only", "auto"],
-            "description": "auto 仍由平台受控 settlement 执行，普通 Bot 不直接转账。",
+            "description": "auto 会让 userbot 按报名消息 ID 逐条回复 +金额 发奖；announce_only 只公告发奖列表。",
+        },
+        "payout_interval_seconds": {
+            "type": "number",
+            "title": "自动发奖间隔（秒）",
+            "description": "逐条回复 +金额 的间隔，用于降低高并发风控风险。",
+            "default": DEFAULT_PAYOUT_INTERVAL_SECONDS,
+            "minimum": 0,
+            "maximum": 60,
+        },
+        "cleanup_delay_seconds": {
+            "type": "integer",
+            "title": "结束后清理延迟（秒）",
+            "description": "问答结束后延迟多久删除本局相关消息，默认 120 秒。",
+            "default": DEFAULT_CLEANUP_DELAY_SECONDS,
+            "minimum": 0,
+            "maximum": 3600,
         },
         "start_keyword": {
             "type": "string",
@@ -192,6 +240,13 @@ CONFIG_SCHEMA = {
             "default": DEFAULT_START_KEYWORD,
             "minLength": 1,
             "maxLength": 32,
+        },
+        "free_join_keyword": {
+            "type": "string",
+            "title": "免费局报名关键词",
+            "default": DEFAULT_FREE_JOIN_KEYWORD,
+            "minLength": 1,
+            "maxLength": 16,
         },
         "allowed_source_hosts": {
             "type": "string",
@@ -418,7 +473,7 @@ MANIFEST = Manifest(
     description="支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
     usage=USAGE,
     category="interactive",
-    permissions=["send_message", "edit_message", "read_chat", "external_http", "ai_text"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat", "external_http", "ai_text"],
     allowed_hosts=[
         "**.com",
         "**.net",
@@ -452,7 +507,7 @@ MANIFEST = Manifest(
         {
             "key": "join_quick_qa",
             "title": "快问快答报名与抢答",
-            "description": "玩家转账门槛金额报名，达到人数后通过按钮选择题库并进行三选一抢答。",
+            "description": "玩家转账或发送免费报名关键词参与，达到人数后通过按钮选择题库并进行三选一抢答。",
             "interaction_profile": "session_game",
             "launch_mode": "bridge",
             "session_scope": "chat",
@@ -463,13 +518,13 @@ MANIFEST = Manifest(
                 "required_event_fields": ["type", "chat_id"],
             },
             "result_contract": {
-                "actions": ["send_message", "edit_message", "answer_callback", "end_session", "result", "settlement"],
+                "actions": ["send_message", "edit_message", "delete_message", "answer_callback", "end_session", "result", "settlement"],
                 "send_via": ["interaction_bot", "userbot_reply"],
             },
             "settlement": {
-                "mode": "announce_only",
-                "winner_field": "actor.user_id",
-                "amount_field": "reward",
+                "mode": "auto",
+                "recipient_field": "items[].user_id",
+                "amount_field": "items[].amount",
             },
             "input_schema": {
                 "type": "object",
@@ -479,7 +534,7 @@ MANIFEST = Manifest(
                         "type": "integer",
                         "title": "门槛金额",
                         "default": DEFAULT_ENTRY_FEE,
-                        "minimum": 1,
+                        "minimum": 0,
                     },
                     "start_keyword": {
                         "type": "string",
@@ -494,7 +549,7 @@ MANIFEST = Manifest(
                         "maximum": MAX_QUESTIONS_PER_GAME,
                     },
                 },
-                "required": ["entry_fee"],
+                "required": [],
             },
             "dispatch_modes": ["public_keyword"],
             "message_channels": {"public_keyword": "interaction_bot"},
