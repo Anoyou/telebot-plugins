@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.3.1"
+PLUGIN_VERSION = "1.4.0"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -109,6 +109,8 @@ class Player:
     active: bool = True
     joined_at: float = field(default_factory=time.time)
     join_message_id: int | None = None
+    correct_count: int = 0
+    wrong_count: int = 0
 
 
 @dataclass
@@ -167,6 +169,8 @@ class SettlementItem:
     points: int
     amount: int
     join_message_id: int | None = None
+    correct_count: int = 0
+    wrong_count: int = 0
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -1375,6 +1379,7 @@ class QuickQAPlugin(Plugin):
         actions: list[dict[str, Any]] = []
         if answer_ok:
             current.resolved = True
+            player.correct_count += 1
             player.points += game.correct_points
             actions.append(_answer_action(payload, f"答对了，+{game.correct_points} 分"))
             edit = _edit_action(_message_id(payload), self._render_question_result(game, actor_name, True), reply_markup=None)
@@ -1383,6 +1388,7 @@ class QuickQAPlugin(Plugin):
             actions.extend(await self._next_question_actions(ctx, game))
             return actions
 
+        player.wrong_count += 1
         player.points -= game.wrong_points
         if player.points <= 0:
             player.points = 0
@@ -1479,6 +1485,8 @@ class QuickQAPlugin(Plugin):
                 points=player.points,
                 amount=self._settlement_amount(game, player),
                 join_message_id=player.join_message_id,
+                correct_count=player.correct_count,
+                wrong_count=player.wrong_count,
             )
             for player in players
         ]
@@ -1926,6 +1934,9 @@ class QuickQAPlugin(Plugin):
             f"人数：{len(game.players)}/{game.max_players}（至少 {game.min_players} 人开局）",
             f"本局最多题数：{_code(game.max_questions)}",
             "",
+            "玩法：三选一抢答；每题最快答对者加分，答错扣分且本题不能再答。",
+            "如果所有存活玩家都答错，本题公布答案后进入下一题。",
+            "",
             join_text,
         ]
         if game.players:
@@ -2078,13 +2089,13 @@ class QuickQAPlugin(Plugin):
             lines.append(f"- {_html(item.name)}：{item.points} 分 → {item.amount}（消息 ID：{msg}）")
         lines.extend([
             "",
-            self._scoreboard(game, include_out=True),
+            self._scoreboard(game, include_out=True, include_answer_stats=True),
             "",
             f"本局消息将在 {game.cleanup_delay_seconds} 秒后自动删除。",
         ])
         return "\n".join(lines)
 
-    def _scoreboard(self, game: QuickQAGame, *, include_out: bool = False) -> str:
+    def _scoreboard(self, game: QuickQAGame, *, include_out: bool = False, include_answer_stats: bool = False) -> str:
         players = sorted(game.players.values(), key=lambda p: (-p.points, p.joined_at))
         if not include_out:
             players = [p for p in players if p.active]
@@ -2093,7 +2104,8 @@ class QuickQAPlugin(Plugin):
         lines = ["<b>积分榜</b>"]
         for player in players:
             status = "出局" if not player.active else "存活"
-            lines.append(f"- {_html(player.name)}：{player.points} 分（{status}）")
+            suffix = f"{status}，答对 {player.correct_count}，答错 {player.wrong_count}" if include_answer_stats else status
+            lines.append(f"- {_html(player.name)}：{player.points} 分（{suffix}）")
         return "\n".join(lines)
 
     def _render_kb_list(self, ctx: PluginContext) -> str:

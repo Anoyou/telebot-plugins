@@ -245,11 +245,15 @@ class QuickQATest(unittest.TestCase):
 
     def test_plugin_json_allows_legacy_ai_timeout_config(self) -> None:
         data = json.loads((ROOT / "quick_qa" / "plugin.json").read_text())
-        timeout_schema = data["config_schema"]["properties"]["ai_timeout_seconds"]
-        entry_fee_schema = data["config_schema"]["properties"]["entry_fee"]
+        properties = data["config_schema"]["properties"]
+        timeout_schema = properties["ai_timeout_seconds"]
+        entry_fee_schema = properties["entry_fee"]
 
         self.assertLessEqual(timeout_schema["minimum"], 90)
         self.assertEqual(entry_fee_schema["minimum"], 0)
+        self.assertEqual(properties["reward_ratio"]["title"], "可发奖金比例")
+        self.assertEqual(properties["settlement_base_amount"]["title"], "基础奖池单价 / 单人保底奖金")
+        self.assertIn("单人奖金 =", properties["settlement_formula_preview"]["default"])
         self.assertEqual(
             plugin_module._ai_timeout_seconds({"ai_timeout_seconds": 90}),
             plugin_module.DEFAULT_AI_TIMEOUT_SECONDS,
@@ -348,6 +352,9 @@ class QuickQATest(unittest.TestCase):
 
                 self.assertIn(-100123, plugin._games)
                 self.assertTrue(any("快问快答报名中" in action.get("text", "") for action in actions))
+                lobby_text = "\n".join(action.get("text", "") for action in actions)
+                self.assertIn("三选一抢答", lobby_text)
+                self.assertIn("答错扣分且本题不能再答", lobby_text)
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -420,7 +427,7 @@ class QuickQATest(unittest.TestCase):
 
     def test_finish_message_explains_highest_score_settlement(self) -> None:
         plugin = plugin_module.QuickQAPlugin()
-        winner = plugin_module.Player(user_id=111, name="玩家A", points=102)
+        winner = plugin_module.Player(user_id=111, name="玩家A", points=102, correct_count=28, wrong_count=1)
         game = plugin_module.QuickQAGame(
             game_id="g1",
             account_id=1,
@@ -444,7 +451,7 @@ class QuickQATest(unittest.TestCase):
             host_name="玩家A",
             players={
                 111: winner,
-                222: plugin_module.Player(user_id=222, name="玩家B", points=26),
+                222: plugin_module.Player(user_id=222, name="玩家B", points=26, correct_count=4, wrong_count=3),
             },
         )
 
@@ -455,6 +462,8 @@ class QuickQATest(unittest.TestCase):
         self.assertIn("基础奖池：1000 × 2 = 2000", text)
         self.assertIn("可发奖金：2000 × 90% = 1800", text)
         self.assertIn("玩家A：102 分 → 66268", text)
+        self.assertIn("玩家A：102 分（存活，答对 28，答错 1）", text)
+        self.assertIn("玩家B：26 分（存活，答对 4，答错 3）", text)
         self.assertIn("发奖模式：自动发奖", text)
 
     def test_payment_without_lobby_is_ignored(self) -> None:
@@ -655,6 +664,7 @@ class QuickQATest(unittest.TestCase):
                     callback_payload(f"qqa:ans:{game.game_id}:{question_id}:{wrong_index}", 222, "玩家B", message_id=600),
                 )
                 self.assertEqual(game.players[222].points, 15)
+                self.assertEqual(game.players[222].wrong_count, 1)
                 self.assertFalse(any(action.get("type") == "result" for action in wrong))
 
                 right = await plugin.on_interaction(
@@ -663,8 +673,11 @@ class QuickQATest(unittest.TestCase):
                     callback_payload(f"qqa:ans:{game.game_id}:{question_id}:{correct_index}", 111, "玩家A", message_id=601),
                 )
                 result = next(action for action in right if action.get("type") == "result")
+                self.assertEqual(game.players[111].correct_count, 1)
                 self.assertEqual(result["settlement"]["items"][0]["user_id"], 111)
                 self.assertEqual(result["settlement"]["items"][0]["amount"], 13654)
+                self.assertEqual(result["settlement"]["items"][0]["correct_count"], 1)
+                self.assertEqual(result["settlement"]["items"][1]["wrong_count"], 1)
                 self.assertEqual(result["settlement"]["items"][1]["user_id"], 222)
                 self.assertEqual(result["settlement"]["amount"], 21980)
                 self.assertNotIn(-100123, plugin._games)

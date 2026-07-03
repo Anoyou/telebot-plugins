@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.3.1"
+PLUGIN_VERSION = "1.4.0"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -181,35 +181,41 @@ CONFIG_SCHEMA = {
         },
         "reward_ratio": {
             "type": "number",
-            "title": "发奖比例",
-            "description": "基础奖池的可发奖金展示比例，默认 0.9。",
+            "title": "可发奖金比例",
+            "description": "可发奖金 = 基础奖池 × 本比例，仅用于结算展示与奖池说明，默认 0.9。",
             "default": DEFAULT_REWARD_RATIO,
             "minimum": 0.01,
             "maximum": 1,
         },
         "settlement_base_amount": {
             "type": "integer",
-            "title": "基础奖池单价",
-            "description": "基础奖池 = 本值 × 参与人数，默认 1000。",
+            "title": "基础奖池单价 / 单人保底奖金",
+            "description": "基础奖池 = 本值 × 参与人数；单人奖金公式里的保底奖金也使用本值，默认 1000。",
             "default": DEFAULT_SETTLEMENT_BASE_AMOUNT,
             "minimum": 0,
             "maximum": 100000000,
         },
         "settlement_point_multiplier": {
             "type": "integer",
-            "title": "积分奖励系数",
-            "description": "单人奖励 = 基础奖池单价 + 本值 × (积分 - 基准积分)。",
+            "title": "单人公式：积分奖金系数",
+            "description": "单人奖金 = 单人保底奖金 + 本值 × (积分 - 基准积分)。",
             "default": DEFAULT_SETTLEMENT_POINT_MULTIPLIER,
             "minimum": 0,
             "maximum": 100000000,
         },
         "settlement_base_points": {
             "type": "integer",
-            "title": "基准积分",
+            "title": "单人公式：基准积分",
             "description": "奖励公式中的基准积分，默认 4。",
             "default": DEFAULT_SETTLEMENT_BASE_POINTS,
             "minimum": 0,
             "maximum": 1000,
+        },
+        "settlement_formula_preview": {
+            "type": "string",
+            "title": "单人奖金公式（只读）",
+            "readOnly": True,
+            "default": "单人奖金 = 单人保底奖金 + 积分奖金系数 × (最终积分 - 基准积分)，低于 0 按 0。",
         },
         "payout_mode": {
             "type": "string",
