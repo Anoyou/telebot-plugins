@@ -472,6 +472,49 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_start_button_edits_lobby_and_ignores_repeated_clicks(self) -> None:
+        self._seed_kb()
+
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(
+                account_id=1,
+                config={
+                    "entry_fee": 0,
+                    "min_players": 2,
+                    "selection_timeout_seconds": 300,
+                },
+            )
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("开始答题", 999, "主持人", message_id=700))
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 111, "玩家A", message_id=701))
+                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 222, "玩家B", message_id=702))
+                game = plugin._games[-100123]
+
+                first = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    callback_payload(f"qqa:start:{game.game_id}", 111, "玩家A", message_id=800),
+                )
+                self.assertEqual(game.phase, "selecting")
+                self.assertEqual(game.selector_user_id, 111)
+                self.assertTrue(any(action.get("type") == "edit_message" and "题库选择" in action.get("text", "") for action in first))
+                self.assertFalse(any(action.get("type") == "send_message" and "题库选择" in action.get("text", "") for action in first))
+
+                repeated = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    callback_payload(f"qqa:start:{game.game_id}", 222, "玩家B", message_id=801),
+                )
+                self.assertEqual(game.selector_user_id, 111)
+                self.assertTrue(any("题库选择已经开始" in action.get("text", "") for action in repeated))
+                self.assertFalse(any(action.get("type") in {"send_message", "edit_message"} for action in repeated))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_free_game_allows_midgame_registration_and_blocks_unregistered_answers(self) -> None:
         self._seed_kb()
 
@@ -560,8 +603,8 @@ class QuickQATest(unittest.TestCase):
             await plugin._send_payouts(ctx, game, plugin._settlement_items(game))
 
             self.assertEqual(
-                [(item["channel"], item["text"], item["reply_to_message_id"]) for item in messages.sent],
-                [("userbot_reply", "+1666", 701), ("userbot_reply", "+1000", 702)],
+                [(item["channel"], item["chat_id"], item["text"], item["reply_to_message_id"]) for item in messages.sent],
+                [("userbot_reply", -100123, "+1666", 701), ("userbot_reply", -100123, "+1000", 702)],
             )
 
         asyncio.run(scenario())

@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.3.1"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -426,6 +426,7 @@ def _first_present(*values: Any) -> Any:
 def _send_action(
     text: str,
     *,
+    chat_id: int | None = None,
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
     parse_mode: str = "html",
@@ -437,6 +438,8 @@ def _send_action(
         "text": text,
         "send_via": send_via,
     }
+    if chat_id:
+        action["chat_id"] = int(chat_id)
     if parse_mode:
         action["parse_mode"] = parse_mode
     if reply_to_message_id:
@@ -1262,8 +1265,18 @@ class QuickQAPlugin(Plugin):
         payload: dict[str, Any],
         game: QuickQAGame,
     ) -> list[dict[str, Any]]:
-        if game.phase not in {"lobby", "selecting"}:
+        if game.phase == "selecting":
+            text = "题库选择已经开始，请在最新的题库选择消息中继续操作。"
+            return [_answer_action(payload, text, show_alert=True)] if _callback_query_id(payload) else [_send_action(text)]
+        if game.phase != "lobby":
             return [_answer_action(payload, "当前阶段不能选择题库", show_alert=True)] if _callback_query_id(payload) else []
+        actor_id, _ = _actor_id_name(payload)
+        if _callback_query_id(payload) and actor_id not in game.players:
+            if game.entry_fee <= 0:
+                tip = f"你还没有报名，请先发送“{game.free_join_keyword}”参与本局。"
+            else:
+                tip = "你还没有报名，请先完成转账报名。"
+            return [_answer_action(payload, tip, show_alert=True)]
         if len(game.players) < game.min_players:
             text = f"人数不足，至少需要 {game.min_players} 人，当前 {len(game.players)} 人。"
             return [_answer_action(payload, text, show_alert=True)] if _callback_query_id(payload) else [_send_action(text)]
@@ -1278,7 +1291,12 @@ class QuickQAPlugin(Plugin):
         actions: list[dict[str, Any]] = []
         if _callback_query_id(payload):
             actions.append(_answer_action(payload, "已进入题库选择"))
-        actions.append(self._send_game_action(game, self._render_kb_selection(game, kbs), reply_markup=self._kb_markup(game, kbs), label="kb_select"))
+        selection_text = self._render_kb_selection(game, kbs)
+        edit = _edit_action(_message_id(payload), selection_text, reply_markup=self._kb_markup(game, kbs))
+        if edit:
+            actions.append(edit)
+        else:
+            actions.append(self._send_game_action(game, selection_text, reply_markup=self._kb_markup(game, kbs), label="kb_select"))
         self._track(asyncio.create_task(self._selection_timeout(ctx, game.chat_id, game.game_id, game.selection_timeout_seconds)))
         return actions
 
@@ -1495,6 +1513,7 @@ class QuickQAPlugin(Plugin):
                 [
                     _send_action(
                         f"+{item.amount}",
+                        chat_id=game.chat_id,
                         reply_to_message_id=item.join_message_id,
                         send_via="userbot_reply",
                         parse_mode="",
@@ -1915,7 +1934,7 @@ class QuickQAPlugin(Plugin):
             for player in sorted(game.players.values(), key=lambda p: p.joined_at):
                 lines.append(f"- {_html(player.name)}：{player.points} 分")
         lines.append("")
-        lines.append(f"开局：已报名玩家点击按钮，或发送 {_code(_command_prefix() + self._command + ' start')}。")
+        lines.append("开局：已报名玩家点击下方按钮开始选择题库。")
         return "\n".join(lines)
 
     def _lobby_markup(self, game: QuickQAGame) -> dict[str, Any]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.3.1"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -111,7 +111,7 @@ CONFIG_SCHEMA = {
                 "{prefix}quickqa 0 创建免费报名大厅，玩家发送“报名”参与\n"
                 "{prefix}quickqa 100 创建转账报名大厅\n"
                 "{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n"
-                "{prefix}quickqa start 开始选择题库\n"
+                "报名大厅下方按钮开始选择题库\n"
                 "{prefix}quickqa kb list 查看题库"
             ),
         },

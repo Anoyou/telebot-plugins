@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "interactive",
@@ -262,7 +262,7 @@
         "type": "string",
         "title": "使用说明（只读）",
         "readOnly": true,
-        "default": "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n{prefix}quickqa 0 创建免费报名大厅，玩家发送“报名”参与\n{prefix}quickqa 100 创建转账报名大厅\n{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n{prefix}quickqa start 开始选择题库\n{prefix}quickqa kb list 查看题库"
+        "default": "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n{prefix}quickqa 0 创建免费报名大厅，玩家发送“报名”参与\n{prefix}quickqa 100 创建转账报名大厅\n{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n报名大厅下方按钮开始选择题库\n{prefix}quickqa kb list 查看题库"
       },
       "entry_fee": {
         "type": "integer",
