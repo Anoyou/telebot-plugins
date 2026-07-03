@@ -23,7 +23,7 @@ def _load_plugin_module():
         pass
 
     class PluginContext:
-        def __init__(self, account_id=1, feature_key="quick_qa", log=None, config=None):
+        def __init__(self, account_id=1, feature_key="quick_qa", log=None, config=None, redis=None):
             self.account_id = account_id
             self.feature_key = feature_key
             self.log = log
@@ -31,6 +31,7 @@ def _load_plugin_module():
             self.messages = None
             self.http = None
             self.ai = None
+            self.redis = redis
 
     def register(cls):
         return cls
@@ -104,6 +105,14 @@ def message_payload(text: str, user_id: int, name: str, *, channel: str = "inter
         "chat_id": -100123,
         "message_id": message_id,
     }
+
+
+class FakeRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, key: str):
+        return self.store.get(key)
 
 
 class QuickQATest(unittest.TestCase):
@@ -481,6 +490,80 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_free_registration_edits_saved_lobby_message(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            redis = FakeRedis()
+            ctx = PluginContext(
+                account_id=1,
+                redis=redis,
+                config={
+                    "entry_fee": 0,
+                    "min_players": 2,
+                },
+            )
+            await plugin.on_startup(ctx)
+            try:
+                start_actions = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("开始答题", 999, "主持人", message_id=700),
+                )
+                self.assertEqual(len(start_actions), 1)
+                game = plugin._games[-100123]
+                lobby_key = plugin._lobby_message_key(game)
+                self.assertEqual(start_actions[0].get("save_message_id_key"), lobby_key)
+                redis.store[lobby_key] = "900"
+
+                join_actions = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("报名", 111, "玩家A", message_id=701),
+                )
+
+                self.assertEqual([action.get("type") for action in join_actions], ["edit_message"])
+                self.assertEqual(join_actions[0].get("message_id"), 900)
+                self.assertEqual(join_actions[0].get("chat_id"), -100123)
+                self.assertIn("玩家A：20 分", join_actions[0].get("text", ""))
+                self.assertNotIn("报名成功", join_actions[0].get("text", ""))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_free_registration_without_saved_lobby_sends_single_lobby_message(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.QuickQAPlugin()
+            ctx = PluginContext(
+                account_id=1,
+                config={
+                    "entry_fee": 0,
+                    "min_players": 2,
+                },
+            )
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("开始答题", 999, "主持人", message_id=700),
+                )
+                join_actions = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("报名", 111, "玩家A", message_id=701),
+                )
+
+                self.assertEqual(len(join_actions), 1)
+                self.assertEqual(join_actions[0].get("type"), "send_message")
+                self.assertIn("快问快答报名中", join_actions[0].get("text", ""))
+                self.assertIn("玩家A：20 分", join_actions[0].get("text", ""))
+                self.assertNotIn("报名成功", join_actions[0].get("text", ""))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_start_button_edits_lobby_and_ignores_repeated_clicks(self) -> None:
         self._seed_kb()
 
@@ -509,6 +592,7 @@ class QuickQATest(unittest.TestCase):
                 self.assertEqual(game.phase, "selecting")
                 self.assertEqual(game.selector_user_id, 111)
                 self.assertTrue(any(action.get("type") == "edit_message" and "题库选择" in action.get("text", "") for action in first))
+                self.assertTrue(any("【轮到 玩家A 选择题库】" in action.get("text", "") for action in first))
                 self.assertFalse(any(action.get("type") == "send_message" and "题库选择" in action.get("text", "") for action in first))
 
                 repeated = await plugin.on_interaction(

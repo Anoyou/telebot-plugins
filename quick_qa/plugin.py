@@ -25,7 +25,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.4.0"
+PLUGIN_VERSION = "1.4.1"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -469,7 +469,14 @@ def _delete_action(
     }
 
 
-def _edit_action(message_id: int | None, text: str, *, reply_markup: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def _edit_action(
+    message_id: int | None,
+    text: str,
+    *,
+    chat_id: int | None = None,
+    reply_markup: dict[str, Any] | None = None,
+    send_via: str | list[str] = "interaction_bot",
+) -> dict[str, Any] | None:
     if not message_id:
         return None
     action: dict[str, Any] = {
@@ -477,8 +484,10 @@ def _edit_action(message_id: int | None, text: str, *, reply_markup: dict[str, A
         "message_id": int(message_id),
         "text": text,
         "parse_mode": "html",
-        "send_via": "interaction_bot",
+        "send_via": send_via,
     }
+    if chat_id:
+        action["chat_id"] = int(chat_id)
     if reply_markup is not None:
         action["reply_markup"] = reply_markup
     return action
@@ -810,9 +819,28 @@ class QuickQAPlugin(Plugin):
         game.tracked_message_keys.append(key)
         return key
 
+    def _lobby_message_key(self, game: QuickQAGame) -> str:
+        key = f"quick_qa:{game.account_id}:{game.chat_id}:{game.game_id}:lobby"
+        if key not in game.tracked_message_keys:
+            game.tracked_message_keys.append(key)
+        return key
+
     def _track_message_id(self, game: QuickQAGame, message_id: int | None) -> None:
         if message_id and message_id not in game.tracked_message_ids:
             game.tracked_message_ids.append(int(message_id))
+
+    @staticmethod
+    async def _read_saved_message_id(ctx: PluginContext, key: str) -> int | None:
+        redis = getattr(ctx, "redis", None)
+        if redis is None:
+            return None
+        try:
+            raw = await redis.get(key)
+        except Exception:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        return _int(raw, 0) or None
 
     def _send_game_action(
         self,
@@ -827,10 +855,43 @@ class QuickQAPlugin(Plugin):
     ) -> dict[str, Any]:
         return _send_action(
             text,
+            chat_id=game.chat_id,
             reply_to_message_id=reply_to_message_id,
             reply_markup=reply_markup,
             send_via=send_via or game.send_via,
             save_message_id_key=self._game_message_key(game, label) if track else None,
+        )
+
+    async def _lobby_action(
+        self,
+        ctx: PluginContext,
+        game: QuickQAGame,
+        *,
+        reply_to_message_id: int | None = None,
+    ) -> dict[str, Any]:
+        key = self._lobby_message_key(game)
+        message_id = game.lobby_message_id or await self._read_saved_message_id(ctx, key)
+        text = self._render_lobby(game)
+        reply_markup = self._lobby_markup(game)
+        if message_id:
+            game.lobby_message_id = message_id
+            self._track_message_id(game, message_id)
+            edit = _edit_action(
+                message_id,
+                text,
+                chat_id=game.chat_id,
+                reply_markup=reply_markup,
+                send_via=game.send_via,
+            )
+            if edit:
+                return edit
+        return _send_action(
+            text,
+            chat_id=game.chat_id,
+            reply_to_message_id=reply_to_message_id,
+            reply_markup=reply_markup,
+            send_via=game.send_via,
+            save_message_id_key=key,
         )
 
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -1077,7 +1138,7 @@ class QuickQAPlugin(Plugin):
             if game.entry_fee > 0:
                 return []
             user_id, name = _actor_id_name(payload)
-            return self._join_game_locked(game, user_id, name, _message_id(payload))
+            return await self._join_game_locked(ctx, game, user_id, name, _message_id(payload))
 
     async def _handle_payment(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         amount = _payment_amount(payload)
@@ -1106,10 +1167,11 @@ class QuickQAPlugin(Plugin):
                     )
                 ]
             user_id, name = _actor_id_name(payload, prefer_payment=True)
-            return self._join_game_locked(game, user_id, name, _message_id(payload), paid=True)
+            return await self._join_game_locked(ctx, game, user_id, name, _message_id(payload), paid=True)
 
-    def _join_game_locked(
+    async def _join_game_locked(
         self,
+        ctx: PluginContext,
         game: QuickQAGame,
         user_id: int,
         name: str,
@@ -1141,18 +1203,16 @@ class QuickQAPlugin(Plugin):
             points=game.initial_points,
             join_message_id=message_id,
         )
-        verb = "报名成功" if not paid else "报名成功"
-        actions: list[dict[str, Any]] = [
+        if game.phase == "lobby":
+            return [await self._lobby_action(ctx, game, reply_to_message_id=message_id)]
+        return [
             self._send_game_action(
                 game,
-                f"{_html(name)} {verb}，初始积分 {_code(game.initial_points)}。",
+                f"{_html(name)} 报名成功，初始积分 {_code(game.initial_points)}。",
                 reply_to_message_id=message_id,
                 label="join",
             )
         ]
-        if game.phase == "lobby":
-            actions.append(self._send_game_action(game, self._render_lobby(game), reply_markup=self._lobby_markup(game), label="lobby"))
-        return actions
 
     async def _create_lobby(
         self,
@@ -1169,15 +1229,7 @@ class QuickQAPlugin(Plugin):
             game = self._new_game(ctx, payload, chat_id, entry_fee, actor_id, actor_name)
             self._track_message_id(game, _message_id(payload))
             self._games[chat_id] = game
-            return [
-                self._send_game_action(
-                    game,
-                    self._render_lobby(game),
-                    reply_to_message_id=_message_id(payload),
-                    reply_markup=self._lobby_markup(game),
-                    label="lobby",
-                )
-            ]
+            return [await self._lobby_action(ctx, game, reply_to_message_id=_message_id(payload))]
 
     def _new_game(
         self,
@@ -1296,7 +1348,13 @@ class QuickQAPlugin(Plugin):
         if _callback_query_id(payload):
             actions.append(_answer_action(payload, "已进入题库选择"))
         selection_text = self._render_kb_selection(game, kbs)
-        edit = _edit_action(_message_id(payload), selection_text, reply_markup=self._kb_markup(game, kbs))
+        edit = _edit_action(
+            _message_id(payload),
+            selection_text,
+            chat_id=game.chat_id,
+            reply_markup=self._kb_markup(game, kbs),
+            send_via=game.send_via,
+        )
         if edit:
             actions.append(edit)
         else:
@@ -1321,7 +1379,13 @@ class QuickQAPlugin(Plugin):
         else:
             game.selected_kb_ids.add(kb_id)
         kbs = self._available_kbs(ctx)
-        edit = _edit_action(_message_id(payload), self._render_kb_selection(game, kbs), reply_markup=self._kb_markup(game, kbs))
+        edit = _edit_action(
+            _message_id(payload),
+            self._render_kb_selection(game, kbs),
+            chat_id=game.chat_id,
+            reply_markup=self._kb_markup(game, kbs),
+            send_via=game.send_via,
+        )
         return [_answer_action(payload, "已更新选择"), *([edit] if edit else [])]
 
     async def _start_questions_locked(
@@ -1345,7 +1409,13 @@ class QuickQAPlugin(Plugin):
         game.question_index = -1
         game.phase = "playing"
         actions: list[dict[str, Any]] = [_answer_action(payload, "题库已确认，开始出题")]
-        edit = _edit_action(_message_id(payload), self._render_game_start(game, selected), reply_markup=None)
+        edit = _edit_action(
+            _message_id(payload),
+            self._render_game_start(game, selected),
+            chat_id=game.chat_id,
+            reply_markup=None,
+            send_via=game.send_via,
+        )
         if edit:
             actions.append(edit)
         actions.extend(await self._next_question_actions(ctx, game))
@@ -1382,7 +1452,13 @@ class QuickQAPlugin(Plugin):
             player.correct_count += 1
             player.points += game.correct_points
             actions.append(_answer_action(payload, f"答对了，+{game.correct_points} 分"))
-            edit = _edit_action(_message_id(payload), self._render_question_result(game, actor_name, True), reply_markup=None)
+            edit = _edit_action(
+                _message_id(payload),
+                self._render_question_result(game, actor_name, True),
+                chat_id=game.chat_id,
+                reply_markup=None,
+                send_via=game.send_via,
+            )
             if edit:
                 actions.append(edit)
             actions.extend(await self._next_question_actions(ctx, game))
@@ -1403,7 +1479,13 @@ class QuickQAPlugin(Plugin):
         alive_answered = all(p.user_id in current.answered_user_ids for p in game.players.values() if p.active)
         if alive_answered:
             current.resolved = True
-            edit = _edit_action(_message_id(payload), self._render_question_timeout(game, exhausted=True), reply_markup=None)
+            edit = _edit_action(
+                _message_id(payload),
+                self._render_question_timeout(game, exhausted=True),
+                chat_id=game.chat_id,
+                reply_markup=None,
+                send_via=game.send_via,
+            )
             if edit:
                 actions.append(edit)
             actions.extend(await self._next_question_actions(ctx, game))
@@ -1953,10 +2035,12 @@ class QuickQAPlugin(Plugin):
 
     def _render_kb_selection(self, game: QuickQAGame, kbs: list[KnowledgeBase]) -> str:
         selector = game.players.get(game.selector_user_id)
+        selector_name = _html(selector.name if selector else game.selector_user_id)
         selected_count = len(game.selected_kb_ids) if game.selected_kb_ids else len(kbs)
         lines = [
             "<b>题库选择</b>",
-            f"本轮随机抽中：{_html(selector.name if selector else game.selector_user_id)}",
+            f"<b>【轮到 {selector_name} 选择题库】</b>",
+            "只有被抽中的玩家可以点选题库并开始出题。",
             f"当前将使用：{selected_count} 个题库",
             f"本局最多出题：{game.max_questions} 题",
             "",
@@ -1975,7 +2059,7 @@ class QuickQAPlugin(Plugin):
                     "callback_data": f"{CALLBACK_PREFIX}:kb:{game.game_id}:{kb.kb_id}",
                 }
             ])
-        rows.append([{"text": "开始出题", "callback_data": f"{CALLBACK_PREFIX}:go:{game.game_id}"}])
+        rows.append([{"text": "确认题库并开始出题", "callback_data": f"{CALLBACK_PREFIX}:go:{game.game_id}"}])
         return {"inline_keyboard": rows}
 
     def _render_game_start(self, game: QuickQAGame, kbs: list[KnowledgeBase]) -> str:
