@@ -2641,29 +2641,27 @@ class TenHalfPlugin(Plugin):
         # ── 向每位赢家发放奖励（payout 始终由 userbot 执行） ──
         reward_message_keys: list[str] = []
         for w in winners:
-            reply_to = self._player_reply_message(g, int(w["user_id"]))
-            if not reply_to:
-                if ctx and ctx.log:
-                    await ctx.log("info",
-                        f"[ten_half] reward_skipped_no_payment_message: "
-                        f"uid={w['user_id']}, name={w['name']}, amount={w['reward']}, chat_id={cid}")
-                continue
-            reward_key = _reward_msg_key(ctx.account_id, cid, g.game_id, int(w["user_id"])) if ctx else ""
+            winner_user_id = int(w["user_id"])
+            reply_to = self._player_reply_message(g, winner_user_id)
+            reward_key = _reward_msg_key(ctx.account_id, cid, g.game_id, winner_user_id) if ctx else ""
             if reward_key:
                 reward_message_keys.append(reward_key)
-            actions.append({
+            payout_action = {
                 "type": "payout",
                 "chat_id": cid,
                 "amount": int(w["reward"]),
                 "text": f"+{w['reward']}",
                 "parse_mode": "plain",
-                "reply_to_message_id": reply_to,
+                "reply_to_user_id": winner_user_id,
+                "reply_to_search_limit": 50,
+                **({"reply_to_message_id": reply_to} if reply_to else {}),
                 **({"save_message_id_key": reward_key} if reward_key else {}),
-            })
+            }
+            actions.append(payout_action)
             if ctx and ctx.log:
                 await ctx.log("info",
                     f"[ten_half] reward_sent: uid={w['user_id']}, name={w['name']}, "
-                    f"amount={w['reward']}, chat_id={cid}")
+                    f"amount={w['reward']}, reply_to_message_id={reply_to}, chat_id={cid}")
 
         # ── 平台结算元数据（参照 dice_grid_hunt / guess_number） ──
         if winners:

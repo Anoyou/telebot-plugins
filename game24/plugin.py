@@ -126,7 +126,7 @@ def _safe_eval(expr: str) -> float | None:
     def _walk(node: ast.AST) -> bool:
         if not isinstance(node, allowed_types):
             return False
-        if isinstance(node, ast.Constant) and not isinstance(node.value, int | float):
+        if isinstance(node, ast.Constant) and not isinstance(node.value, (int, float)):
             return False
         return all(_walk(child) for child in ast.iter_child_nodes(node))
 

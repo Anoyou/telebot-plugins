@@ -1383,6 +1383,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual([action["text"] for action in rewards], ["+180"])
                 self.assertEqual([action["amount"] for action in rewards], [180])
                 self.assertEqual({action["reply_to_message_id"] for action in rewards}, {700})
+                self.assertEqual({action["reply_to_user_id"] for action in rewards}, {111})
                 self.assertEqual(final_actions[-1]["type"], "end_session")
                 self.assertNotIn(-100123, plugin._games)
             finally:
@@ -1464,6 +1465,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(reward["text"], "+90")
             self.assertEqual(reward["amount"], 90)
             self.assertEqual(reward["reply_to_message_id"], 700)
+            self.assertEqual(reward["reply_to_user_id"], 111)
             self.assertEqual(actions[-1]["type"], "end_session")
 
         asyncio.run(scenario())
@@ -1488,12 +1490,13 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual([action["text"] for action in rewards], ["+270"])
             self.assertEqual([action["amount"] for action in rewards], [270])
             self.assertEqual(rewards[0]["reply_to_message_id"], 700)
+            self.assertEqual(rewards[0]["reply_to_user_id"], 111)
             self.assertTrue(any("庄家 <b>玩家A</b> 🎉是赢家 获得 <b>270</b>" in action.get("text", "") for action in actions))
             self.assertTrue(any("玩家B</b>: 2张 · 9点 → ❌ 输 100" in action.get("text", "") for action in actions))
 
         asyncio.run(scenario())
 
-    def test_interaction_settlement_skips_userbot_dealer_reward_without_payment_message(self) -> None:
+    def test_interaction_settlement_rewards_dealer_by_user_id_without_payment_message(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             game = plugin_module.TenHalfGame(chat_id=-100123, bet=100)
@@ -1508,7 +1511,11 @@ class TenHalfInteractionTest(unittest.TestCase):
             actions = await plugin._ix_settle(-100123, game, PluginContext())
             rewards = [action for action in actions if action.get("type") == "payout"]
 
-            self.assertEqual(rewards, [])
+            self.assertEqual([action["text"] for action in rewards], ["+180"])
+            self.assertEqual([action["amount"] for action in rewards], [180])
+            self.assertNotIn("reply_to_message_id", rewards[0])
+            self.assertEqual(rewards[0]["reply_to_user_id"], 999)
+            self.assertEqual(rewards[0]["reply_to_search_limit"], 50)
             self.assertTrue(any("庄家 <b>owner</b> 🎉是赢家 获得 <b>180</b>" in action.get("text", "") for action in actions))
 
         asyncio.run(scenario())
@@ -1599,6 +1606,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual([action["text"] for action in rewards], ["+360", "+360"])
             self.assertEqual([action["amount"] for action in rewards], [360, 360])
             self.assertEqual({action["reply_to_message_id"] for action in rewards}, {700, 710})
+            self.assertEqual({action["reply_to_user_id"] for action in rewards}, {111, 222})
 
         asyncio.run(scenario())
 
@@ -1713,6 +1721,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual([action["text"] for action in rewards], ["+90"])
             self.assertEqual([action["amount"] for action in rewards], [90])
             self.assertEqual(rewards[0]["reply_to_message_id"], 700)
+            self.assertEqual(rewards[0]["reply_to_user_id"], 111)
             self.assertNotIn(-100123, plugin._games)
 
         asyncio.run(scenario())
