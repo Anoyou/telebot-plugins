@@ -314,7 +314,7 @@ class GuessNumberPlugin(Plugin):
                 game.history.append(f"{actor_name}: {guess} → ✅ 中！")
                 self._games.pop(chat_id, None)
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": reply_to, "send_via": "userbot_reply"},
+                    {"type": "payout", "amount": game.prize, "reply_to_message_id": reply_to},
                     {
                         "type": "send_message",
                         "text": (
@@ -457,7 +457,7 @@ class GuessNumberPlugin(Plugin):
 
             history_text = "\n".join(gs.history[-10:]) if gs.history else ""
             message_id = int(getattr(event, "id", 0) or 0) or None
-            await self._send_prize_reply(ctx, event, chat_id, message_id, gs.prize)
+            await event.reply(f"+{gs.prize}")
             await self._edit_game_message(
                 ctx,
                 chat_id,
@@ -504,22 +504,6 @@ class GuessNumberPlugin(Plugin):
             return max(0, min(1_000_000, int(args[0])))
         except ValueError:
             return 0
-
-    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
-        text = f"+{prize}"
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
 
     async def _edit_game_message(self, ctx: PluginContext, chat_id: int, gs: GuessGame, suffix: str) -> None:
         if not ctx.client or not gs.message_id:

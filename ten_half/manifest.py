@@ -54,10 +54,11 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；付款加入只会立即更新内存并发送加入提示，大厅主消息由后台带版本合并刷新，避免同一秒多笔付款互相阻塞。开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply '
- '受控通道，结算后的本局消息默认 60 秒自动清理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
- 'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
- '受控通道。')
+USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot '
+ '后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；付款加入只会立即更新内存并发送加入提示，大厅主消息由后台带版本合并刷新，避免同一秒多笔付款互相阻塞。开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走平台 '
+ 'payout 动作，结算后的本局消息默认 60 秒自动清理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
+ 'interaction_bot；付款确认来自 external_payment_notice/userbot。普通消息默认继承会话通道，资金发放统一使用平台 '
+ 'payout 动作。')
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -77,7 +78,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.3.5",
+    version="0.3.6",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -92,7 +93,11 @@ MANIFEST = Manifest(
   'interaction_profile': 'session_game',
   'launch_mode': 'hybrid',
   'session_scope': 'chat',
-  'events': ['payment_confirmed', 'keyword', 'message', 'callback_query', 'session_close'],
+  'events': ['payment_confirmed',
+             'keyword',
+             'message',
+             'callback_query',
+             'session_close'],
   'preserve_command_trigger': True,
   'command_fallback': {'enabled': True, 'command': '10d', 'mode': 'hint_only'},
   'session_policy': {'ttl_seconds': 300,
@@ -101,6 +106,7 @@ MANIFEST = Manifest(
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message',
+                                  'payout',
                                   'edit_message',
                                   'delete_message',
                                   'answer_callback',
@@ -108,8 +114,7 @@ MANIFEST = Manifest(
                                   'no_session',
                                   'end_session',
                                   'result',
-                                  'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+                                  'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'bet': {'type': 'integer',
@@ -133,13 +138,16 @@ MANIFEST = Manifest(
                                                   'maximum': 10},
                                   'settlement_cleanup_delay': {'type': 'integer',
                                                                'title': '结算后自动清理消息时间（秒）',
-                                                               'description': '结算完成后延迟清理本局主消息、结算公告、发奖回复和零散加入提示。填 0 表示不自动清理。',
+                                                               'description': '结算完成后延迟清理本局主消息、结算公告、发奖回复和零散加入提示。填 '
+                                                                              '0 '
+                                                                              '表示不自动清理。',
                                                                'default': 60,
                                                                'minimum': 0,
                                                                'maximum': 3600}}},
   'settlement': {'mode': 'announce_only'},
   'dispatch_modes': ['admin_command', 'public_keyword'],
-  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'message_channels': {'admin_command': 'userbot_reply',
+                       'public_keyword': 'interaction_bot'},
   'money_channel': 'userbot_reply',
   'participant_policy': 'paid_pool'}],
     config_schema=CONFIG_SCHEMA,

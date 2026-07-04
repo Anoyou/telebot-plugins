@@ -526,6 +526,11 @@ class DiceGridHuntPlugin(Plugin):
             )
         return [
             {
+                "type": "payout",
+                "amount": rd.prize,
+                "reply_to_message_id": rd.winner_message_id,
+            },
+            {
                 "type": "send_message",
                 "text": self._render_interaction_success(rd, payout_account, payout_mode),
                 "reply_to_message_id": rd.winner_message_id,
@@ -702,11 +707,7 @@ class DiceGridHuntPlugin(Plugin):
     def _render_interaction_success(self, rd: RoundState, payout_account: str, payout_mode: str) -> str:
         winner = escape(rd.winner_name or "玩家")
         account_holder = escape(payout_account)
-        payout_line = (
-            f"奖金将由 {account_holder} 账号自动发放。"
-            if payout_mode == "auto"
-            else f"请由 {account_holder} 人工回复赢家发放奖金。"
-        )
+        payout_line = f"奖金将由 {account_holder} 账号通过平台发放。"
         elapsed = max(0.0, time.monotonic() - rd.started_at)
         return (
             f"答对了：{winner}\n"
@@ -849,7 +850,7 @@ class DiceGridHuntPlugin(Plugin):
             rd.winner_message_id = int(getattr(event, "id", 0) or 0) or None
 
         elapsed = time.monotonic() - rd.started_at
-        await self._send_prize_reply(ctx, event, chat_id, rd)
+        await event.reply(self._render_text(self._prize_message_template, {"prize": rd.prize}))
         await self._edit_round_message(
             ctx,
             chat_id,
@@ -878,22 +879,6 @@ class DiceGridHuntPlugin(Plugin):
         msg = await self._send_round(ctx, event, rd)
         rd.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
-
-    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, rd: RoundState) -> None:
-        text = self._render_text(self._prize_message_template, {"prize": rd.prize})
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and rd.winner_message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=rd.winner_message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
 
     async def _edit_round_message(self, ctx: PluginContext, chat_id: int, rd: RoundState, suffix: str) -> None:
         if not ctx.client or not rd.message_id:

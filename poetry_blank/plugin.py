@@ -484,7 +484,7 @@ class PoetryBlankPlugin(Plugin):
             actor_id, actor_name = _interaction_actor(payload)
             self._rounds.pop(chat_id, None)
         return [
-            {"type": "send_message", "text": f"+{rd.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+            {"type": "payout", "amount": rd.prize, "reply_to_message_id": _interaction_message_id(payload)},
             {
                 "type": "send_message",
                 "text": f"🏆 {actor_name} 答对！\n✅ {rd.full_line}\n📖 {rd.author} · 《{rd.title}》\n奖励 <b>+{rd.prize}</b>",
@@ -606,7 +606,7 @@ class PoetryBlankPlugin(Plugin):
             name = public_entity_display_name(sender, default="玩家")
             message_id = int(getattr(event, "id", 0) or 0) or None
 
-            await self._send_prize_reply(ctx, event, chat_id, message_id, rd.prize)
+            await event.reply(f"+{rd.prize}")
             await self._edit_round_message(
                 ctx,
                 chat_id,
@@ -623,22 +623,6 @@ class PoetryBlankPlugin(Plugin):
             return max(0, min(1_000_000, int(args[0])))
         except ValueError:
             return 0
-
-    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
-        text = f"+{prize}"
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
 
     async def _edit_round_message(self, ctx: PluginContext, chat_id: int, rd: RoundState, suffix: str) -> None:
         if not ctx.client or not rd.message_id:

@@ -1110,7 +1110,7 @@ class IdiomChainPlugin(Plugin):
                 prompt = self._format_game_prompt(game)
                 self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, started_at, game.timeout)))
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                    {"type": "payout", "amount": game.prize, "reply_to_message_id": _interaction_message_id(payload)},
                     {
                         "type": "send_message",
                         "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n\n{prompt}",
@@ -1126,7 +1126,7 @@ class IdiomChainPlugin(Plugin):
             game.waiting = False
             self._games.pop(chat_id, None)
             return [
-                {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                {"type": "payout", "amount": game.prize, "reply_to_message_id": _interaction_message_id(payload)},
                 {
                     "type": "send_message",
                     "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n🏆 接龙结束！以「{text[-1]}」开头的成语都用完了，共 {game.round_num} 轮",
@@ -1242,7 +1242,7 @@ class IdiomChainPlugin(Plugin):
             game.winner_id = player_id
             game.winner_name = name
             message_id = int(getattr(event, "id", 0) or 0) or None
-            await self._send_prize_reply(ctx, event, chat_id, message_id, game.prize)
+            await event.reply(f"+{game.prize}")
 
             # 自动生成下一题
             next_char = text[-1]
@@ -1278,22 +1278,6 @@ class IdiomChainPlugin(Plugin):
             return max(0, min(1_000_000, int(args[0])))
         except ValueError:
             return 0
-
-    async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
-        text = f"+{prize}"
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
 
     async def _edit_game_message(self, ctx: PluginContext, chat_id: int, game: ChainGame, text: str) -> None:
         if not ctx.client or not game.message_id:

@@ -1379,7 +1379,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 )
 
                 self.assertTrue(any(action.get("type") == "send_message" and "十点半结算" in action.get("text", "") for action in final_actions))
-                rewards = [action for action in final_actions if action.get("send_via") == "userbot_reply"]
+                rewards = [action for action in final_actions if action.get("type") == "payout"]
                 self.assertEqual([action["text"] for action in rewards], ["+180"])
                 self.assertEqual({action["reply_to_message_id"] for action in rewards}, {700})
                 self.assertEqual(final_actions[-1]["type"], "end_session")
@@ -1459,7 +1459,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             game.player_message_ids[111] = 700
 
             actions = await plugin._ix_settle(-100123, game, PluginContext())
-            reward = next(action for action in actions if action.get("send_via") == "userbot_reply")
+            reward = next(action for action in actions if action.get("type") == "payout")
             self.assertEqual(reward["text"], "+90")
             self.assertEqual(reward["reply_to_message_id"], 700)
             self.assertEqual(actions[-1]["type"], "end_session")
@@ -1481,7 +1481,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             game.player_message_ids = {111: 700, 222: 710, 333: 720}
 
             actions = await plugin._ix_settle(-100123, game, PluginContext())
-            rewards = [action for action in actions if action.get("send_via") == "userbot_reply"]
+            rewards = [action for action in actions if action.get("type") == "payout"]
 
             self.assertEqual([action["text"] for action in rewards], ["+270"])
             self.assertEqual(rewards[0]["reply_to_message_id"], 700)
@@ -1503,7 +1503,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             game.player_message_ids = {111: 700}
 
             actions = await plugin._ix_settle(-100123, game, PluginContext())
-            rewards = [action for action in actions if action.get("send_via") == "userbot_reply"]
+            rewards = [action for action in actions if action.get("type") == "payout"]
 
             self.assertEqual(rewards, [])
             self.assertTrue(any("庄家 <b>owner</b> 🎉是赢家 获得 <b>180</b>" in action.get("text", "") for action in actions))
@@ -1591,7 +1591,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             game.player_message_ids = {111: 700, 222: 710}
 
             actions = await plugin._ix_settle(-100123, game, PluginContext())
-            rewards = [action for action in actions if action.get("send_via") == "userbot_reply"]
+            rewards = [action for action in actions if action.get("type") == "payout"]
 
             self.assertEqual([action["text"] for action in rewards], ["+360", "+360"])
             self.assertEqual({action["reply_to_message_id"] for action in rewards}, {700, 710})
@@ -1705,7 +1705,7 @@ class TenHalfInteractionTest(unittest.TestCase):
 
             actions = await plugin._ix_dealer_play(-100123, game, PluginContext())
 
-            rewards = [action for action in actions if action.get("send_via") == "userbot_reply"]
+            rewards = [action for action in actions if action.get("type") == "payout"]
             self.assertEqual([action["text"] for action in rewards], ["+90"])
             self.assertEqual(rewards[0]["reply_to_message_id"], 700)
             self.assertNotIn(-100123, plugin._games)

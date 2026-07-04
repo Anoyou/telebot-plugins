@@ -540,14 +540,13 @@ class BlackjackPlugin(Plugin):
         ]
         if result in {"win", "blackjack"}:
             amount = int(gs.bet * 1.5) if result == "blackjack" else gs.bet
-            actions.append({"type": "send_message", "text": f"+{amount}", "reply_to_message_id": gs.trigger_message_id, "send_via": "userbot_reply"})
+            actions.append({"type": "payout", "amount": amount, "reply_to_message_id": gs.trigger_message_id})
             if ctx.log:
-                await ctx.log("info", f"[blackjack] settle: sending +{amount} reward via userbot_reply, reply_to={gs.trigger_message_id}, player {gs.player_id}({gs.player_name})")
+                await ctx.log("info", f"[blackjack] settle: payout +{amount}, reply_to={gs.trigger_message_id}, player {gs.player_id}({gs.player_name})")
         actions.append({"type": "end_session"})
         if ctx.log:
             for act in actions:
-                send_via = act.get("send_via", "interaction_bot")
-                await ctx.log("info", f"[blackjack] settle: result={result}, type={act.get('type')}, amount={gs.bet}, winner={gs.player_id}({gs.player_name}), send_via={send_via}")
+                await ctx.log("info", f"[blackjack] settle: result={result}, type={act.get('type')}, amount={gs.bet}, winner={gs.player_id}({gs.player_name})")
         return actions
 
     # ── 命令入口 ─────────────────────────────────────

@@ -32,9 +32,10 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员可发送 {prefix}{command} 下注金额 开启 21 点；也可以在交互中心绑定关键词或付款触发，玩家后续通过按钮或“要牌/停牌/加倍”操作，奖金和结算仍走 '
- 'userbot/平台受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 '
- 'external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。')
+USAGE = ('管理员可发送 {prefix}{command} 下注金额 开启 21 '
+ '点；也可以在交互中心绑定关键词或付款触发，玩家后续通过按钮或“要牌/停牌/加倍”操作，奖金和结算仍走 userbot/平台受控通道。事件订阅：管理员命令走 '
+ 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 '
+ 'external_payment_notice/userbot。普通消息默认继承会话通道，资金发放统一使用平台 payout 动作。')
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -52,7 +53,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.24",
+    version="1.0.25",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -67,7 +68,11 @@ MANIFEST = Manifest(
   'interaction_profile': 'session_game',
   'launch_mode': 'hybrid',
   'session_scope': 'user',
-  'events': ['payment_confirmed', 'keyword', 'message', 'callback_query', 'session_close'],
+  'events': ['payment_confirmed',
+             'keyword',
+             'message',
+             'callback_query',
+             'session_close'],
   'preserve_command_trigger': True,
   'command_fallback': {'enabled': True, 'command': 'bj', 'mode': 'hint_only'},
   'session_policy': {'ttl_seconds': 120,
@@ -75,8 +80,11 @@ MANIFEST = Manifest(
                      'close_on': ['winner', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+  'result_contract': {'actions': ['send_message',
+                                  'payout',
+                                  'end_session',
+                                  'result',
+                                  'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',
@@ -89,9 +97,12 @@ MANIFEST = Manifest(
                                               'default': 120,
                                               'minimum': 10,
                                               'maximum': 86400}}},
-  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'settlement': {'mode': 'announce_only',
+                 'winner_field': 'actor.user_id',
+                 'amount_field': 'prize'},
   'dispatch_modes': ['admin_command', 'public_keyword'],
-  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'message_channels': {'admin_command': 'userbot_reply',
+                       'public_keyword': 'interaction_bot'},
   'money_channel': 'userbot_reply',
   'participant_policy': 'solo_owner'}],
     config_schema=CONFIG_SCHEMA,

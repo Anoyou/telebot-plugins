@@ -1,4 +1,8 @@
 # 更新日志
+## 1.0.12 (2026-07-04)
+- 适配 TelePilot 0.49 交互契约：奖励发放改用平台 `payout` 动作。
+- 移除交互入口里的旧发奖通道声明，避免已是最新版本但实际仍不发奖。
+
 
 ## 1.0.10 (2026-06-29)
 - 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
@@ -6,7 +10,7 @@
 
 ## 1.0.9 (2026-06-28)
 - 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 `bbot_notice`。
-- 保留 `interaction_bot` 与 `userbot_reply` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
+- 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
 
 
 ## 1.0.8 (2026-06-27)
@@ -18,7 +22,7 @@
 - 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
 
 ## 1.0.6 (2026-06-25)
-- 修复交互 Bot 模式下奖励由 Bot 发放的问题，奖励消息改用 `send_via: userbot_reply` 由管理员账号发放。
+- 修复交互 Bot 模式下奖励由 Bot 发放的问题，奖励消息改用 平台资金通道 由管理员账号发放。
 
 ## 1.0.5 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。

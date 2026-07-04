@@ -301,7 +301,7 @@ class DiceBattlePlugin(Plugin):
         if battle.bet > 0 and winner_id:
             actions.extend(
                 [
-                    {"type": "send_message", "text": f"+{battle.bet}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                    {"type": "payout", "amount": battle.bet, "reply_to_message_id": _interaction_message_id(payload)},
                     {
                         "type": "result",
                         "success": True,

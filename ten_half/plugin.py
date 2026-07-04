@@ -2637,7 +2637,7 @@ class TenHalfPlugin(Plugin):
         else:
             actions.append(_send_action("\n".join(lines)))
 
-        # ── 向每位赢家发放奖励（走 userbot_reply，参照 dice_grid_hunt） ──
+        # ── 向每位赢家发放奖励（由平台 payout 动作走资金通道） ──
         reward_message_keys: list[str] = []
         for w in winners:
             reply_to = self._player_reply_message(g, int(w["user_id"]))
@@ -2651,10 +2651,10 @@ class TenHalfPlugin(Plugin):
             if reward_key:
                 reward_message_keys.append(reward_key)
             actions.append({
-                "type": "send_message",
-                "text": f"+{w['reward']}",
+                "type": "payout",
+                "amount": w["reward"],
                 "reply_to_message_id": reply_to,
-                "send_via": "userbot_reply",
+                "text": f"+{w['reward']}",
                 **({"save_message_id_key": reward_key} if reward_key else {}),
             })
             if ctx and ctx.log:

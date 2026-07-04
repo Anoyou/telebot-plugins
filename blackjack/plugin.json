@@ -3,7 +3,7 @@
   "display_name": "21点",
   "description": "经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
   "author": "Anoyou",
-  "version": "1.0.24",
+  "version": "1.0.25",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -97,13 +97,10 @@
       "result_contract": {
         "actions": [
           "send_message",
+          "payout",
           "end_session",
           "result",
           "settlement"
-        ],
-        "send_via": [
-          "interaction_bot",
-          "userbot_reply"
         ]
       },
       "input_schema": {
@@ -145,7 +142,7 @@
   ],
   "min_telepilot_version": "0.33.0",
   "interaction_profile": "session_game",
-  "usage": "管理员可发送 {prefix}{command} 下注金额 开启 21 点；也可以在交互中心绑定关键词或付款触发，玩家后续通过按钮或“要牌/停牌/加倍”操作，奖金和结算仍走 userbot/平台受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
+  "usage": "管理员可发送 {prefix}{command} 下注金额 开启 21 点；也可以在交互中心绑定关键词或付款触发，玩家后续通过按钮或“要牌/停牌/加倍”操作，奖金和结算仍走 userbot/平台受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。普通消息默认继承会话通道，资金发放统一使用平台 payout 动作。",
   "event_subscriptions": [
     {
       "events": [
