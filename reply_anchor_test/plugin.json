@@ -1,0 +1,133 @@
+{
+  "name": "reply_anchor_test",
+  "display_name": "近期发言回复测试",
+  "description": "测试 payout 按用户 ID 搜索当前群近期发言并回复 +金额。",
+  "author": "Anoyou",
+  "version": "0.1.1",
+  "entry": "plugin.py",
+  "min_telepilot_version": "0.49.6",
+  "category": "utility",
+  "permissions": [
+    "send_message",
+    "read_chat"
+  ],
+  "triggers": {
+    "command": "send"
+  },
+  "default_trigger_modes": "all",
+  "usage": "用于验证 TelePilot 的 payout 近期发言锚点搜索能力。账号本人或授权管理员在已允许群里发送 `{prefix}{command} 用户ID 金额`，插件返回 `payout`，由平台 userbot 在当前群搜索该用户最近一次发言并回复 `+金额`。示例：`{prefix}send 123456789 88`。目标用户必须在当前群近期发过言；找不到锚点时，平台会让本次动作失败并在日志里记录原因，不会退化成普通群消息。",
+  "event_subscriptions": [
+    {
+      "events": [
+        "command"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "owner_only",
+      "filters": {
+        "commands": [
+          "send"
+        ]
+      },
+      "entry_key": "reply_to_recent_message",
+      "description": "账号本人或授权管理员通过 UserBot 命令触发近期发言回复测试。"
+    }
+  ],
+  "interaction_profile": "utility_trigger",
+  "interaction_entries": [
+    {
+      "key": "reply_to_recent_message",
+      "title": "近期发言回复测试",
+      "description": "按用户 ID 在当前群搜索近期发言，并返回 payout 回复 +金额。",
+      "interaction_profile": "utility_trigger",
+      "launch_mode": "userbot_command",
+      "session_scope": "chat",
+      "events": [
+        "command"
+      ],
+      "preserve_command_trigger": true,
+      "triggers": {
+        "command": "send"
+      },
+      "default_trigger_modes": "all",
+      "payload_contract": {
+        "required_envelope": [
+          "source",
+          "sender",
+          "message",
+          "trigger"
+        ],
+        "required_event_fields": [
+          "type",
+          "chat_id",
+          "message_id"
+        ]
+      },
+      "result_contract": {
+        "actions": [
+          "payout",
+          "send_message",
+          "result"
+        ]
+      },
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "title": "目标用户 ID",
+            "description": "命令参数中的第一个数字。"
+          },
+          "amount": {
+            "type": "integer",
+            "title": "回复金额",
+            "description": "命令参数中的第二个数字；实际回复文本为 +金额。",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "user_id",
+          "amount"
+        ]
+      }
+    }
+  ],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "single",
+    "x-category": "utility",
+    "x-usage-guide": "用于验证 TelePilot 的 payout 近期发言锚点搜索能力。账号本人或授权管理员在已允许群里发送 `{prefix}{command} 用户ID 金额`，插件返回 `payout`，由平台 userbot 在当前群搜索该用户最近一次发言并回复 `+金额`。示例：`{prefix}send 123456789 88`。目标用户必须在当前群近期发过言；找不到锚点时，平台会让本次动作失败并在日志里记录原因，不会退化成普通群消息。",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "触发指令名",
+        "description": "默认 send；只填写命令本体，不要带系统命令前缀。",
+        "default": "send",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$",
+        "level": "account"
+      },
+      "reply_to_search_limit": {
+        "type": "integer",
+        "title": "近期消息搜索条数",
+        "description": "userbot 最多向前搜索多少条群消息来寻找目标用户最近一次发言。",
+        "default": 200,
+        "minimum": 1,
+        "maximum": 500,
+        "level": "account"
+      }
+    },
+    "required": []
+  },
+  "capabilities": {},
+  "tags": [
+    "test",
+    "utility",
+    "userbot",
+    "payout"
+  ]
+}
