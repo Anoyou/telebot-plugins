@@ -2,27 +2,41 @@
   "name": "game24",
   "display_name": "24点游戏",
   "description": "随机生成 24 点题目，群内竞速答题，第一名获得奖金",
-  "usage": "24 点游戏支持两种调度：管理员可发送命令直接由 userbot 启动；群友也可通过交互中心配置的关键词或付款触发，由交互 Bot 承接答题，转账和发奖仍由 userbot/平台结算通道处理。",
+  "usage": "24 点游戏支持两种调度：管理员可发送命令直接由 userbot 启动；群友也可通过交互中心配置的关键词或付款触发。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行；结算元数据返回 settlement 供 Trace 排查。",
   "author": "TelePilot Official",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "entry": "plugin.py",
   "category": "interactive",
   "event_subscriptions": [
     {
-      "source": ["userbot"],
-      "events": ["command"],
+      "source": [
+        "userbot"
+      ],
+      "events": [
+        "command"
+      ],
       "scope": "owner_only",
       "entry_key": "admin_command"
     },
     {
-      "source": ["interaction_bot"],
-      "events": ["message", "callback_query"],
+      "source": [
+        "interaction_bot"
+      ],
+      "events": [
+        "message",
+        "callback_query"
+      ],
       "scope": "rule_bound",
       "entry_key": "start_paid_game"
     },
     {
-      "source": ["external_payment_notice", "userbot"],
-      "events": ["payment_confirmed"],
+      "source": [
+        "external_payment_notice",
+        "userbot"
+      ],
+      "events": [
+        "payment_confirmed"
+      ],
       "scope": "rule_bound",
       "entry_key": "start_paid_game"
     }
@@ -36,7 +50,13 @@
       "description": "转账命中或模块关键词触发后，由交互 Bot 开启一局 24 点。",
       "interaction_profile": "session_game",
       "launch_mode": "hybrid",
-      "events": ["payment_confirmed", "keyword", "message", "callback_query", "session_close"],
+      "events": [
+        "payment_confirmed",
+        "keyword",
+        "message",
+        "callback_query",
+        "session_close"
+      ],
       "session_scope": "chat",
       "preserve_command_trigger": true,
       "command_fallback": {
@@ -45,12 +65,27 @@
         "mode": "hint_only"
       },
       "payload_contract": {
-        "required_envelope": ["source", "actor", "trigger", "session"],
-        "required_event_fields": ["type", "chat_id"]
+        "required_envelope": [
+          "source",
+          "actor",
+          "trigger",
+          "session"
+        ],
+        "required_event_fields": [
+          "type",
+          "chat_id"
+        ]
       },
       "result_contract": {
-        "actions": ["send_message", "send_photo", "send_file", "end_session", "result", "settlement"],
-        "send_via": ["interaction_bot", "userbot_reply"]
+        "actions": [
+          "send_message",
+          "send_photo",
+          "send_file",
+          "payout",
+          "end_session",
+          "result",
+          "settlement"
+        ]
       },
       "settlement": {
         "mode": "announce_only",
@@ -81,15 +116,22 @@
             "maximum": 86400
           }
         },
-        "required": ["prize"]
+        "required": [
+          "prize"
+        ]
       }
     }
   ],
-  "permissions": ["send_message", "edit_message", "read_chat", "delete_message"],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat",
+    "delete_message"
+  ],
   "config_schema": {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": "24 点游戏支持两种调度：管理员可发送 {prefix}{command} 奖金金额 直接由 userbot 启动；群友也可通过交互中心配置的关键词或付款触发，由交互 Bot 承接答题，转账和发奖仍由 userbot/平台结算通道处理。",
+    "x-usage-guide": "24 点游戏支持两种调度：管理员可发送 {prefix}{command} 奖金金额直接由 userbot 启动；群友也可通过交互中心配置的关键词或付款触发，由交互 Bot 承接答题，转账和发奖由平台 payout/settlement 链路处理。",
     "additionalProperties": false,
     "properties": {
       "command": {
@@ -112,7 +154,14 @@
         "level": "account"
       }
     },
-    "required": ["command", "timeout"]
+    "required": [
+      "command",
+      "timeout"
+    ]
   },
-  "tags": ["official", "interactive", "game"]
+  "tags": [
+    "official",
+    "interactive",
+    "game"
+  ]
 }

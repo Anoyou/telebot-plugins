@@ -372,10 +372,10 @@ class DeadRevolverPlugin(Plugin):
             if gs is not None and self._matches_start_keyword(gs, text):
                 error = await self._start_existing_game(ctx, gs, sender_id)
                 if error:
-                    return [{"type": "send_message", "text": error, "send_via": "interaction_bot"}]
+                    return [{"type": "send_message", "text": error}]
                 return []
         if is_start_keyword:
-            return [{"type": "send_message", "text": "当前没有进行中的死亡左轮游戏。", "send_via": "interaction_bot"}]
+            return [{"type": "send_message", "text": "当前没有进行中的死亡左轮游戏。"}]
         return await self._ibot_create(ctx, payload, chat_id)
 
     async def _ibot_create(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
@@ -410,7 +410,6 @@ class DeadRevolverPlugin(Plugin):
             return [{
                 "type": "send_message",
                 "text": f"这笔付款没有转给{self._receiver_label()}，不会加入死亡左轮。",
-                "send_via": "interaction_bot",
             }]
 
         async with self._lock_for(chat_id):
@@ -427,9 +426,9 @@ class DeadRevolverPlugin(Plugin):
         lobby = self._render_lobby(gs)
         msg_key = _interaction_msg_key(ctx.account_id, chat_id)
         actions: list[dict[str, Any]] = [
-            {"type": "send_message", "text": f"{html.escape(display_name)} 已报名死亡左轮！当前 {len(gs.players)} 名玩家。", "send_via": "interaction_bot"},
+            {"type": "send_message", "text": f"{html.escape(display_name)} 已报名死亡左轮！当前 {len(gs.players)} 名玩家。"},
         ]
-        lobby_action: dict[str, Any] = {"type": "send_message", "text": lobby, "send_via": "interaction_bot"}
+        lobby_action: dict[str, Any] = {"type": "send_message", "text": lobby}
         if ctx.redis:
             raw = await ctx.redis.get(msg_key)
             if raw: lobby_action["edit_message_id"] = _int_or_zero(raw)
@@ -818,11 +817,10 @@ class DeadRevolverPlugin(Plugin):
             if winner:
                 await self._send_bot_msg(ctx, gs, f"🏆 {html.escape(winner.display_name)} 获胜！勇气 {winner.courage}，奖金 +{prize}")
             if winner and prize > 0:
-                await self._send_platform_message(
+                await self._send_platform_payout(
                     ctx,
                     gs,
-                    f"+{prize}",
-                    send_via="userbot_reply",
+                    prize,
                     reply_to=winner.message_id,
                 )
             await self._cleanup_messages(ctx, gs, lobby_id)
@@ -861,11 +859,10 @@ class DeadRevolverPlugin(Plugin):
                 await self._edit_bot_msg(ctx, gs, lobby_id, cancel_text)
             await self._send_bot_msg(ctx, gs, f"⚠️ {html.escape(reason)}")
             for p in refund_players:
-                await self._send_platform_message(
+                await self._send_platform_payout(
                     ctx,
                     gs,
-                    f"+{p.paid}",
-                    send_via="userbot_reply",
+                    p.paid,
                     reply_to=p.message_id,
                 )
             if refund_players:
@@ -891,7 +888,7 @@ class DeadRevolverPlugin(Plugin):
 
     # ── 交互 Bot 工具 ───────────────────────────
     async def _send_platform_message(self, ctx: PluginContext, gs: GameState, txt: str,
-                                     *, send_via: str = "interaction_bot",
+                                     *, send_via: str | None = None,
                                      reply_to: int | None = None,
                                      reply_markup: dict | None = None,
                                      edit_message_id: int | None = None,
@@ -900,16 +897,17 @@ class DeadRevolverPlugin(Plugin):
         messages = getattr(ctx, "messages", None)
         if messages is not None:
             if edit_message_id is not None:
-                await messages.edit(
-                    channel=send_via,
+                kwargs = dict(
                     chat_id=gs.chat_id,
                     message_id=edit_message_id,
                     text=txt,
                     reply_markup=reply_markup,
                 )
+                if send_via is not None:
+                    kwargs["channel"] = send_via
+                await messages.edit(**kwargs)
                 return edit_message_id
-            await messages.send(
-                channel=send_via,
+            kwargs = dict(
                 chat_id=gs.chat_id,
                 text=txt,
                 reply_to_message_id=reply_to,
@@ -917,6 +915,9 @@ class DeadRevolverPlugin(Plugin):
                 save_message_id_key=save_message_id_key,
                 pin=pin,
             )
+            if send_via is not None:
+                kwargs["channel"] = send_via
+            await messages.send(**kwargs)
             return None
         if ctx.client is None:
             return None
@@ -933,11 +934,45 @@ class DeadRevolverPlugin(Plugin):
         except Exception:
             return None
 
+    async def _send_platform_payout(
+        self,
+        ctx: PluginContext,
+        gs: GameState,
+        amount: int,
+        *,
+        reply_to: int | None = None,
+    ) -> None:
+        action = {
+            "type": "payout",
+            "chat_id": gs.chat_id,
+            "amount": amount,
+            "text": f"+{amount}",
+            "parse_mode": "plain",
+            "reply_to_message_id": reply_to,
+        }
+        messages = getattr(ctx, "messages", None)
+        apply = getattr(messages, "apply", None)
+        if callable(apply):
+            await apply([action], entry_key="join_paid_game")
+            return
+        actions = getattr(messages, "actions", None)
+        if isinstance(actions, list):
+            actions.append(action)
+            return
+        if ctx.client is not None:
+            try:
+                await ctx.client.send_message(gs.chat_id, f"+{amount}", reply_to=reply_to)
+            except Exception:
+                pass
+
     async def _delete_platform_message(self, ctx: PluginContext, gs: GameState, msg_id: int,
-                                       *, send_via: str = "interaction_bot") -> None:
+                                       *, send_via: str | None = None) -> None:
         messages = getattr(ctx, "messages", None)
         if messages is not None:
-            await messages.delete(channel=send_via, chat_id=gs.chat_id, message_id=msg_id)
+            kwargs = {"chat_id": gs.chat_id, "message_id": msg_id}
+            if send_via is not None:
+                kwargs["channel"] = send_via
+            await messages.delete(**kwargs)
             return
         if ctx.client is None:
             return
@@ -962,7 +997,7 @@ class DeadRevolverPlugin(Plugin):
                 ctx,
                 gs,
                 txt,
-                send_via=str(action.get("send_via") or "interaction_bot"),
+                send_via=str(action.get("send_via")) if action.get("send_via") else None,
                 edit_message_id=edit_id,
                 save_message_id_key=str(action.get("save_message_id_key") or "") or None,
                 pin=bool(action.get("pin")),

@@ -1110,7 +1110,14 @@ class IdiomChainPlugin(Plugin):
                 prompt = self._format_game_prompt(game)
                 self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, started_at, game.timeout)))
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                    {
+                        "type": "payout",
+                        "chat_id": chat_id,
+                        "amount": game.prize,
+                        "text": f"+{game.prize}",
+                        "parse_mode": "plain",
+                        "reply_to_message_id": _interaction_message_id(payload),
+                    },
                     {
                         "type": "send_message",
                         "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n\n{prompt}",
@@ -1120,13 +1127,20 @@ class IdiomChainPlugin(Plugin):
                         "type": "result",
                         "success": True,
                         "result": {"winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "answer": text},
-                        "settlement": {"mode": "announce_only", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize"},
+                        "settlement": {"mode": "auto", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize", "status": "payout_requested"},
                     },
                 ]
             game.waiting = False
             self._games.pop(chat_id, None)
             return [
-                {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                {
+                    "type": "payout",
+                    "chat_id": chat_id,
+                    "amount": game.prize,
+                    "text": f"+{game.prize}",
+                    "parse_mode": "plain",
+                    "reply_to_message_id": _interaction_message_id(payload),
+                },
                 {
                     "type": "send_message",
                     "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n🏆 接龙结束！以「{text[-1]}」开头的成语都用完了，共 {game.round_num} 轮",
@@ -1136,7 +1150,7 @@ class IdiomChainPlugin(Plugin):
                     "type": "result",
                     "success": True,
                     "result": {"winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "answer": text},
-                    "settlement": {"mode": "announce_only", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize"},
+                    "settlement": {"mode": "auto", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize", "status": "payout_requested"},
                 },
                 {"type": "end_session"},
             ]

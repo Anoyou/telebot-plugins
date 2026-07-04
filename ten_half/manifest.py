@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；付款加入只会立即更新内存并发送加入提示，大厅主消息由后台带版本合并刷新，避免同一秒多笔付款互相阻塞。开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply 受控通道，结算后的本局消息默认 60 秒自动清理。',
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；付款加入只会立即更新内存并发送加入提示，大厅主消息由后台带版本合并刷新，避免同一秒多笔付款互相阻塞。开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；普通回复继承当前会话通道，结算发奖返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -54,10 +54,7 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；付款加入只会立即更新内存并发送加入提示，大厅主消息由后台带版本合并刷新，避免同一秒多笔付款互相阻塞。开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；结算发奖走 userbot_reply '
- '受控通道，结算后的本局消息默认 60 秒自动清理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
- 'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
- '受控通道。')
+USAGE = '管理员发送 {prefix}{command} 下注金额创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。开局后所有玩家和真人庄家共用同一牌桌按钮，系统按点击者身份操作自己的手牌。普通回复继承 TelePilot 当前会话通道；结算发奖返回 `payout`，由 userbot 执行，结算后的本局消息默认 60 秒自动清理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -77,7 +74,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.3.5",
+    version="0.3.6",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -106,10 +103,9 @@ MANIFEST = Manifest(
                                   'answer_callback',
                                   'start_session',
                                   'no_session',
-                                  'end_session',
+                                  'payout', 'end_session',
                                   'result',
-                                  'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+                                  'settlement'],},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'bet': {'type': 'integer',

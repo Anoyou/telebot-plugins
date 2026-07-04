@@ -600,6 +600,27 @@ class LotteryPlusPlugin(Plugin):
             for uid, amount in user_paid.items():
                 amount = min(amount, max_payout)
                 paid += amount
+                messages = getattr(ctx, "messages", None) if ctx is not None else None
+                apply_actions = getattr(messages, "apply", None)
+                if callable(apply_actions):
+                    try:
+                        await apply_actions(
+                            [
+                                {
+                                    "type": "payout",
+                                    "chat_id": chat_id,
+                                    "amount": amount,
+                                    "text": f"+{amount}",
+                                    "parse_mode": "plain",
+                                    "reply_to_user_id": uid,
+                                    "reply_to_search_limit": 50,
+                                }
+                            ],
+                            entry_key="start_lottery_plus",
+                        )
+                        continue
+                    except Exception:
+                        pass
                 if event is not None:
                     await event.reply(f"+{amount}")
                 elif ctx and ctx.client:

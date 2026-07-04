@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.4.1"
+PLUGIN_VERSION = "1.4.2"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -56,13 +56,7 @@ AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手�
 6. 正确答案不要固定放在第一个选项，A/B/C 三个位置应尽量均匀分布。"""
 
 
-USAGE = (
-    "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；"
-    "游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家发送“报名”参与并记录消息 ID；"
-    "付费局通过转账报名。每人默认 20 积分，答对加分、答错扣分，扣完出局；"
-    "结束后按每位玩家积分余额生成发奖列表，可由 userbot 逐条回复报名消息自动发奖。"
-)
-
+USAGE = '管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家发送“报名”参与并记录消息 ID；付费局通过转账报名。普通回复继承 TelePilot 当前会话通道；结束后按每位玩家积分余额生成发奖列表，并通过 `payout` 由 userbot 逐条回复报名消息自动发奖。'
 EVENT_SUBSCRIPTIONS = [
     {
         "events": ["payment_confirmed"],
@@ -524,8 +518,7 @@ MANIFEST = Manifest(
                 "required_event_fields": ["type", "chat_id"],
             },
             "result_contract": {
-                "actions": ["send_message", "edit_message", "delete_message", "answer_callback", "end_session", "result", "settlement"],
-                "send_via": ["interaction_bot", "userbot_reply"],
+                "actions": ["send_message", "edit_message", "delete_message", "answer_callback", "payout", "end_session", "result", "settlement"],
             },
             "settlement": {
                 "mode": "auto",

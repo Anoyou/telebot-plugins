@@ -225,9 +225,7 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员和群友可使用 {prefix}{command} 购买彩票、查询奖池、历史和统计；交互规则可接收付款通知自动下注，配置页可调整别名、开奖周期和消息模板。事件订阅：管理员命令走 '
- 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 '
- 'interaction_bot 或 userbot_reply 受控通道。')
+USAGE = '管理员和群友可使用 {prefix}{command} 购买彩票、查询奖池、历史和统计；交互规则可接收付款通知自动下注，配置页可调整别名、开奖周期和消息模板。普通回复继承 TelePilot 当前会话通道；开奖派奖返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -245,7 +243,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.11",
+    version="1.0.12",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -267,8 +265,7 @@ MANIFEST = Manifest(
                      'close_on': ['settled', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'message': {'type': 'string',

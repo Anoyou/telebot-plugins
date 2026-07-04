@@ -249,10 +249,7 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 奖励金额 开启九宫格骰子竞猜；群友回复 1-9 '
- '抢答，配置页可调整题面、进行中、答对、超时和奖励模板，并在插件预览里查看最终消息。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 '
- 'interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply '
- '受控通道。')
+USAGE = '管理员发送 {prefix}{command} 奖励金额开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -270,7 +267,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.17",
+    version="1.1.18",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -295,10 +292,9 @@ MANIFEST = Manifest(
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message',
                                   'send_photo',
-                                  'end_session',
+                                  'payout', 'end_session',
                                   'result',
-                                  'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+                                  'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',

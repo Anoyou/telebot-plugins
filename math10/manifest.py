@@ -7,10 +7,10 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="math10",
     display_name="随机算数题",
-    version="1.0.0",
+    version="1.0.1",
     author="TelePilot Official",
     description="由交互 Bot 开启一局 10 以内算数题，群内第一个答对者获得奖金",
-    usage="随机算数题主要由交互中心规则启动：群友通过关键词或付款触发后，交互 Bot 负责高频答题，奖金和结算说明仍由 userbot/平台结算通道处理。",
+    usage='随机算数题主要由交互中心规则启动：群友通过关键词或付款触发后抢答。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行；结算说明写入 settlement/Trace。',
     category="interactive",
     event_subscriptions=[
         {
@@ -43,9 +43,7 @@ MANIFEST = Manifest(
                 "required_event_fields": ["type", "chat_id"],
             },
             "result_contract": {
-                "actions": ["send_message", "send_photo", "send_file", "end_session", "result", "settlement"],
-                "send_via": ["interaction_bot", "userbot_reply"],
-            },
+                "actions": ["send_message", "send_photo", "send_file", "payout", "end_session", "result", "settlement"]},
             "settlement": {
                 "mode": "announce_only",
                 "winner_field": "actor.user_id",
@@ -77,7 +75,7 @@ MANIFEST = Manifest(
     config_schema={
         "type": "object",
         "x-ui-mode": "single",
-        "x-usage-guide": "随机算数题主要由交互规则启动：在交互中心选择“随机算数题”入口，配置群内关键词或付款触发后，普通 Bot 负责高频答题交互，奖金和结算说明仍由 userbot/平台通道承接。",
+        "x-usage-guide": "随机算数题主要由交互规则启动：在交互中心选择“随机算数题”入口，配置群内关键词或付款触发后，交互 Bot 负责高频答题交互，普通回复继承当前会话通道，答对发奖由 payout/userbot 链路承接。",
         "additionalProperties": False,
         "properties": {},
     },

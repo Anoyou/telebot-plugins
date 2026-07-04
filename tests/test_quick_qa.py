@@ -652,13 +652,13 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_auto_payout_replies_to_registration_message_ids(self) -> None:
+    def test_auto_payout_uses_registration_message_ids(self) -> None:
         class FakeMessages:
             def __init__(self):
-                self.sent = []
+                self.applied = []
 
-            async def send(self, **kwargs):
-                self.sent.append(kwargs)
+            async def apply(self, actions, entry_key=None):
+                self.applied.append({"actions": list(actions), "entry_key": entry_key})
 
         async def scenario() -> None:
             plugin = plugin_module.QuickQAPlugin()
@@ -695,9 +695,15 @@ class QuickQATest(unittest.TestCase):
 
             await plugin._send_payouts(ctx, game, plugin._settlement_items(game))
 
+            payout_actions = [
+                action
+                for batch in messages.applied
+                for action in batch["actions"]
+                if action.get("type") == "payout"
+            ]
             self.assertEqual(
-                [(item["channel"], item["chat_id"], item["text"], item["reply_to_message_id"]) for item in messages.sent],
-                [("userbot_reply", -100123, "+1666", 701), ("userbot_reply", -100123, "+1000", 702)],
+                [(item["chat_id"], item["amount"], item["text"], item["reply_to_message_id"]) for item in payout_actions],
+                [(-100123, 1666, "+1666", 701), (-100123, 1000, "+1000", 702)],
             )
 
         asyncio.run(scenario())

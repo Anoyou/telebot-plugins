@@ -43,9 +43,7 @@ INFO_OK_TEMPLATE_DEFAULT = (
 )
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 '
- 'free/2x、时长、竞价和奖励参数。事件订阅：管理员命令走 userbot；群内关键词和会话消息走 interaction_bot。输出只使用 '
- 'interaction_bot 或 userbot_reply 受控通道。')
+USAGE = '发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 free/2x、时长、竞价和奖励参数。普通回复继承 TelePilot 当前会话通道，不再由插件硬编码 interaction_bot/userbot_reply；可在 Trace/action 记录中排查。事件订阅：管理员命令走 userbot；群内关键词和会话消息走 interaction_bot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -59,7 +57,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.20",
+    version="1.0.21",
     min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
@@ -79,8 +77,7 @@ MANIFEST = Manifest(
                      'close_on': ['completed', 'failed', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+  'result_contract': {'actions': ['send_message', 'end_session', 'result']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'torrent_id': {'type': 'string', 'title': '种子 ID', 'default': ''},

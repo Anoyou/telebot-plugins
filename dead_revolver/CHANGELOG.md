@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.0.10 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通互动提示不再硬编码交互 Bot 通道。
+- 奖励和退款路径改为 `payout` action，由 userbot 执行。
+
 ## 1.0.9 (2026-06-30)
 - 按最新插件开发规范移除 `plugin.py` 中对 `app.db.*` 与 `app.services.*` 内部模块的直接 import。
 - 交互 Bot 路径改为通过标准 MessageOps/action 发送、编辑、删除按钮消息，并用受控 `userbot_reply` action 处理奖励和退款。

@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.1.24 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
+- 更新使用说明，明确资金类动作归 userbot/payout 链路。
+
 ## 1.1.23 (2026-06-29)
 - 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。

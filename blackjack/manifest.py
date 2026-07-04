@@ -32,9 +32,7 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员可发送 {prefix}{command} 下注金额 开启 21 点；也可以在交互中心绑定关键词或付款触发，玩家后续通过按钮或“要牌/停牌/加倍”操作，奖金和结算仍走 '
- 'userbot/平台受控通道。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 '
- 'external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。')
+USAGE = '管理员可发送 {prefix}{command} 下注金额开启 21 点；也可以在交互中心绑定关键词或付款触发，玩家后续通过按钮或“要牌/停牌/加倍”操作。普通回复继承 TelePilot 当前会话通道；赢牌发奖返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -52,7 +50,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.24",
+    version="1.0.25",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -75,8 +73,7 @@ MANIFEST = Manifest(
                      'close_on': ['winner', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',

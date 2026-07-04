@@ -775,14 +775,15 @@ def _send_action(
     reply_markup: dict[str, Any] | None = None,
     save_message_id_key: str | None = None,
     replace_saved_message_id_key: str | None = None,
-    send_via: str = "interaction_bot",
+    send_via: str | None = None,
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
         "type": "send_message",
         "text": text,
         "parse_mode": "html",
-        "send_via": send_via,
     }
+    if send_via is not None:
+        action["send_via"] = send_via
     if reply_to_message_id:
         action["reply_to_message_id"] = reply_to_message_id
     if reply_markup is not None:
@@ -805,7 +806,6 @@ def _edit_action(
         "message_id": message_id,
         "text": text,
         "parse_mode": "html",
-        "send_via": "interaction_bot",
     }
     if reply_markup is not None:
         action["reply_markup"] = reply_markup
@@ -816,13 +816,14 @@ def _delete_action(
     message_id: int,
     *,
     chat_id: int | None = None,
-    send_via: str = "interaction_bot",
+    send_via: str | None = None,
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
         "type": "delete_message",
         "message_id": message_id,
-        "send_via": send_via,
     }
+    if send_via is not None:
+        action["send_via"] = send_via
     if chat_id is not None:
         action["chat_id"] = chat_id
     return action
@@ -2628,7 +2629,7 @@ class TenHalfPlugin(Plugin):
             else None
         )
 
-        # ── 结算公告（走 interaction_bot，新发结算消息） ──
+        # ── 结算公告（普通回复继承当前会话通道） ──
         if ctx is not None:
             actions.append(_send_action(
                 "\n".join(lines),
@@ -2637,7 +2638,7 @@ class TenHalfPlugin(Plugin):
         else:
             actions.append(_send_action("\n".join(lines)))
 
-        # ── 向每位赢家发放奖励（走 userbot_reply，参照 dice_grid_hunt） ──
+        # ── 向每位赢家发放奖励（payout 始终由 userbot 执行） ──
         reward_message_keys: list[str] = []
         for w in winners:
             reply_to = self._player_reply_message(g, int(w["user_id"]))
@@ -2651,10 +2652,12 @@ class TenHalfPlugin(Plugin):
             if reward_key:
                 reward_message_keys.append(reward_key)
             actions.append({
-                "type": "send_message",
+                "type": "payout",
+                "chat_id": cid,
+                "amount": int(w["reward"]),
                 "text": f"+{w['reward']}",
+                "parse_mode": "plain",
                 "reply_to_message_id": reply_to,
-                "send_via": "userbot_reply",
                 **({"save_message_id_key": reward_key} if reward_key else {}),
             })
             if ctx and ctx.log:
@@ -2680,12 +2683,12 @@ class TenHalfPlugin(Plugin):
                     "payout_mode": "auto",
                 },
                 "settlement": {
-                    "mode": "announce_only",
+                    "mode": "auto",
                     "amount": primary["reward"],
                     "winner_user_id": primary["user_id"],
                     "winner_name": primary["name"],
                     "payout_account_label": "管理员",
-                    "status": "announced",
+                    "status": "payout_requested",
                 },
             })
         else:

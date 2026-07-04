@@ -42,9 +42,7 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 奖励金额 开启成语接龙；群友按上一条成语尾字继续回复，禁词和超时时间可在配置页调整。事件订阅：管理员命令走 '
- 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 '
- 'interaction_bot 或 userbot_reply 受控通道。')
+USAGE = '管理员发送 {prefix}{command} 奖励金额开启成语接龙；群友按上一条成语尾字继续回复，禁词和超时时间可在配置页调整。普通回复继承 TelePilot 当前会话通道；每轮/终局奖励返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -62,7 +60,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.12",
+    version="1.0.13",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -85,8 +83,7 @@ MANIFEST = Manifest(
                      'close_on': ['winner', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',

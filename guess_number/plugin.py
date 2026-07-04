@@ -314,7 +314,14 @@ class GuessNumberPlugin(Plugin):
                 game.history.append(f"{actor_name}: {guess} → ✅ 中！")
                 self._games.pop(chat_id, None)
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": reply_to, "send_via": "userbot_reply"},
+                    {
+                        "type": "payout",
+                        "chat_id": chat_id,
+                        "amount": game.prize,
+                        "text": f"+{game.prize}",
+                        "parse_mode": "plain",
+                        "reply_to_message_id": reply_to,
+                    },
                     {
                         "type": "send_message",
                         "text": (
@@ -333,11 +340,12 @@ class GuessNumberPlugin(Plugin):
                             "answer": game.target,
                         },
                         "settlement": {
-                            "mode": "announce_only",
+                            "mode": "auto",
                             "winner_user_id": actor_id,
                             "winner_name": actor_name,
                             "amount": game.prize,
                             "amount_field": "prize",
+                            "status": "payout_requested",
                         },
                     },
                     {"type": "end_session"},

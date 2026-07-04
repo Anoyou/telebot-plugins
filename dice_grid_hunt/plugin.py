@@ -531,6 +531,14 @@ class DiceGridHuntPlugin(Plugin):
                 "reply_to_message_id": rd.winner_message_id,
             },
             {
+                "type": "payout",
+                "chat_id": chat_id,
+                "amount": rd.prize,
+                "text": self._render_text(self._prize_message_template, {"prize": rd.prize}),
+                "parse_mode": "plain",
+                "reply_to_message_id": rd.winner_message_id,
+            },
+            {
                 "type": "result",
                 "success": True,
                 "result": {
@@ -545,12 +553,12 @@ class DiceGridHuntPlugin(Plugin):
                     "payout_account_label": payout_account,
                 },
                 "settlement": {
-                    "mode": "announce_only" if payout_mode != "auto" else "auto",
+                    "mode": "auto",
                     "amount": rd.prize,
                     "winner_user_id": rd.winner_id or None,
                     "winner_name": rd.winner_name,
                     "payout_account_label": payout_account,
-                    "status": "announced",
+                    "status": "payout_requested",
                 },
             },
             {"type": "end_session"},
@@ -701,19 +709,13 @@ class DiceGridHuntPlugin(Plugin):
 
     def _render_interaction_success(self, rd: RoundState, payout_account: str, payout_mode: str) -> str:
         winner = escape(rd.winner_name or "玩家")
-        account_holder = escape(payout_account)
-        payout_line = (
-            f"奖金将由 {account_holder} 账号自动发放。"
-            if payout_mode == "auto"
-            else f"请由 {account_holder} 人工回复赢家发放奖金。"
-        )
         elapsed = max(0.0, time.monotonic() - rd.started_at)
         return (
             f"答对了：{winner}\n"
             f"题目：九宫格竞猜，目标点数 {rd.target_sum}，答案第 {rd.answer_index} 格\n"
             f"用时：{elapsed:.1f}s\n"
             f"奖金：{rd.prize}\n"
-            f"{payout_line}"
+            "已请求 userbot 自动发奖。"
         )
 
     def _interaction_event_type(self, payload: dict[str, Any]) -> str:

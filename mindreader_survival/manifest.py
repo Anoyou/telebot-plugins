@@ -220,9 +220,7 @@ CONFIG_SCHEMA = {
 # ── Manifest ─────────────────────────────────────────────────
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 创建读心生存赛，玩家通过付款或关键词加入，每轮回复数字选择答案；最终存活者按规则瓜分奖池。事件订阅：管理员命令走 '
- 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 '
- 'interaction_bot 或 userbot_reply 受控通道。')
+USAGE = '管理员发送 {prefix}{command} 创建读心生存赛，玩家通过付款或关键词加入，每轮回复数字选择答案；最终存活者按规则瓜分奖池。普通回复继承 TelePilot 当前会话通道；结算结果返回 result/settlement，实际发奖类动作应由 payout/受控 userbot 链路执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -240,7 +238,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.1.7",
+    version="1.1.8",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
@@ -262,8 +260,7 @@ MANIFEST = Manifest(
                      'close_on': ['game_over', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'ticket_price': {'type': 'integer',

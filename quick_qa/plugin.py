@@ -147,7 +147,6 @@ class QuickQAGame:
     host_user_id: int
     host_name: str
     free_join_keyword: str = DEFAULT_FREE_JOIN_KEYWORD
-    send_via: str = "interaction_bot"
     phase: str = "lobby"
     players: dict[int, Player] = field(default_factory=dict)
     selector_user_id: int = 0
@@ -434,14 +433,15 @@ def _send_action(
     reply_to_message_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
     parse_mode: str = "html",
-    send_via: str | list[str] = "interaction_bot",
+    send_via: str | list[str] | None = None,
     save_message_id_key: str | None = None,
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
         "type": "send_message",
         "text": text,
-        "send_via": send_via,
     }
+    if send_via is not None:
+        action["send_via"] = send_via
     if chat_id:
         action["chat_id"] = int(chat_id)
     if parse_mode:
@@ -459,14 +459,16 @@ def _delete_action(
     chat_id: int,
     message_id: int,
     *,
-    send_via: str | list[str] = "interaction_bot",
+    send_via: str | list[str] | None = None,
 ) -> dict[str, Any]:
-    return {
+    action: dict[str, Any] = {
         "type": "delete_message",
         "chat_id": int(chat_id),
         "message_id": int(message_id),
-        "send_via": send_via,
     }
+    if send_via is not None:
+        action["send_via"] = send_via
+    return action
 
 
 def _edit_action(
@@ -475,7 +477,7 @@ def _edit_action(
     *,
     chat_id: int | None = None,
     reply_markup: dict[str, Any] | None = None,
-    send_via: str | list[str] = "interaction_bot",
+    send_via: str | list[str] | None = None,
 ) -> dict[str, Any] | None:
     if not message_id:
         return None
@@ -484,8 +486,9 @@ def _edit_action(
         "message_id": int(message_id),
         "text": text,
         "parse_mode": "html",
-        "send_via": send_via,
     }
+    if send_via is not None:
+        action["send_via"] = send_via
     if chat_id:
         action["chat_id"] = int(chat_id)
     if reply_markup is not None:
@@ -858,7 +861,7 @@ class QuickQAPlugin(Plugin):
             chat_id=game.chat_id,
             reply_to_message_id=reply_to_message_id,
             reply_markup=reply_markup,
-            send_via=send_via or game.send_via,
+            send_via=send_via,
             save_message_id_key=self._game_message_key(game, label) if track else None,
         )
 
@@ -881,7 +884,6 @@ class QuickQAPlugin(Plugin):
                 text,
                 chat_id=game.chat_id,
                 reply_markup=reply_markup,
-                send_via=game.send_via,
             )
             if edit:
                 return edit
@@ -890,7 +892,6 @@ class QuickQAPlugin(Plugin):
             chat_id=game.chat_id,
             reply_to_message_id=reply_to_message_id,
             reply_markup=reply_markup,
-            send_via=game.send_via,
             save_message_id_key=key,
         )
 
@@ -1148,7 +1149,6 @@ class QuickQAPlugin(Plugin):
                 _send_action(
                     f"报名金额不足：本局门槛是 {_code(entry_fee)}，当前到账 {_code(amount)}。",
                     reply_to_message_id=_message_id(payload),
-                    send_via="userbot_reply" if _source_channel(payload) == "userbot" else "interaction_bot",
                 )
             ]
 
@@ -1157,13 +1157,12 @@ class QuickQAPlugin(Plugin):
             if game is None or game.phase == "finished":
                 return []
             if game.phase != "lobby":
-                return [_send_action("本局已经开始，无法继续报名。", reply_to_message_id=_message_id(payload), send_via=game.send_via)]
+                return [_send_action("本局已经开始，无法继续报名。", reply_to_message_id=_message_id(payload))]
             if amount < game.entry_fee:
                 return [
                     _send_action(
                         f"本局门槛是 {_code(game.entry_fee)}，金额不足。",
                         reply_to_message_id=_message_id(payload),
-                        send_via=game.send_via,
                     )
                 ]
             user_id, name = _actor_id_name(payload, prefer_payment=True)
@@ -1305,7 +1304,6 @@ class QuickQAPlugin(Plugin):
             host_user_id=host_user_id,
             host_name=host_name,
             free_join_keyword=str(cfg.get("free_join_keyword") or DEFAULT_FREE_JOIN_KEYWORD).strip() or DEFAULT_FREE_JOIN_KEYWORD,
-            send_via="userbot_reply" if source_channel == "userbot" or _event_type(payload) == "command" else "interaction_bot",
         )
 
     async def _begin_selection(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
@@ -1353,7 +1351,6 @@ class QuickQAPlugin(Plugin):
             selection_text,
             chat_id=game.chat_id,
             reply_markup=self._kb_markup(game, kbs),
-            send_via=game.send_via,
         )
         if edit:
             actions.append(edit)
@@ -1384,7 +1381,6 @@ class QuickQAPlugin(Plugin):
             self._render_kb_selection(game, kbs),
             chat_id=game.chat_id,
             reply_markup=self._kb_markup(game, kbs),
-            send_via=game.send_via,
         )
         return [_answer_action(payload, "已更新选择"), *([edit] if edit else [])]
 
@@ -1414,7 +1410,6 @@ class QuickQAPlugin(Plugin):
             self._render_game_start(game, selected),
             chat_id=game.chat_id,
             reply_markup=None,
-            send_via=game.send_via,
         )
         if edit:
             actions.append(edit)
@@ -1457,7 +1452,6 @@ class QuickQAPlugin(Plugin):
                 self._render_question_result(game, actor_name, True),
                 chat_id=game.chat_id,
                 reply_markup=None,
-                send_via=game.send_via,
             )
             if edit:
                 actions.append(edit)
@@ -1484,7 +1478,6 @@ class QuickQAPlugin(Plugin):
                 self._render_question_timeout(game, exhausted=True),
                 chat_id=game.chat_id,
                 reply_markup=None,
-                send_via=game.send_via,
             )
             if edit:
                 actions.append(edit)
@@ -1601,13 +1594,14 @@ class QuickQAPlugin(Plugin):
             await self._emit_actions(
                 ctx,
                 [
-                    _send_action(
-                        f"+{item.amount}",
-                        chat_id=game.chat_id,
-                        reply_to_message_id=item.join_message_id,
-                        send_via="userbot_reply",
-                        parse_mode="",
-                    )
+                    {
+                        "type": "payout",
+                        "chat_id": game.chat_id,
+                        "amount": item.amount,
+                        "text": f"+{item.amount}",
+                        "parse_mode": "plain",
+                        "reply_to_message_id": item.join_message_id,
+                    }
                 ],
             )
             await _progress_log(
@@ -1684,11 +1678,17 @@ class QuickQAPlugin(Plugin):
         messages = getattr(ctx, "messages", None)
         if messages is None:
             return
+        if hasattr(messages, "apply"):
+            try:
+                await messages.apply(actions, entry_key="join_quick_qa")
+                return
+            except Exception:
+                pass
         for action in actions:
             try:
                 if action.get("type") == "send_message" and hasattr(messages, "send"):
                     kwargs = {
-                        "channel": action.get("send_via", action.get("channel", "interaction_bot")),
+                        "channel": action.get("send_via", action.get("channel")),
                         "chat_id": action.get("chat_id"),
                         "text": action.get("text", ""),
                         "reply_to_message_id": action.get("reply_to_message_id"),
@@ -1700,7 +1700,7 @@ class QuickQAPlugin(Plugin):
                     await messages.send(**kwargs)
                 elif action.get("type") == "edit_message" and hasattr(messages, "edit"):
                     kwargs = {
-                        "channel": action.get("send_via", action.get("channel", "interaction_bot")),
+                        "channel": action.get("send_via", action.get("channel")),
                         "chat_id": action.get("chat_id"),
                         "message_id": action.get("message_id"),
                         "text": action.get("text", ""),
@@ -1709,11 +1709,15 @@ class QuickQAPlugin(Plugin):
                     kwargs = {k: v for k, v in kwargs.items() if v is not None}
                     await messages.edit(**kwargs)
                 elif action.get("type") == "delete_message" and hasattr(messages, "delete"):
-                    await messages.delete(
-                        channel=action.get("send_via", action.get("channel", "interaction_bot")),
-                        chat_id=action.get("chat_id"),
-                        message_id=int(action.get("message_id")),
-                    )
+                    kwargs = {
+                        "channel": action.get("send_via", action.get("channel")),
+                        "chat_id": action.get("chat_id"),
+                        "message_id": int(action.get("message_id")),
+                    }
+                    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+                    await messages.delete(**kwargs)
+                elif action.get("type") == "payout" and hasattr(messages, "actions"):
+                    messages.actions.append(dict(action))
             except Exception:
                 continue
 

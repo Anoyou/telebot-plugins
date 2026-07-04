@@ -303,7 +303,6 @@ class Math10Plugin(Plugin):
         winner_user_id = _int_payload(actor.get("user_id"))
         payout_account, payout_mode = _interaction_payout_info(payload)
         winner_display = html.escape(winner)
-        payout_account_display = html.escape(payout_account)
         reply_to_message_id = _interaction_message_id(payload, event)
         await _log(
             ctx,
@@ -321,12 +320,20 @@ class Math10Plugin(Plugin):
                 f"答对了：{winner_display}\n"
                 f"题目：{state.question} = {state.answer}\n"
                 f"奖金：{state.prize}\n"
-                f"{_render_payout_notice(payout_mode, payout_account_display)}"
+                "已请求 userbot 自动发奖。"
             ),
             reply_to_message_id=reply_to_message_id,
         )
         return [
             *message_actions,
+            {
+                "type": "payout",
+                "chat_id": chat_id,
+                "amount": state.prize,
+                "text": f"+{state.prize}",
+                "parse_mode": "plain",
+                "reply_to_message_id": reply_to_message_id,
+            },
             {
                 "type": "result",
                 "success": True,
@@ -342,12 +349,12 @@ class Math10Plugin(Plugin):
                     "payout_account_label": payout_account,
                 },
                 "settlement": {
-                    "mode": "announce_only" if payout_mode != "auto" else "auto",
+                    "mode": "auto",
                     "amount": state.prize,
                     "winner_user_id": winner_user_id,
                     "winner_name": winner,
                     "payout_account_label": payout_account,
-                    "status": "announced",
+                    "status": "payout_requested",
                 },
             },
             {"type": "end_session"},

@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.0.21 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
+- 更新使用说明，避免继续把 interaction_bot/userbot_reply 当插件必填通道。
+
 ## 1.0.20 (2026-06-30)
 - 移除 PT 种子促销的付款确认触发声明：`interaction_entries` 与 `event_subscriptions` 不再包含 `payment_confirmed`。
 - 删除交互入口中的 `money_channel` 元数据，明确该插件只通过管理员命令或交互 Bot 关键词/会话消息触发。

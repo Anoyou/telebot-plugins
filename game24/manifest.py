@@ -12,10 +12,10 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="game24",
     display_name="24点游戏",
-    version="1.1.0",
+    version="1.1.1",
     author="TelePilot Official",
     description="随机生成 24 点题目，群内竞速答题，第一名获得奖金",
-    usage="24 点游戏支持两种调度：管理员可发送命令直接由 userbot 启动；群友也可通过交互中心配置的关键词或付款触发，由交互 Bot 承接答题，转账和发奖仍由 userbot/平台结算通道处理。",
+    usage='24 点游戏支持两种调度：管理员可发送命令直接由 userbot 启动；群友也可通过交互中心配置的关键词或付款触发。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行；结算元数据返回 settlement 供 Trace 排查。',
     category="interactive",
     event_subscriptions=[
         {
@@ -59,9 +59,7 @@ MANIFEST = Manifest(
                 "required_event_fields": ["type", "chat_id"],
             },
             "result_contract": {
-                "actions": ["send_message", "send_photo", "send_file", "end_session", "result", "settlement"],
-                "send_via": ["interaction_bot", "userbot_reply"],
-            },
+                "actions": ["send_message", "send_photo", "send_file", "payout", "end_session", "result", "settlement"]},
             "settlement": {
                 "mode": "announce_only",
                 "winner_field": "actor.user_id",

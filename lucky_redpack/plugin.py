@@ -1,7 +1,7 @@
 """拼手气口令红包插件。
 
-账号主人通过命令创建红包，群友发送当前财富密码领取。奖励消息必须由
-UserBot 回复领取者消息，以便复用平台现有的转账链路。
+账号主人通过命令创建红包，群友发送当前财富密码领取。领取奖励返回
+TelePilot 标准 payout action，由平台受控 userbot 发放。
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.8"
+PLUGIN_VERSION = "1.3.9"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -727,18 +727,37 @@ def _send_action(
     *,
     chat_id: int | None = None,
     reply_to_message_id: int | None = None,
-    send_via: str = "userbot_reply",
+    send_via: str | None = None,
     parse_mode: str | None = "html",
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
         "type": "send_message",
         "text": text,
-        "send_via": send_via,
     }
+    if send_via is not None:
+        action["send_via"] = send_via
     if chat_id is not None:
         action["chat_id"] = int(chat_id)
     if parse_mode:
         action["parse_mode"] = parse_mode
+    if reply_to_message_id:
+        action["reply_to_message_id"] = reply_to_message_id
+    return action
+
+
+def _payout_action(
+    amount: int,
+    *,
+    chat_id: int,
+    reply_to_message_id: int | None = None,
+) -> dict[str, Any]:
+    action: dict[str, Any] = {
+        "type": "payout",
+        "chat_id": int(chat_id),
+        "amount": int(amount),
+        "text": f"+{int(amount)}",
+        "parse_mode": "plain",
+    }
     if reply_to_message_id:
         action["reply_to_message_id"] = reply_to_message_id
     return action
@@ -1260,7 +1279,6 @@ class LuckyRedpackPlugin(Plugin):
                     text,
                     chat_id=chat_id,
                     reply_to_message_id=command_message_id,
-                    send_via="userbot_reply",
                     parse_mode="html",
                 )
             ]
@@ -1590,7 +1608,7 @@ class LuckyRedpackPlugin(Plugin):
                     )
                 )
                 if claim_message_id:
-                    actions.append(_send_action(f"+{claim_amount}", chat_id=chat_id, reply_to_message_id=claim_message_id, send_via="userbot_reply", parse_mode=None))
+                    actions.append(_payout_action(claim_amount, chat_id=chat_id, reply_to_message_id=claim_message_id))
                 if pack.is_finished():
                     packs = [item for item in packs if item.pack_code != pack.pack_code]
                     await self._save_active_packs(ctx, chat_id, packs)
@@ -1620,6 +1638,11 @@ class LuckyRedpackPlugin(Plugin):
                 if action.get("parse_mode"):
                     kwargs["parse_mode"] = action["parse_mode"]
                 await ctx.client.send_message(chat_id, str(action.get("text") or ""), **kwargs)
+            elif action_type == "payout":
+                kwargs: dict[str, Any] = {}
+                if action.get("reply_to_message_id"):
+                    kwargs["reply_to"] = action["reply_to_message_id"]
+                await ctx.client.send_message(chat_id, str(action.get("text") or f"+{action.get('amount')}"), **kwargs)
             elif action_type == "delete_message" and action.get("message_id"):
                 await self._delete_message(ctx, chat_id, int(action["message_id"]))
 

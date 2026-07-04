@@ -484,7 +484,14 @@ class PoetryBlankPlugin(Plugin):
             actor_id, actor_name = _interaction_actor(payload)
             self._rounds.pop(chat_id, None)
         return [
-            {"type": "send_message", "text": f"+{rd.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+            {
+                "type": "payout",
+                "chat_id": chat_id,
+                "amount": rd.prize,
+                "text": f"+{rd.prize}",
+                "parse_mode": "plain",
+                "reply_to_message_id": _interaction_message_id(payload),
+            },
             {
                 "type": "send_message",
                 "text": f"🏆 {actor_name} 答对！\n✅ {rd.full_line}\n📖 {rd.author} · 《{rd.title}》\n奖励 <b>+{rd.prize}</b>",
@@ -500,11 +507,12 @@ class PoetryBlankPlugin(Plugin):
                     "answer": rd.full_line,
                 },
                 "settlement": {
-                    "mode": "announce_only",
+                    "mode": "auto",
                     "winner_user_id": actor_id,
                     "winner_name": actor_name,
                     "amount": rd.prize,
                     "amount_field": "prize",
+                    "status": "payout_requested",
                 },
             },
             {"type": "end_session"},

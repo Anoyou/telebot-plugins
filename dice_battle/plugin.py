@@ -301,12 +301,19 @@ class DiceBattlePlugin(Plugin):
         if battle.bet > 0 and winner_id:
             actions.extend(
                 [
-                    {"type": "send_message", "text": f"+{battle.bet}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                    {
+                        "type": "payout",
+                        "chat_id": chat_id,
+                        "amount": battle.bet,
+                        "text": f"+{battle.bet}",
+                        "parse_mode": "plain",
+                        "reply_to_message_id": _interaction_message_id(payload),
+                    },
                     {
                         "type": "result",
                         "success": True,
                         "result": {"winner_user_id": winner_id, "winner_name": winner_name, "amount": battle.bet},
-                        "settlement": {"mode": "announce_only", "winner_user_id": winner_id, "winner_name": winner_name, "amount": battle.bet, "amount_field": "prize"},
+                        "settlement": {"mode": "auto", "winner_user_id": winner_id, "winner_name": winner_name, "amount": battle.bet, "amount_field": "prize", "status": "payout_requested"},
                     },
                 ]
             )

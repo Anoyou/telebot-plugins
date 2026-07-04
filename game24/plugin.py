@@ -629,8 +629,6 @@ class Game24Plugin(Plugin):
         winner_user_id = _int_payload(actor.get("user_id"))
         payout_account, payout_mode = _interaction_payout_info(payload)
         winner_display = html.escape(winner)
-        payout_account_display = html.escape(payout_account)
-        payout_line = _interaction_payout_line(payout_account_display, payout_mode)
         nums_disp = " ".join(str(item) for item in state.numbers)
         await self._log(
             ctx,
@@ -650,12 +648,20 @@ class Game24Plugin(Plugin):
                 f"题目：24 点 [{nums_disp}]\n"
                 f"答案：{result.normalized_expr} = 24\n"
                 f"奖金：{state.prize}\n"
-                f"{payout_line}"
+                "已请求 userbot 自动发奖。"
             ),
             reply_to_message_id=_interaction_message_id(payload, event),
         )
         actions.extend(
             [
+            {
+                "type": "payout",
+                "chat_id": chat_id,
+                "amount": state.prize,
+                "text": f"+{state.prize}",
+                "parse_mode": "plain",
+                "reply_to_message_id": _interaction_message_id(payload, event),
+            },
             {
                 "type": "result",
                 "success": True,
@@ -671,12 +677,12 @@ class Game24Plugin(Plugin):
                     "payout_account_label": payout_account,
                 },
                 "settlement": {
-                    "mode": "announce_only" if payout_mode != "auto" else "auto",
+                    "mode": "auto",
                     "amount": state.prize,
                     "winner_user_id": winner_user_id,
                     "winner_name": winner,
                     "payout_account_label": payout_account,
-                    "status": "announced",
+                    "status": "payout_requested",
                 },
             },
             {"type": "end_session"},

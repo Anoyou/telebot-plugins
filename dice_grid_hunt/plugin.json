@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -255,13 +255,10 @@
         "actions": [
           "send_message",
           "send_photo",
+          "payout",
           "end_session",
           "result",
           "settlement"
-        ],
-        "send_via": [
-          "interaction_bot",
-          "userbot_reply"
         ]
       },
       "input_schema": {
@@ -301,7 +298,7 @@
     }
   ],
   "min_telepilot_version": "0.33.0",
-  "usage": "管理员发送 {prefix}{command} 奖励金额 开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板，并在插件预览里查看最终消息。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 interaction_bot 或 userbot_reply 受控通道。",
+  "usage": "管理员发送 {prefix}{command} 奖励金额开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。",
   "event_subscriptions": [
     {
       "events": [

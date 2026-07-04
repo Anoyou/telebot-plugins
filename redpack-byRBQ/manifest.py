@@ -126,9 +126,7 @@ CONFIG_SCHEMA = {
 }
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = ('管理员发送 {prefix}{command} 口令 总额 个数 创建文字或图片口令红包；群友直接发送正确口令领取，插件自动回复 +金额 并在领完后发送结算榜单。事件订阅：管理员命令走 '
- 'userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。输出只使用 '
- 'interaction_bot 或 userbot_reply 受控通道。')
+USAGE = '管理员发送 {prefix}{command} 口令 总额 个数创建文字或图片口令红包；群友直接发送正确口令领取，插件按原兼容实现处理发放和结算榜单。普通回复继承 TelePilot 当前会话通道；资金类动作必须由 payout/受控 userbot 链路执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -146,7 +144,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.23",
+    version="1.1.24",
     min_telepilot_version="0.33.0",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
@@ -172,8 +170,7 @@ MANIFEST = Manifest(
                                   'send_file',
                                   'end_session',
                                   'result',
-                                  'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply']},
+                                  'settlement'],},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'total_amount': {'type': 'integer',

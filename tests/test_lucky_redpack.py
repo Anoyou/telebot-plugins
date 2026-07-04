@@ -578,7 +578,7 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
-    def test_event_bus_claim_returns_userbot_reply_action_and_resends_pack(self) -> None:
+    def test_event_bus_claim_returns_payout_action_and_resends_pack(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
             ctx = PluginContext()
@@ -610,10 +610,10 @@ class LuckyRedpackTest(unittest.TestCase):
             )
 
             self.assertEqual(len(actions), 1)
-            self.assertEqual(actions[0]["type"], "send_message")
-            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["type"], "payout")
             self.assertEqual(actions[0]["chat_id"], 100)
             self.assertEqual(actions[0]["reply_to_message_id"], 2001)
+            self.assertGreater(actions[0]["amount"], 0)
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
             self.assertEqual(ctx.client.deleted[0]["message_ids"], [old_redpack_message_id])
             self.assertIn("领取详情", ctx.client.sent[-1]["text"])
@@ -653,7 +653,7 @@ class LuckyRedpackTest(unittest.TestCase):
             )
 
             self.assertEqual(len(actions), 1)
-            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["type"], "payout")
             self.assertEqual(actions[0]["chat_id"], -1003806095342)
             self.assertEqual(actions[0]["reply_to_message_id"], 2814)
             self.assertIn(8629045843, pack.claimed_user_ids)
@@ -718,7 +718,7 @@ class LuckyRedpackTest(unittest.TestCase):
             )
 
             self.assertEqual(len(claim_actions), 1)
-            self.assertEqual(claim_actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(claim_actions[0]["type"], "payout")
             self.assertEqual(claim_actions[0]["chat_id"], chat_id)
             self.assertEqual(claim_actions[0]["reply_to_message_id"], 2850)
             self.assertIn(8629045843, claim_plugin._packs[chat_id][0].claimed_user_ids)
@@ -865,8 +865,7 @@ class LuckyRedpackTest(unittest.TestCase):
             )
 
             self.assertEqual(len(actions), 1)
-            self.assertEqual(actions[0]["type"], "send_message")
-            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["type"], "payout")
             self.assertEqual(actions[0]["chat_id"], -1003806095342)
             self.assertEqual(actions[0]["reply_to_message_id"], 2821)
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
@@ -916,8 +915,7 @@ class LuckyRedpackTest(unittest.TestCase):
             )
 
             self.assertEqual(len(actions), 1)
-            self.assertEqual(actions[0]["type"], "send_message")
-            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["type"], "payout")
             self.assertEqual(actions[0]["chat_id"], -1003806095342)
             self.assertEqual(actions[0]["reply_to_message_id"], 2821)
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
@@ -987,7 +985,7 @@ class LuckyRedpackTest(unittest.TestCase):
             await creator_plugin._cmd_handler(create_ctx.client, command_event, ["测试", "2000", "2"], 1, create_ctx)
 
             self.assertEqual(len(claim_actions), 1)
-            self.assertEqual(claim_actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(claim_actions[0]["type"], "payout")
             self.assertEqual(claim_actions[0]["chat_id"], -1003806095342)
             self.assertEqual(claim_actions[0]["reply_to_message_id"], 2839)
 
@@ -1045,7 +1043,7 @@ class LuckyRedpackTest(unittest.TestCase):
             )
 
             self.assertEqual(len(actions), 1)
-            self.assertEqual(actions[0]["send_via"], "userbot_reply")
+            self.assertEqual(actions[0]["type"], "payout")
             self.assertEqual(actions[0]["chat_id"], chat_id)
             self.assertEqual(actions[0]["reply_to_message_id"], 2843)
 
