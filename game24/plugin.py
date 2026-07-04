@@ -661,6 +661,7 @@ class Game24Plugin(Plugin):
                 "text": f"+{state.prize}",
                 "parse_mode": "plain",
                 "reply_to_message_id": _interaction_message_id(payload, event),
+                **({"reply_to_user_id": winner_user_id, "reply_to_search_limit": 50} if winner_user_id is not None else {}),
             },
             {
                 "type": "result",
@@ -913,9 +914,57 @@ class Game24Plugin(Plugin):
         gs: GameState,
         msg: IncomingMessage,
     ) -> bool:
-        """发奖：优先回复答题消息，失败再用 client.send_message 兜底。"""
+        """发奖：优先交给 TelePilot 标准 payout；旧平台再直发兜底。"""
 
         prize_text = f"+{gs.prize}"
+        messages = getattr(ctx, "messages", None)
+        apply_actions = getattr(messages, "apply", None)
+        if callable(apply_actions):
+            action = {
+                "type": "payout",
+                "chat_id": gs.chat_id,
+                "amount": gs.prize,
+                "text": prize_text,
+                "parse_mode": "plain",
+                "reply_to_message_id": msg.message_id,
+                **(
+                    {"reply_to_user_id": msg.sender_id, "reply_to_search_limit": 50}
+                    if msg.sender_id is not None
+                    else {}
+                ),
+            }
+            await apply_actions([action], entry_key="admin_command")
+            await self._log(
+                ctx,
+                "info",
+                f"24 点游戏奖励已提交给 TelePilot payout：回复 {msg.sender_name} 的答案消息，内容 {prize_text}。",
+                chat_id=gs.chat_id,
+                sender_id=msg.sender_id,
+                winner_msg_id=msg.message_id,
+                send_method="ctx.messages.apply.payout",
+            )
+            return True
+        payout = getattr(messages, "payout", None)
+        if callable(payout):
+            await payout(
+                chat_id=gs.chat_id,
+                amount=gs.prize,
+                text=prize_text,
+                parse_mode="plain",
+                reply_to_message_id=msg.message_id,
+                reply_to_user_id=msg.sender_id,
+                reply_to_search_limit=50,
+            )
+            await self._log(
+                ctx,
+                "info",
+                f"24 点游戏奖励已提交给 TelePilot payout：回复 {msg.sender_name} 的答案消息，内容 {prize_text}。",
+                chat_id=gs.chat_id,
+                sender_id=msg.sender_id,
+                winner_msg_id=msg.message_id,
+                send_method="ctx.messages.payout",
+            )
+            return True
 
         def _send_fail_hint(exc: Exception) -> str:
             name = type(exc).__name__

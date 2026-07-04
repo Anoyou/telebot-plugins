@@ -333,6 +333,7 @@ class Math10Plugin(Plugin):
                 "text": f"+{state.prize}",
                 "parse_mode": "plain",
                 "reply_to_message_id": reply_to_message_id,
+                **({"reply_to_user_id": winner_user_id, "reply_to_search_limit": 50} if winner_user_id is not None else {}),
             },
             {
                 "type": "result",
