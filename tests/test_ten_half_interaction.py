@@ -386,6 +386,103 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_join_notice_auto_deletes_after_ten_seconds(self) -> None:
+        async def fast_sleep(seconds):
+            self.assertEqual(seconds, plugin_module.JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS)
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            messages = FakeMessages()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis, messages=messages)
+            join_key = plugin_module._join_notice_key(1, -100123)
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
+                await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
+                redis.store[join_key] = "910"
+                game = plugin._games[-100123]
+                notice_version = game.join_notice_version
+
+                for task in list(plugin._tasks):
+                    task.cancel()
+                if plugin._tasks:
+                    await asyncio.gather(*plugin._tasks, return_exceptions=True)
+                plugin._tasks.clear()
+
+                with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                    await plugin._join_notice_cleanup_task(
+                        -100123,
+                        game.started_at,
+                        notice_version,
+                        ctx,
+                        plugin_module.JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS,
+                    )
+
+                self.assertEqual(
+                    messages.applied[0]["actions"],
+                    [{"type": "delete_message", "message_id": 910, "send_via": "interaction_bot", "chat_id": -100123}],
+                )
+                self.assertNotIn(join_key, redis.store)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_join_notice_cleanup_does_not_delete_newer_notice(self) -> None:
+        async def fast_sleep(seconds):
+            self.assertEqual(seconds, plugin_module.JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS)
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            messages = FakeMessages()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis, messages=messages)
+            join_key = plugin_module._join_notice_key(1, -100123)
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
+                await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
+                game = plugin._games[-100123]
+                stale_version = game.join_notice_version
+                redis.store[join_key] = "910"
+
+                await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    payment_payload(
+                        payer_id=222,
+                        payer_name="玩家B",
+                        notice_message_id=711,
+                        reply_message_id=710,
+                    ),
+                )
+                redis.store[join_key] = "920"
+
+                for task in list(plugin._tasks):
+                    task.cancel()
+                if plugin._tasks:
+                    await asyncio.gather(*plugin._tasks, return_exceptions=True)
+                plugin._tasks.clear()
+
+                with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                    await plugin._join_notice_cleanup_task(
+                        -100123,
+                        game.started_at,
+                        stale_version,
+                        ctx,
+                        plugin_module.JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS,
+                    )
+
+                self.assertEqual(messages.applied, [])
+                self.assertEqual(redis.store[join_key], "920")
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_payment_join_restores_keyword_lobby_from_persisted_state(self) -> None:
         async def scenario() -> None:
             redis = FakeRedis()
@@ -591,6 +688,112 @@ class TenHalfInteractionTest(unittest.TestCase):
                     "text": "请转账底注加入；账号 userbot 可发送「入局」直接入桌。",
                     "show_alert": True,
                 }])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_userbot_mode_command_toggles_join_mode(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            ctx = PluginContext(redis=redis)
+            await plugin.on_startup(ctx)
+            try:
+                first = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    userbot_entry_payload(text="10d模式"),
+                )
+                self.assertEqual(plugin._join_mode, plugin_module.JOIN_MODE_SILENT_DEBIT)
+                self.assertEqual(redis.store[plugin_module._join_mode_key(1)], plugin_module.JOIN_MODE_SILENT_DEBIT)
+                self.assertEqual(first[0]["send_via"], "userbot_reply")
+                self.assertIn("无感模式", first[0]["text"])
+
+                second = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    userbot_entry_payload(text="10d模式 转账"),
+                )
+                self.assertEqual(plugin._join_mode, plugin_module.JOIN_MODE_TRANSFER)
+                self.assertIn("转账模式", second[0]["text"])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_lobby_start_warns_button_will_debit(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                start_message = next(action for action in actions if action["type"] == "send_message")
+
+                self.assertIn("入局模式: <b>无感模式</b>", start_message["text"])
+                self.assertIn("点击下方“扣款 100 并加入”", start_message["text"])
+                self.assertIn("<code>-100</code>", start_message["text"])
+                self.assertNotIn("请转账 <b>100</b>", start_message["text"])
+                self.assertIn("扣款 100 并加入", str(start_message["reply_markup"]))
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_button_joins_and_requests_userbot_debit(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join", message_id=900),
+                )
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.join_mode, plugin_module.JOIN_MODE_SILENT_DEBIT)
+                self.assertEqual(game.lobby_players, [(111, "玩家A")])
+                self.assertNotIn(111, game.player_message_ids)
+
+                self.assertEqual(actions[0], {
+                    "type": "answer_callback",
+                    "callback_query_id": "cb-silent-join",
+                    "text": f"加入成功，牌桌 {game.game_id}",
+                    "show_alert": False,
+                })
+                debit = actions[1]
+                self.assertEqual(debit["type"], "send_message")
+                self.assertEqual(debit["send_via"], "userbot_reply")
+                self.assertEqual(debit["text"], "-100")
+                self.assertEqual(debit["reply_to_user_id"], 111)
+
+                join_notice = next(action for action in actions if action.get("type") == "send_message" and action.get("send_via") == "interaction_bot")
+                self.assertIn("入场金额: 自动扣款 100", join_notice["text"])
+                refresh = next(action for action in actions if action.get("type") == "edit_message")
+                self.assertEqual(refresh["message_id"], 900)
+                self.assertIn("👥 已加入 (1/5): 玩家A", refresh["text"])
+                session_action = next(action for action in actions if action.get("type") == "start_session")
+                self.assertEqual(session_action["paid_user_ids"], [111])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_lobby_ignores_payment_confirmed_notice(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                actions = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
+
+                self.assertEqual(actions, [{"type": "no_session"}])
+                self.assertEqual(plugin._games[-100123].lobby_players, [])
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -971,6 +1174,93 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertIn("等待：玩家A", actions[1]["text"])
             self.assertIn("th:hit:0", str(actions[1]["reply_markup"]))
             self.assertNotIn("th:hit:222", str(actions[1]["reply_markup"]))
+
+        asyncio.run(scenario())
+
+    def test_player_can_double_with_one_card_after_dealer_has_two_cards(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="playing", via_interaction=True)
+            game.main_message_id = 900
+            game.dealer_id = 333
+            game.dealer_name = "庄家"
+            game.dealer_cards = [plugin_module.Card("♣️", "4"), plugin_module.Card("♦️", "5")]
+            player = plugin_module.PlayerHand(
+                user_id=111,
+                name="玩家A",
+                cards=[plugin_module.Card("♠️", "5")],
+            )
+            game.players = [player]
+            game.deck = [plugin_module.Card("♥️", "A")]
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                {
+                    "source": {
+                        "type": "callback_query",
+                        "chat_id": -100123,
+                        "message_id": 900,
+                        "callback_query_id": "cb-double",
+                        "callback_data": "th:double:0",
+                    },
+                    "actor": {"user_id": 111, "display_name": "玩家A"},
+                },
+            )
+
+            self.assertTrue(player.doubled)
+            self.assertTrue(player.stood)
+            self.assertEqual([card.rank for card in player.cards], ["5", "A"])
+            self.assertEqual(actions[0]["type"], "answer_callback")
+            self.assertIn("加倍要到 A", actions[0]["text"])
+            self.assertEqual(actions[1]["type"], "edit_message")
+            self.assertIn("已加倍", actions[1]["text"])
+
+        asyncio.run(scenario())
+
+    def test_player_cannot_double_after_taking_second_card(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="playing", via_interaction=True)
+            game.main_message_id = 900
+            game.dealer_id = 333
+            game.dealer_name = "庄家"
+            game.dealer_cards = [plugin_module.Card("♣️", "4"), plugin_module.Card("♦️", "5")]
+            player = plugin_module.PlayerHand(
+                user_id=111,
+                name="玩家A",
+                cards=[plugin_module.Card("♠️", "5"), plugin_module.Card("♥️", "A")],
+            )
+            game.players = [player]
+            game.deck = [plugin_module.Card("♦️", "A")]
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                {
+                    "source": {
+                        "type": "callback_query",
+                        "chat_id": -100123,
+                        "message_id": 900,
+                        "callback_query_id": "cb-double-late",
+                        "callback_data": "th:double:0",
+                    },
+                    "actor": {"user_id": 111, "display_name": "玩家A"},
+                },
+            )
+
+            self.assertFalse(player.doubled)
+            self.assertEqual(len(player.cards), 2)
+            self.assertEqual(actions, [{
+                "type": "answer_callback",
+                "callback_query_id": "cb-double-late",
+                "text": "加倍只能在第一张牌后使用。",
+                "show_alert": False,
+            }])
 
         asyncio.run(scenario())
 

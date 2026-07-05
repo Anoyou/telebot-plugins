@@ -68,7 +68,10 @@ REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.3.10"
+PLUGIN_VERSION = "0.4.0"
+JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
+JOIN_MODE_TRANSFER = "transfer"
+JOIN_MODE_SILENT_DEBIT = "silent_debit"
 
 
 @dataclass
@@ -122,6 +125,10 @@ def _lobby_state_key(account_id: int, chat_id: int) -> str:
     return f"{REDIS_LOBBY_STATE_KEY_PREFIX}{account_id}:{chat_id}"
 
 
+def _join_mode_key(account_id: int) -> str:
+    return f"ten_half:join_mode:{account_id}"
+
+
 def _normalize_command_name(raw: Any) -> str:
     text = str(raw or "").strip()
     prefixes = [
@@ -149,6 +156,34 @@ def _inline_payment_amount(text: str) -> int:
         return 0
     amount = cleaned[1:].strip()
     return int(amount) if amount.isdigit() else 0
+
+
+def _normalize_join_mode(raw: Any, default: str = JOIN_MODE_TRANSFER) -> str:
+    text = str(raw or "").strip().lower()
+    if text in {"silent_debit", "silent", "debit", "auto_debit", "无感", "扣款", "无感模式"}:
+        return JOIN_MODE_SILENT_DEBIT
+    if text in {"transfer", "payment", "pay", "转账", "转账模式"}:
+        return JOIN_MODE_TRANSFER
+    return default
+
+
+def _join_mode_label(mode: str) -> str:
+    return "无感模式" if mode == JOIN_MODE_SILENT_DEBIT else "转账模式"
+
+
+def _join_mode_from_command_text(text: str, current: str) -> str | None:
+    cleaned = str(text or "").strip().lower()
+    compact = cleaned.replace(" ", "")
+    if compact not in {"10d模式", "十点半模式"} and not compact.startswith(("10d模式", "十点半模式")):
+        return None
+    tail = compact.removeprefix("10d模式").removeprefix("十点半模式")
+    if not tail:
+        return JOIN_MODE_SILENT_DEBIT if current == JOIN_MODE_TRANSFER else JOIN_MODE_TRANSFER
+    if tail in {"转账", "付款", "转账模式", "付款模式"}:
+        return JOIN_MODE_TRANSFER
+    if tail in {"无感", "扣款", "无感模式", "扣款模式"}:
+        return JOIN_MODE_SILENT_DEBIT
+    return None
 
 
 def _is_userbot_message(payload: dict[str, Any]) -> bool:
@@ -218,6 +253,7 @@ class TenHalfGame:
     game_id: str = field(default_factory=lambda: secrets.token_hex(3).upper())
     # lobby -> playing -> dealer_turn -> finished
     phase: str = "lobby"
+    join_mode: str = JOIN_MODE_TRANSFER
     dealer_id: int = 0          # 0 = bot 庄家
     dealer_name: str = "🤖 庄家"
     dealer_locked: bool = False
@@ -235,6 +271,7 @@ class TenHalfGame:
     lobby_msg_id: int | None = None
     main_message_id: int | None = None
     join_notice_msg_id: int | None = None
+    join_notice_version: int = 0
     known_interaction_message_ids: set[int] = field(default_factory=set)
     opening_message_deleted: bool = False
     game_message_started: bool = False
@@ -660,16 +697,18 @@ def _start_keyword_label(payload: dict[str, Any], fallback: str) -> str:
 # ─────────────────────────────────────────────────────
 # Inline keyboard builders
 # ─────────────────────────────────────────────────────
-def _kb_join(bet: int) -> dict[str, Any] | None:
-    """Lobby join button. Only for free games (bet == 0).
+def _kb_join(bet: int, join_mode: str = JOIN_MODE_TRANSFER) -> dict[str, Any] | None:
+    """Lobby join button.
 
-    Paid games use transfer-to-bot flow; no inline button.
+    Paid transfer mode uses transfer-to-userbot flow; silent-debit mode uses
+    the button and asks userbot to debit the clicked player.
     """
-    if bet > 0:
+    if bet > 0 and join_mode != JOIN_MODE_SILENT_DEBIT:
         return None
+    label = f"💸 扣款 {bet} 并加入" if bet > 0 else "🎮 加入游戏"
     return {
         "inline_keyboard": [[
-            {"text": "🎮 加入游戏", "callback_data": "th:join:0"},
+            {"text": label, "callback_data": "th:join:0"},
         ]]
     }
 
@@ -858,6 +897,19 @@ def _delete_action(
     return action
 
 
+def _debit_action(g: TenHalfGame, user_id: int) -> dict[str, Any]:
+    return {
+        "type": "send_message",
+        "send_via": USERBOT_SEND_VIA,
+        "chat_id": g.chat_id,
+        "text": f"-{g.bet}",
+        "parse_mode": "plain",
+        "reply_to_user_id": int(user_id),
+        "reply_to_search_limit": 50,
+        "reply_anchor_missing_text": "未找到对应用户（{user_id}）的近期消息，本次扣款需要人工处理。",
+    }
+
+
 def _answer_action(payload: dict[str, Any], text: str, *, show_alert: bool = False) -> dict[str, Any]:
     return {
         "type": "answer_callback",
@@ -896,6 +948,7 @@ def _lobby_snapshot(g: TenHalfGame) -> dict[str, Any]:
         "idle_start_seconds": g.idle_start_seconds,
         "game_id": g.game_id,
         "phase": g.phase,
+        "join_mode": g.join_mode,
         "dealer_id": g.dealer_id,
         "dealer_name": g.dealer_name,
         "dealer_locked": g.dealer_locked,
@@ -906,6 +959,7 @@ def _lobby_snapshot(g: TenHalfGame) -> dict[str, Any]:
         "via_interaction": g.via_interaction,
         "main_message_id": g.main_message_id,
         "join_notice_msg_id": g.join_notice_msg_id,
+        "join_notice_version": g.join_notice_version,
         "payment_receiver_name": g.payment_receiver_name,
         "status_note": g.status_note,
         "awaiting_start_confirmation": g.awaiting_start_confirmation,
@@ -923,7 +977,7 @@ class TenHalfPlugin(Plugin):
     display_name = "十点半"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"}
+    command_config_keys = {"timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay", "join_mode"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -932,6 +986,7 @@ class TenHalfPlugin(Plugin):
         self._lobby_timeout = 60
         self._settlement_cleanup_delay = 60
         self._max_players = 5
+        self._join_mode = JOIN_MODE_TRANSFER
         self._games: dict[int, TenHalfGame] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -981,6 +1036,49 @@ class TenHalfPlugin(Plugin):
             if parsed:
                 return parsed
         return None
+
+    @staticmethod
+    async def _delete_saved_message_id(ctx: PluginContext, key: str) -> None:
+        redis = getattr(ctx, "redis", None)
+        if redis is None:
+            return
+        delete = getattr(redis, "delete", None)
+        if not callable(delete):
+            return
+        keys = [key, f"tp:msgid:{ctx.account_id}:{key}"]
+        for item in dict.fromkeys(keys):
+            try:
+                await delete(item)
+            except Exception:
+                continue
+
+    async def _load_join_mode(self, ctx: PluginContext) -> str:
+        cfg_mode = _normalize_join_mode((ctx.config or {}).get("join_mode"), "")
+        if cfg_mode:
+            self._join_mode = cfg_mode
+        redis = getattr(ctx, "redis", None)
+        if redis is not None:
+            try:
+                raw = await redis.get(_join_mode_key(ctx.account_id))
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="ignore")
+                if raw:
+                    self._join_mode = _normalize_join_mode(raw, self._join_mode)
+            except Exception:
+                if ctx.log:
+                    await ctx.log("debug", "[ten_half] load_join_mode_failed")
+        return self._join_mode
+
+    async def _save_join_mode(self, ctx: PluginContext, mode: str) -> None:
+        self._join_mode = _normalize_join_mode(mode, JOIN_MODE_TRANSFER)
+        redis = getattr(ctx, "redis", None)
+        if redis is None:
+            return
+        try:
+            await redis.set(_join_mode_key(ctx.account_id), self._join_mode)
+        except Exception:
+            if ctx.log:
+                await ctx.log("debug", "[ten_half] save_join_mode_failed")
 
     async def _save_lobby_state(self, ctx: PluginContext, g: TenHalfGame) -> None:
         redis = getattr(ctx, "redis", None)
@@ -1064,11 +1162,13 @@ class TenHalfPlugin(Plugin):
         )
         g.idle_start_seconds = _pint(snapshot.get("idle_start_seconds"), g.idle_start_seconds, minimum=1)
         g.game_id = str(snapshot.get("game_id") or g.game_id)
+        g.join_mode = _normalize_join_mode(snapshot.get("join_mode"), JOIN_MODE_TRANSFER)
         g.dealer_id = _pint(snapshot.get("dealer_id"), 0, minimum=0)
         g.dealer_name = str(snapshot.get("dealer_name") or g.dealer_name)
         g.dealer_locked = bool(snapshot.get("dealer_locked"))
         g.main_message_id = _pint(snapshot.get("main_message_id"), 0) or None
         g.join_notice_msg_id = _pint(snapshot.get("join_notice_msg_id"), 0) or None
+        g.join_notice_version = _pint(snapshot.get("join_notice_version"), 0, minimum=0)
         g.payment_receiver_name = str(snapshot.get("payment_receiver_name") or "")
         g.status_note = str(snapshot.get("status_note") or "")
         g.awaiting_start_confirmation = bool(snapshot.get("awaiting_start_confirmation"))
@@ -1161,7 +1261,70 @@ class TenHalfPlugin(Plugin):
             return []
         g.join_notice_msg_id = mid
         self._remember_interaction_message(g, mid)
+        g.join_notice_version += 1
         return [_delete_action(mid)]
+
+    def _schedule_join_notice_cleanup(
+        self,
+        cid: int,
+        g: TenHalfGame,
+        ctx: PluginContext,
+        version: int,
+    ) -> None:
+        self._track_task(asyncio.create_task(
+            self._join_notice_cleanup_task(
+                cid,
+                g.started_at,
+                version,
+                ctx,
+                JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS,
+            )
+        ))
+
+    async def _join_notice_cleanup_task(
+        self,
+        cid: int,
+        sa: float,
+        version: int,
+        ctx: PluginContext,
+        delay_seconds: int,
+    ) -> None:
+        await asyncio.sleep(max(0, int(delay_seconds)))
+        key = _join_notice_key(ctx.account_id, cid)
+        async with self._lock(cid):
+            g = self._games.get(cid)
+            if (
+                not g
+                or g.finished
+                or g.started_at != sa
+                or g.join_notice_version != version
+            ):
+                return
+            mid = await self._read_saved_message_id(ctx, key)
+            mid = mid or g.join_notice_msg_id
+            if not mid:
+                return
+            self._remember_interaction_message(g, mid)
+            action = _delete_action(mid, chat_id=cid)
+
+        delivered = await self._emit_background_actions(ctx, [action])
+        if delivered:
+            async with self._lock(cid):
+                g = self._games.get(cid)
+                if g and g.started_at == sa and g.join_notice_version == version:
+                    current_mid = await self._read_saved_message_id(ctx, key)
+                    if current_mid == mid:
+                        await self._delete_saved_message_id(ctx, key)
+                    if g.join_notice_msg_id == mid:
+                        g.join_notice_msg_id = None
+                    g.known_interaction_message_ids.discard(int(mid))
+        if ctx.log:
+            level = "info" if delivered else "warn"
+            await ctx.log(
+                level,
+                f"[ten_half] join_notice_cleanup: message_id={mid}, "
+                f"delay={delay_seconds}, delivered={delivered}, chat_id={cid}",
+            )
 
     async def _join_notice_update_action(
         self,
@@ -1569,6 +1732,8 @@ class TenHalfPlugin(Plugin):
         join_key = _join_notice_key(ctx.account_id, g.chat_id)
         saved_join_mid = await self._read_saved_message_id(ctx, join_key)
         previous_mid = saved_join_mid or g.join_notice_msg_id
+        g.join_notice_version += 1
+        notice_version = g.join_notice_version
         actions.append(
             _send_action(
                 self._build_join_notice_text(g, payer_name=payer_name, amount=amount),
@@ -1580,15 +1745,22 @@ class TenHalfPlugin(Plugin):
         if previous_mid:
             self._remember_interaction_message(g, previous_mid)
             actions.append(_delete_action(previous_mid))
+        self._schedule_join_notice_cleanup(g.chat_id, g, ctx, notice_version)
         return actions
 
     def _build_lobby_text(self, g: TenHalfGame, receiver_label: str) -> str:
         lines = [
             f"🃏 <b>十点半开局 v{PLUGIN_VERSION}！</b>",
             f"💰 底注: <b>{g.bet}</b>",
+            f"🎛️ 入局模式: <b>{_join_mode_label(g.join_mode)}</b>",
             "",
         ]
-        if g.bet > 0:
+        if g.bet > 0 and g.join_mode == JOIN_MODE_SILENT_DEBIT:
+            lines.append(
+                f"📢 点击下方“扣款 {g.bet} 并加入”会由账号 userbot 自动回复你的近期发言 "
+                f"<code>-{g.bet}</code> 完成扣款并加入本桌。"
+            )
+        elif g.bet > 0:
             lines.append(
                 f"📢 请转账 <b>{g.bet}</b> 给 <b>{_html(receiver_label)}</b> 即可参与本桌牌局～"
             )
@@ -1616,7 +1788,12 @@ class TenHalfPlugin(Plugin):
 
     def _build_join_notice_text(self, g: TenHalfGame, *, payer_name: str, amount: int) -> str:
         players = [f"• {_html_name(name)}" for _, name in g.lobby_players] or ["• 暂无"]
-        amount_label = "免转账" if g.bet > 0 and amount <= 0 else str(amount)
+        if g.bet > 0 and amount <= 0:
+            amount_label = "免转账"
+        elif g.bet > 0 and g.join_mode == JOIN_MODE_SILENT_DEBIT:
+            amount_label = f"自动扣款 {amount}"
+        else:
+            amount_label = str(amount)
         lines = [
             f"✅ <b>{_html_name(payer_name)}</b> 加入牌局成功",
             f"🆔 牌桌 ID: <code>{g.game_id}</code>",
@@ -1673,9 +1850,10 @@ class TenHalfPlugin(Plugin):
         self._lobby_timeout = _pint(cfg.get("lobby_timeout"), 60, minimum=10)
         self._settlement_cleanup_delay = _pint(cfg.get("settlement_cleanup_delay"), 60, minimum=0)
         self._max_players = _pint(cfg.get("max_players"), 5, minimum=2)
+        await self._load_join_mode(ctx)
         self.commands = {}
         if ctx.log:
-            await ctx.log("info", "[ten_half] 已启动，开局入口：交互 Bot 关键词/规则")
+            await ctx.log("info", f"[ten_half] 已启动，开局入口：交互 Bot 关键词/规则，当前入局模式：{_join_mode_label(self._join_mode)}")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for t in list(self._tasks):
@@ -1697,7 +1875,7 @@ class TenHalfPlugin(Plugin):
     ) -> None:
         await event.reply(
             "十点半现在只通过交互 Bot 关键词/规则开局；账号 userbot 只负责收付款和发奖。"
-            " 已有等待大厅时，账号 userbot 可发送「入局」直接加入。",
+            " 发送「10d模式」可切换转账/无感扣款入局；已有等待大厅时，账号 userbot 可发送「入局」直接加入。",
             parse_mode="html",
         )
 
@@ -1876,6 +2054,7 @@ class TenHalfPlugin(Plugin):
     async def _ix_start(
         self, ctx: PluginContext, payload: dict[str, Any], cid: int,
     ) -> list[dict[str, Any]]:
+        join_mode = await self._load_join_mode(ctx)
         limits = self._game_limits_from_payload(ctx, payload)
         bet = _interaction_bet_from_payload(payload)
 
@@ -1905,7 +2084,7 @@ class TenHalfPlugin(Plugin):
                 turn_timeout=limits["turn_timeout"],
                 lobby_timeout=limits["lobby_timeout"],
                 settlement_cleanup_delay=limits["settlement_cleanup_delay"],
-                phase="lobby", started_at=time.monotonic(),
+                phase="lobby", join_mode=join_mode, started_at=time.monotonic(),
                 via_interaction=True,
                 host_user_id=host_id,
                 host_name=host_name,
@@ -1917,13 +2096,14 @@ class TenHalfPlugin(Plugin):
         if ctx.log:
             await ctx.log("info",
                 f"[ten_half] game_start: chat_id={cid}, bet={bet}, "
-                f"max_players={g.max_players}, lobby_timeout={g.lobby_timeout}, via_interaction=True")
+                f"join_mode={g.join_mode}, max_players={g.max_players}, "
+                f"lobby_timeout={g.lobby_timeout}, via_interaction=True")
 
         self._track(asyncio.create_task(
             self._lobby_timeout_task(cid, g.started_at, ctx),
         ))
 
-        reply_markup = _kb_join(bet)
+        reply_markup = _kb_join(bet, g.join_mode)
         return [
             _session_sync_action(g, payload),
             await self._main_action(
@@ -1987,6 +2167,8 @@ class TenHalfPlugin(Plugin):
 
             if g.phase != "lobby":
                 return await _skip("phase_not_lobby", g)
+            if g.join_mode == JOIN_MODE_SILENT_DEBIT:
+                return await _skip("silent_debit_lobby", g)
 
             if amount != g.bet:
                 return await _skip("amount_mismatch", g)
@@ -2090,19 +2272,28 @@ class TenHalfPlugin(Plugin):
             if not g or g.finished:
                 return [{"type": "no_session"}]
             callback_message_id = _ie_message_mid(payload)
-            if callback_message_id and action in ("view", "hit", "stand", "double"):
+            if callback_message_id and action in ("join", "view", "hit", "stand", "double"):
                 g.main_message_id = callback_message_id
                 self._remember_interaction_message(g, callback_message_id)
 
             # ── join ──
             if action == "join":
-                if g.bet > 0:
+                if g.bet > 0 and g.join_mode != JOIN_MODE_SILENT_DEBIT:
                     return [_answer_action(payload, "请转账底注加入；账号 userbot 可发送「入局」直接入桌。", show_alert=True)]
-                result = await self._ix_join(ctx, payload, g, aid, aname, paid_exempt=False)
+                result = await self._ix_join(
+                    ctx,
+                    payload,
+                    g,
+                    aid,
+                    aname,
+                    paid_exempt=False,
+                    auto_debit=bool(g.bet > 0 and g.join_mode == JOIN_MODE_SILENT_DEBIT),
+                )
                 if ctx.log:
                     await ctx.log("info",
                         f"[ten_half] player_joined: uid={aid}, name={aname}, "
-                        f"via=button, chat_id={cid}, count={len(g.lobby_players)}/{g.max_players}")
+                        f"via={'silent_debit' if g.bet > 0 and g.join_mode == JOIN_MODE_SILENT_DEBIT else 'button'}, "
+                        f"chat_id={cid}, count={len(g.lobby_players)}/{g.max_players}")
                 return result
 
             # ── dealer_yes / dealer_no ──
@@ -2128,6 +2319,7 @@ class TenHalfPlugin(Plugin):
         g: TenHalfGame, aid: int, aname: str,
         *,
         paid_exempt: bool = False,
+        auto_debit: bool = False,
     ) -> list[dict[str, Any]]:
         """Handle join button press."""
         mid = _ie_mid(payload)
@@ -2148,7 +2340,8 @@ class TenHalfPlugin(Plugin):
             return [hint("人数已满。")]
 
         g.lobby_players.append((aid, aname))
-        self._remember_player_message(g, aid, mid)
+        if not is_callback:
+            self._remember_player_message(g, aid, mid)
         if len(g.lobby_players) == 1:
             self._lock_first_dealer(g, aid, aname)
         self._touch_lobby(g)
@@ -2156,13 +2349,23 @@ class TenHalfPlugin(Plugin):
         cnt = len(g.lobby_players)
         if is_callback:
             result: list[dict[str, Any]] = [_answer_action(payload, f"加入成功，牌桌 {g.game_id}")]
+            if auto_debit:
+                result.append(_debit_action(g, aid))
+                result.extend(await self._join_notice_actions(
+                    ctx,
+                    payload,
+                    g,
+                    payer_name=aname,
+                    amount=g.bet,
+                ))
         else:
-            result = [
-                _send_action(
-                    self._build_join_notice_text(g, payer_name=aname, amount=0 if paid_exempt else g.bet),
-                    reply_to_message_id=mid,
-                )
-            ]
+            result = await self._join_notice_actions(
+                ctx,
+                payload,
+                g,
+                payer_name=aname,
+                amount=0 if paid_exempt else g.bet,
+            )
         result.append(_session_sync_action(g, payload))
 
         if cnt >= g.max_players and g.dealer_locked:
@@ -2175,7 +2378,7 @@ class TenHalfPlugin(Plugin):
                     ctx,
                     g,
                     self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
-                    reply_markup=_kb_join(g.bet),
+                    reply_markup=_kb_join(g.bet, g.join_mode),
                 )
             )
         return result
@@ -2210,7 +2413,7 @@ class TenHalfPlugin(Plugin):
                 ctx,
                 g,
                 self._build_lobby_text(g, self._receiver_label(ctx, payload, g)),
-                reply_markup=_kb_join(g.bet),
+                reply_markup=_kb_join(g.bet, g.join_mode),
             ),
         ]
 
@@ -2298,19 +2501,46 @@ class TenHalfPlugin(Plugin):
         if not text:
             return []
         mid = _ie_mid(payload)
+        aid, aname = _ie_actor(payload)
+
+        requested_join_mode = _join_mode_from_command_text(text, self._join_mode)
+        if requested_join_mode is not None and _is_userbot_self(payload, aid):
+            previous_mode = self._join_mode
+            await self._save_join_mode(ctx, requested_join_mode)
+            active_game = self._games.get(cid)
+            suffix = "；当前已有牌桌，本次切换从下一局开始生效。" if active_game and not active_game.finished else "。"
+            if ctx.log:
+                await ctx.log(
+                    "info",
+                    f"[ten_half] join_mode_changed: from={previous_mode}, to={requested_join_mode}, "
+                    f"by={aname} ({aid}), chat_id={cid}",
+                )
+            return [
+                _send_action(
+                    f"十点半入局模式已切换为 <b>{_join_mode_label(requested_join_mode)}</b>{suffix}",
+                    reply_to_message_id=mid,
+                    send_via=USERBOT_SEND_VIA,
+                )
+            ]
 
         async with self._lock(cid):
             g = self._games.get(cid)
             if not g or g.finished:
                 return [{"type": "no_session"}]
 
-            aid, aname = _ie_actor(payload)
-
             # ── 大厅 ──
             if g.phase == "lobby":
                 if text in ("加入", "join", "入局"):
                     paid_exempt = bool(g.bet > 0 and text == "入局" and _is_userbot_self(payload, aid))
                     if g.bet > 0 and not paid_exempt:
+                        if g.join_mode == JOIN_MODE_SILENT_DEBIT:
+                            return [
+                                _send_action(
+                                    f"请点击开局消息下方“扣款 {g.bet} 并加入”按钮，点击后会由账号 userbot 自动回复你的近期发言 "
+                                    f"<code>-{g.bet}</code> 扣款入局。",
+                                    reply_to_message_id=mid,
+                                )
+                            ]
                         return [
                             _send_action(
                                 f"请先转账 <b>{g.bet}</b> 给 <b>{_html(self._receiver_label(ctx, payload, g))}</b> 加入牌局。"
@@ -2560,10 +2790,14 @@ class TenHalfPlugin(Plugin):
         if player is None:
             return []
         p = player
-        if len(p.cards) != 2:
+        if len(g.dealer_cards) < 2:
             if payload is not None:
-                return [_answer_action(payload, "加倍只能在前两张牌时使用。")]
-            return [_send_action("⚠️ 加倍只能在前两张牌时使用。")]
+                return [_answer_action(payload, "庄家发满两张牌后才能加倍。")]
+            return [_send_action("⚠️ 庄家发满两张牌后才能加倍。")]
+        if len(p.cards) != 1:
+            if payload is not None:
+                return [_answer_action(payload, "加倍只能在第一张牌后使用。")]
+            return [_send_action("⚠️ 加倍只能在第一张牌后使用。")]
 
         p.doubled = True
         if not g.deck:

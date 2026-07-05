@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '在交互中心为十点半配置关键词和底注金额后，由交互 Bot 在群内开局、发大厅、刷新按钮、超时提示和结算公告。普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；账号 userbot 本人在等待大厅可发送“入局”免转账加入。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
+    "x-usage-guide": '在交互中心为十点半配置关键词和底注金额后，由交互 Bot 在群内开局、发大厅、刷新按钮、超时提示和结算公告。转账模式下普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局。账号 userbot 可发送“10d模式”切换入局模式，也可在等待大厅发送“入局”免转账加入。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
     "additionalProperties": False,
     "properties": {
         "timeout": {
@@ -40,13 +40,21 @@ CONFIG_SCHEMA = {
             "minimum": 0,
             "maximum": 3600,
         },
+        "join_mode": {
+            "type": "string",
+            "title": "入局模式",
+            "description": "转账模式：玩家转账底注后入局。无感模式：玩家点击开局消息按钮，由账号 userbot 回复玩家近期发言 -底注 完成扣款并入局。也可由账号 userbot 发送“10d模式”切换。",
+            "default": "transfer",
+            "enum": ["transfer", "silent_debit"],
+            "enumNames": ["转账模式", "无感扣款模式"],
+        },
     },
     "required": ["timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"],
 }
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = '十点半只通过交互 Bot 关键词/规则开局；大厅、按钮、后台刷新、超时开局和结算公告固定由 interaction_bot 发送。普通玩家精确转账底注给账号 userbot 后，由平台 payment_confirmed 作为资金证据入局；账号 userbot 本人在等待大厅可发送“入局”免转账加入。结算发奖返回 `payout`，始终由 userbot 执行。'
+USAGE = '十点半只通过交互 Bot 关键词/规则开局；大厅、按钮、后台刷新、超时开局和结算公告固定由 interaction_bot 发送。转账模式下普通玩家精确转账底注给账号 userbot 后，由平台 payment_confirmed 作为资金证据入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局。账号 userbot 可发送“10d模式”切换模式，也可在等待大厅发送“入局”免转账加入。结算发奖返回 `payout`，始终由 userbot 执行。'
 EVENT_SUBSCRIPTIONS = [{'events': ['message', 'callback_query', 'session_close'],
   'entry_key': 'start_ten_half',
   'source': ['interaction_bot'],
@@ -56,19 +64,19 @@ EVENT_SUBSCRIPTIONS = [{'events': ['message', 'callback_query', 'session_close']
   'entry_key': 'start_ten_half',
   'source': ['external_payment_notice', 'userbot'],
   'scope': 'all_allowed_chats',
-  'description': '付款确认按已允许群投递，插件只接收当前等待牌桌且金额等于本桌底注的转账。'},
+  'description': '付款确认按已允许群投递；只有当前等待牌桌为转账模式且金额等于本桌底注时才入局。'},
  {'events': ['message'],
   'entry_key': 'start_ten_half',
   'source': ['userbot'],
   'scope': 'all_allowed_chats',
-  'filters': {'contains': ['入局']},
-  'description': '等待大厅中，账号 userbot 本人发送“入局”可作为免转账入局证据；普通玩家仍必须通过 payment_confirmed 入局。'}]
+  'filters': {'contains': ['入局', '10d模式']},
+  'description': '账号 userbot 本人发送“10d模式”可切换转账/无感扣款入局；等待大厅中发送“入局”可作为免转账入局证据。'}]
 CAPABILITIES = {}
 
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.3.10",
+    version="0.4.0",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
