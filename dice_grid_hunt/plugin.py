@@ -714,8 +714,7 @@ class DiceGridHuntPlugin(Plugin):
             f"答对了：{winner}\n"
             f"题目：九宫格竞猜，目标点数 {rd.target_sum}，答案第 {rd.answer_index} 格\n"
             f"用时：{elapsed:.1f}s\n"
-            f"奖金：{rd.prize}\n"
-            "已请求 userbot 自动发奖。"
+            f"奖金：{rd.prize}"
         )
 
     def _interaction_event_type(self, payload: dict[str, Any]) -> str:

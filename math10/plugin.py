@@ -180,9 +180,7 @@ def _interaction_payout_info(payload: dict[str, Any]) -> tuple[str, str]:
 
 
 def _render_payout_notice(payout_mode: str, payout_account_display: str) -> str:
-    if payout_mode == "auto":
-        return f"奖金将由 {payout_account_display} 账号自动发放。"
-    return f"请由 {payout_account_display} 人工回复赢家发放奖金。"
+    return ""
 
 
 async def _log(ctx: PluginContext, level: str, message: str, **detail: Any) -> None:
@@ -319,8 +317,7 @@ class Math10Plugin(Plugin):
             (
                 f"答对了：{winner_display}\n"
                 f"题目：{state.question} = {state.answer}\n"
-                f"奖金：{state.prize}\n"
-                "已请求 userbot 自动发奖。"
+                f"奖金：{state.prize}"
             ),
             reply_to_message_id=reply_to_message_id,
         )

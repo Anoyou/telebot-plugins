@@ -182,9 +182,7 @@ def check_answer(expr: str, target_numbers: list[int]) -> bool:
 
 
 def _interaction_payout_line(payout_account_display: str, payout_mode: str | None) -> str:
-    if str(payout_mode or "").strip().lower() == "auto":
-        return f"奖金将由 {payout_account_display} 账号自动发放。"
-    return f"请由 {payout_account_display} 人工回复赢家发放奖金。"
+    return ""
 
 
 # ─────────────────────────────────────────────────────
@@ -647,8 +645,7 @@ class Game24Plugin(Plugin):
                 f"答对了：{winner_display}\n"
                 f"题目：24 点 [{nums_disp}]\n"
                 f"答案：{result.normalized_expr} = 24\n"
-                f"奖金：{state.prize}\n"
-                "已请求 userbot 自动发奖。"
+                f"奖金：{state.prize}"
             ),
             reply_to_message_id=_interaction_message_id(payload, event),
         )
