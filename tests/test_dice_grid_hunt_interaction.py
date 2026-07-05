@@ -105,7 +105,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(start_actions[0]["filename"], "dice_grid_hunt.png")
             self.assertEqual(start_actions[0]["parse_mode"], "html")
             self.assertEqual(start_actions[0]["save_message_id_key"], "dice_grid_hunt:1:-100123:round")
-            self.assertIn("九宫格竞猜v1.1.20 开始", start_actions[0]["caption"])
+            self.assertIn("九宫格竞猜v1.1.21 开始", start_actions[0]["caption"])
 
             answer_actions = await plugin.on_interaction(
                 ctx,
@@ -118,7 +118,10 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
             self.assertEqual(answer_actions[0]["parse_mode"], "html")
             self.assertIn("九宫格竞猜", answer_actions[0]["caption"])
-            self.assertIn("uhaveanswer 答对：图 <b>2</b>", answer_actions[0]["caption"])
+            self.assertEqual(answer_actions[0]["text"], answer_actions[0]["caption"])
+            self.assertIn("恭喜 uhaveanswer 答对！", answer_actions[0]["caption"])
+            self.assertIn("答案：图 2", answer_actions[0]["caption"])
+            self.assertIn("奖金：1000", answer_actions[0]["caption"])
             self.assertFalse(any(action.get("type") == "send_message" for action in answer_actions))
             self.assertEqual(answer_actions[1]["type"], "payout")
             self.assertEqual(answer_actions[1]["amount"], 1000)

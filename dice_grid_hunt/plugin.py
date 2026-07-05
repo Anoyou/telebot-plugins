@@ -31,7 +31,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.20"
+PLUGIN_VERSION = "1.1.21"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -527,12 +527,14 @@ class DiceGridHuntPlugin(Plugin):
                 "info",
                 f"[dice_grid_hunt] 交互 Bot 答对 chat={chat_id} winner={rd.winner_name!r} answer={rd.answer_index} prize={rd.prize}",
             )
+        success_caption = self._render_interaction_success(rd, payout_account, payout_mode)
         return [
             {
                 "type": "edit_caption",
                 "chat_id": chat_id,
                 "message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
-                "caption": self._render_interaction_success(rd, payout_account, payout_mode),
+                "caption": success_caption,
+                "text": success_caption,
                 "parse_mode": "html",
             },
             {
@@ -714,17 +716,14 @@ class DiceGridHuntPlugin(Plugin):
 
     def _render_interaction_success(self, rd: RoundState, payout_account: str, payout_mode: str) -> str:
         elapsed = max(0.0, time.monotonic() - rd.started_at)
-        success_text = self._render_text(
-            self._success_message_template,
-            {
-                "winner": escape(rd.winner_name or "玩家"),
-                "answer_index": rd.answer_index,
-                "target_sum": rd.target_sum,
-                "elapsed": f"{elapsed:.1f}",
-                "prize": rd.prize,
-            },
+        winner = escape(rd.winner_name or "玩家")
+        return (
+            f"{self._render_round_text(rd, include_guide=True)}\n\n"
+            f"恭喜 {winner} 答对！\n"
+            f"答案：图 {rd.answer_index}\n"
+            f"用时：{elapsed:.1f}s\n"
+            f"奖金：{rd.prize}"
         )
-        return f"{self._render_round_text(rd, include_guide=True)}\n\n{success_text}"
 
     def _interaction_event_type(self, payload: dict[str, Any]) -> str:
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}

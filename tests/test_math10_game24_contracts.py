@@ -127,13 +127,13 @@ def start_payload(*, prize: int = 666) -> dict:
     }
 
 
-def answer_payload(*, text: str, user_id: int = 111, message_id: int = 20) -> dict:
+def answer_payload(*, text: str, user_id: int = 111, message_id: int = 20, name: str = "玩家A") -> dict:
     return {
         "event": {"type": "message", "chat_id": -100123, "message_id": message_id, "text": text},
         "source": {"type": "message", "chat_id": -100123, "message_id": message_id, "text": text},
-        "actor": {"user_id": user_id, "display_name": "玩家A"},
+        "actor": {"user_id": user_id, "display_name": name},
         "sender_user_id": user_id,
-        "sender_name": "玩家A",
+        "sender_name": name,
         "chat_id": -100123,
         "message_id": message_id,
         "message_text": text,
@@ -153,7 +153,7 @@ class InteractionPayoutContractTests(unittest.TestCase):
             with patch.object(game24_module, "generate_24_puzzle", return_value=[1, 2, 3, 4]):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
-            self.assertIn("v1.0.6", math_actions[0]["text"])
+            self.assertIn("v1.0.7", math_actions[0]["text"])
             self.assertIn("v1.1.7", game_actions[0]["text"])
 
         asyncio.run(scenario())
@@ -164,9 +164,16 @@ class InteractionPayoutContractTests(unittest.TestCase):
             ctx = PluginContext(feature_key="math10", redis=FakeRedis())
             with patch.object(math10_module, "_new_math_question", return_value=("1 + 1", 2)):
                 await plugin.on_interaction(ctx, "start_math_game", start_payload(prize=666))
-            actions = await plugin.on_interaction(ctx, "start_math_game", answer_payload(text="2", user_id=111, message_id=22))
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_math_game",
+                answer_payload(text="2", user_id=111, message_id=22, name="你心里已经有答案了"),
+            )
+            message = next(action for action in actions if action.get("type") == "send_message")
             payout = next(action for action in actions if action.get("type") == "payout")
 
+            self.assertIn("恭喜 你心里已经有答案了 答对！", message["text"])
+            self.assertNotIn("你心里已经有答案了（你心里已经有答案了）", message["text"])
             self.assertEqual(payout["chat_id"], -100123)
             self.assertEqual(payout["amount"], 666)
             self.assertEqual(payout["reply_to_message_id"], 22)

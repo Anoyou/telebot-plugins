@@ -15,7 +15,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 MATH10_GAME_PREFIX = "account_bot:math10:"
 MATH10_CLAIM_PREFIX = "account_bot:math10_claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.0.6"
+PLUGIN_VERSION = "1.0.7"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30
@@ -484,10 +484,10 @@ class Math10Plugin(Plugin):
     @staticmethod
     def _render_success_message(state: Math10GameState, winner_display: str) -> str:
         return (
-            "本题结束\n"
-            f"题目：{state.question} = ? 答案是 {state.answer}。\n"
-            f"奖金：{state.prize}\n"
-            f"你心里已经有答案了（{winner_display}）  答对了。"
+            f"{Math10Plugin._render_start_message(state.question, state.prize)}\n\n"
+            f"恭喜 {winner_display} 答对！\n"
+            f"答案：{state.answer}\n"
+            f"奖金：{state.prize}"
         )
 
 
