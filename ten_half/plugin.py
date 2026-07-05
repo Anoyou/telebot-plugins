@@ -68,7 +68,7 @@ REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.4.1"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 JOIN_MODE_TRANSFER = "transfer"
 JOIN_MODE_SILENT_DEBIT = "silent_debit"
@@ -1472,14 +1472,8 @@ class TenHalfPlugin(Plugin):
 
         if main_message_id:
             interaction_message_ids.add(main_message_id)
-        saved_main_mid = await self._read_saved_message_id(ctx, _main_msg_key(ctx.account_id, cid))
-        if saved_main_mid:
-            interaction_message_ids.add(saved_main_mid)
         if join_notice_msg_id:
             interaction_message_ids.add(join_notice_msg_id)
-        saved_join_mid = await self._read_saved_message_id(ctx, _join_notice_key(ctx.account_id, cid))
-        if saved_join_mid:
-            interaction_message_ids.add(saved_join_mid)
         if settlement_message_key:
             settlement_mid = await self._read_saved_message_id(ctx, settlement_message_key)
             if settlement_mid:

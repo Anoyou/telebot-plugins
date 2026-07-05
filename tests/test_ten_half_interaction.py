@@ -985,6 +985,49 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario_fast())
 
+    def test_non_dealer_start_decision_only_acknowledges_callback(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                max_players=5,
+                phase="lobby",
+                via_interaction=True,
+                dealer_id=111,
+                dealer_name="玩家A",
+                dealer_locked=True,
+                started_at=123.0,
+                main_message_id=900,
+            )
+            game.lobby_players = [(111, "玩家A"), (222, "玩家B")]
+            game.awaiting_start_confirmation = True
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                callback_payload(
+                    user_id=222,
+                    name="玩家B",
+                    callback_data="th:start_now:111",
+                    callback_query_id="cb-start-wrong-user",
+                    message_id=900,
+                ),
+            )
+
+            self.assertEqual(actions, [{
+                "type": "answer_callback",
+                "callback_query_id": "cb-start-wrong-user",
+                "text": "点点点！啥你都点！",
+                "show_alert": True,
+            }])
+            self.assertEqual(game.phase, "lobby")
+            self.assertEqual(game.main_message_id, 900)
+
+        asyncio.run(scenario())
+
     def test_interaction_lobby_timeout_auto_begins_when_min_players_and_dealer_locked(self) -> None:
         async def fast_sleep(_seconds):
             return None
@@ -2042,7 +2085,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             redis.store[reward_key] = "920"
 
             with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
-                await plugin._cleanup_game_messages_task(ctx, -100123, None, None, {899}, settlement_key, [reward_key], 60)
+                await plugin._cleanup_game_messages_task(ctx, -100123, 900, 910, {899}, settlement_key, [reward_key], 60)
 
             actions = messages.applied[0]["actions"]
             self.assertEqual(
@@ -2057,6 +2100,50 @@ class TenHalfInteractionTest(unittest.TestCase):
             )
             self.assertNotIn(700, {action["message_id"] for action in actions})
             self.assertNotIn(710, {action["message_id"] for action in actions})
+
+        asyncio.run(scenario())
+
+    def test_settlement_cleanup_does_not_delete_next_lobby_saved_messages(self) -> None:
+        async def fast_sleep(seconds):
+            self.assertEqual(seconds, 60)
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            messages = FakeMessages()
+            ctx = PluginContext(redis=redis, messages=messages)
+            old_settlement_key = plugin_module._settlement_msg_key(1, -100123, "OLD01")
+            old_reward_key = plugin_module._reward_msg_key(1, -100123, "OLD01", 111)
+            redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
+            redis.store[plugin_module._join_notice_key(1, -100123)] = "910"
+            redis.store[old_settlement_key] = "830"
+            redis.store[old_reward_key] = "820"
+
+            with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                await plugin._cleanup_game_messages_task(
+                    ctx,
+                    -100123,
+                    800,
+                    810,
+                    {799},
+                    old_settlement_key,
+                    [old_reward_key],
+                    60,
+                )
+
+            actions = messages.applied[0]["actions"]
+            self.assertEqual(
+                actions,
+                [
+                    {"type": "delete_message", "message_id": 799, "send_via": "interaction_bot", "chat_id": -100123},
+                    {"type": "delete_message", "message_id": 800, "send_via": "interaction_bot", "chat_id": -100123},
+                    {"type": "delete_message", "message_id": 810, "send_via": "interaction_bot", "chat_id": -100123},
+                    {"type": "delete_message", "message_id": 830, "send_via": "interaction_bot", "chat_id": -100123},
+                    {"type": "delete_message", "message_id": 820, "send_via": "userbot_reply", "chat_id": -100123},
+                ],
+            )
+            self.assertNotIn(900, {action["message_id"] for action in actions})
+            self.assertNotIn(910, {action["message_id"] for action in actions})
 
         asyncio.run(scenario())
 
