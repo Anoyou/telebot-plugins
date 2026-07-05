@@ -153,7 +153,7 @@ class InteractionPayoutContractTests(unittest.TestCase):
             with patch.object(game24_module, "generate_24_puzzle", return_value=[1, 2, 3, 4]):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
-            self.assertIn("v1.0.7", math_actions[0]["text"])
+            self.assertIn("v1.0.8", math_actions[0]["text"])
             self.assertIn("v1.1.7", game_actions[0]["text"])
 
         asyncio.run(scenario())
@@ -174,6 +174,7 @@ class InteractionPayoutContractTests(unittest.TestCase):
 
             self.assertIn("恭喜 你心里已经有答案了 答对！", message["text"])
             self.assertNotIn("你心里已经有答案了（你心里已经有答案了）", message["text"])
+            self.assertEqual(message["text"].count("奖金：666"), 1)
             self.assertEqual(payout["chat_id"], -100123)
             self.assertEqual(payout["amount"], 666)
             self.assertEqual(payout["reply_to_message_id"], 22)

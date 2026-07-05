@@ -31,7 +31,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.21"
+PLUGIN_VERSION = "1.1.23"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -474,6 +474,7 @@ class DiceGridHuntPlugin(Plugin):
                 "filename": "dice_grid_hunt.png",
                 "caption": self._render_round_text(rd, include_guide=True),
                 "parse_mode": "html",
+                "send_via": "interaction_bot",
                 "reply_to_message_id": self._payload_message_id(payload),
                 "save_message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
             }
@@ -536,6 +537,7 @@ class DiceGridHuntPlugin(Plugin):
                 "caption": success_caption,
                 "text": success_caption,
                 "parse_mode": "html",
+                "send_via": "interaction_bot",
             },
             {
                 "type": "payout",
@@ -712,7 +714,20 @@ class DiceGridHuntPlugin(Plugin):
             if not include_guide:
                 return f"<b>{title}</b>\n\n{target_line}"
 
-        return self._render_text(template, template_vars)
+        return self._ensure_round_title_version(self._render_text(template, template_vars))
+
+    def _ensure_round_title_version(self, text: str) -> str:
+        version_label = f"v{MANIFEST.version}"
+        if version_label in text:
+            return text
+        lines = str(text or "").splitlines()
+        if not lines:
+            return text
+        first_line = lines[0]
+        if "九宫格竞猜" not in first_line:
+            return text
+        lines[0] = first_line.replace("九宫格竞猜", f"九宫格竞猜{version_label} 开始", 1)
+        return "\n".join(lines)
 
     def _render_interaction_success(self, rd: RoundState, payout_account: str, payout_mode: str) -> str:
         elapsed = max(0.0, time.monotonic() - rd.started_at)
@@ -721,8 +736,7 @@ class DiceGridHuntPlugin(Plugin):
             f"{self._render_round_text(rd, include_guide=True)}\n\n"
             f"恭喜 {winner} 答对！\n"
             f"答案：图 {rd.answer_index}\n"
-            f"用时：{elapsed:.1f}s\n"
-            f"奖金：{rd.prize}"
+            f"用时：{elapsed:.1f}s"
         )
 
     def _interaction_event_type(self, payload: dict[str, Any]) -> str:

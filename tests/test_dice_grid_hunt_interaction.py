@@ -104,8 +104,9 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(start_actions[0]["type"], "send_photo")
             self.assertEqual(start_actions[0]["filename"], "dice_grid_hunt.png")
             self.assertEqual(start_actions[0]["parse_mode"], "html")
+            self.assertEqual(start_actions[0]["send_via"], "interaction_bot")
             self.assertEqual(start_actions[0]["save_message_id_key"], "dice_grid_hunt:1:-100123:round")
-            self.assertIn("九宫格竞猜v1.1.21 开始", start_actions[0]["caption"])
+            self.assertIn("九宫格竞猜v1.1.23 开始", start_actions[0]["caption"])
 
             answer_actions = await plugin.on_interaction(
                 ctx,
@@ -117,17 +118,41 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(answer_actions[0]["chat_id"], -100123)
             self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
             self.assertEqual(answer_actions[0]["parse_mode"], "html")
+            self.assertEqual(answer_actions[0]["send_via"], "interaction_bot")
             self.assertIn("九宫格竞猜", answer_actions[0]["caption"])
             self.assertEqual(answer_actions[0]["text"], answer_actions[0]["caption"])
             self.assertIn("恭喜 uhaveanswer 答对！", answer_actions[0]["caption"])
             self.assertIn("答案：图 2", answer_actions[0]["caption"])
-            self.assertIn("奖金：1000", answer_actions[0]["caption"])
+            self.assertEqual(answer_actions[0]["caption"].count("+1000"), 1)
             self.assertFalse(any(action.get("type") == "send_message" for action in answer_actions))
             self.assertEqual(answer_actions[1]["type"], "payout")
             self.assertEqual(answer_actions[1]["amount"], 1000)
             self.assertEqual(answer_actions[1]["reply_to_message_id"], 100)
 
         asyncio.run(scenario())
+
+    def test_saved_legacy_round_template_gets_versioned_title(self) -> None:
+        plugin = plugin_module.DiceGridHuntPlugin()
+        plugin._round_message_template = (
+            "<b>九宫格竞猜</b>\n"
+            "竞猜目标：找出点数和为 {target_sum} 的图片，回复 1-9 的图片数字即可\n"
+            "竞猜奖励： +{prize} · 限制 {timeout}s 内 · 每人发的消息有冷却 {guess_cooldown}s"
+        )
+        rd = plugin_module.RoundState(
+            rolls=[[1, 1, 1, 1, 1, 1]] * 9,
+            sums=[6] * 9,
+            answer_index=2,
+            target_sum=21,
+            prize=2333,
+            started_at=time.monotonic(),
+            timeout=90,
+            last_guess_at={},
+        )
+
+        text = plugin._render_round_text(rd, include_guide=True)
+
+        self.assertIn("<b>九宫格竞猜v1.1.23 开始</b>", text)
+        self.assertIn("竞猜目标：找出点数和为 21", text)
 
 
 if __name__ == "__main__":

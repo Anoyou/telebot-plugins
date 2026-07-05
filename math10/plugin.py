@@ -15,7 +15,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 MATH10_GAME_PREFIX = "account_bot:math10:"
 MATH10_CLAIM_PREFIX = "account_bot:math10_claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.0.7"
+PLUGIN_VERSION = "1.0.8"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30
@@ -486,8 +486,7 @@ class Math10Plugin(Plugin):
         return (
             f"{Math10Plugin._render_start_message(state.question, state.prize)}\n\n"
             f"恭喜 {winner_display} 答对！\n"
-            f"答案：{state.answer}\n"
-            f"奖金：{state.prize}"
+            f"答案：{state.answer}"
         )
 
 
