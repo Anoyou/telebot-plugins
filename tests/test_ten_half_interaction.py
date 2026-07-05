@@ -193,6 +193,10 @@ class FakeRedis:
         self.store[key] = str(value)
         return True
 
+    async def delete(self, key):
+        self.store.pop(key, None)
+        return True
+
 
 class TenHalfInteractionTest(unittest.TestCase):
     def test_userbot_command_missing_bet_uses_live_command_prefix(self) -> None:
@@ -255,22 +259,27 @@ class TenHalfInteractionTest(unittest.TestCase):
             await plugin.on_startup(ctx)
             try:
                 start_actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
-                self.assertEqual(len(start_actions), 1)
-                self.assertIn("十点半开局", start_actions[0]["text"])
-                self.assertIn("当前牌桌 ID", start_actions[0]["text"])
-                self.assertIn("save_message_id_key", start_actions[0])
+                start_message = next(action for action in start_actions if action["type"] == "send_message")
+                self.assertIn("十点半开局", start_message["text"])
+                self.assertIn("当前牌桌 ID", start_message["text"])
+                self.assertIn("save_message_id_key", start_message)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
 
                 join_actions = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
-                self.assertEqual([a["type"] for a in join_actions], ["send_message"])
-                self.assertIn("加入牌局成功", join_actions[0]["text"])
-                self.assertIn("牌桌 ID", join_actions[0]["text"])
-                self.assertNotIn("十点半开局", join_actions[0]["text"])
-                self.assertIn("👥 当前玩家 (1/5):\n• 玩家A", join_actions[0]["text"])
+                self.assertEqual([a["type"] for a in join_actions], ["send_message", "start_session"])
+                join_message = next(action for action in join_actions if action["type"] == "send_message")
+                self.assertIn("加入牌局成功", join_message["text"])
+                self.assertIn("牌桌 ID", join_message["text"])
+                self.assertNotIn("十点半开局", join_message["text"])
+                self.assertIn("👥 当前玩家 (1/5):\n• 玩家A", join_message["text"])
                 self.assertEqual(
-                    join_actions[0]["save_message_id_key"],
+                    join_message["save_message_id_key"],
                     plugin_module._join_notice_key(1, -100123),
                 )
+                session_action = next(action for action in join_actions if action["type"] == "start_session")
+                self.assertEqual(session_action["paid_user_ids"], [111])
+                self.assertEqual(session_action["participant_user_ids"], [111])
+                self.assertIn("ten_half_lobby", session_action["data"])
 
                 game = plugin._games[-100123]
                 self.assertEqual(game.player_message_ids[111], 700)
@@ -291,7 +300,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
 
                 first = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
-                self.assertEqual([a["type"] for a in first], ["send_message"])
+                self.assertEqual([a["type"] for a in first], ["send_message", "start_session"])
                 self.assertFalse(plugin._games[-100123].opening_message_deleted)
 
                 redis.store[plugin_module._join_notice_key(1, -100123)] = "910"
@@ -305,14 +314,54 @@ class TenHalfInteractionTest(unittest.TestCase):
                         reply_message_id=710,
                     ),
                 )
-                self.assertEqual([a["type"] for a in second], ["send_message", "delete_message"])
-                self.assertEqual(second[1]["message_id"], 910)
-                self.assertIn("👥 当前玩家 (2/5):\n• 玩家A\n• 玩家B", second[0]["text"])
-                self.assertIn("开始倒计时 15 秒", second[0]["text"])
-                self.assertIn("如果没人加入则庄家可以选择直接开局", second[0]["text"])
+                self.assertEqual([a["type"] for a in second], ["send_message", "delete_message", "start_session"])
+                delete_action = next(action for action in second if action["type"] == "delete_message")
+                send_action = next(action for action in second if action["type"] == "send_message")
+                session_action = next(action for action in second if action["type"] == "start_session")
+                self.assertEqual(delete_action["message_id"], 910)
+                self.assertIn("👥 当前玩家 (2/5):\n• 玩家A\n• 玩家B", send_action["text"])
+                self.assertIn("开始倒计时 15 秒", send_action["text"])
+                self.assertIn("如果没人加入则庄家可以选择直接开局", send_action["text"])
+                self.assertEqual(session_action["paid_user_ids"], [111, 222])
                 self.assertEqual(plugin._games[-100123].phase, "lobby")
                 self.assertTrue(plugin._games[-100123].dealer_locked)
                 self.assertEqual(plugin._games[-100123].dealer_id, 111)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_payment_join_restores_keyword_lobby_from_persisted_state(self) -> None:
+        async def scenario() -> None:
+            redis = FakeRedis()
+            starter = plugin_module.TenHalfPlugin()
+            starter_ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis)
+            await starter.on_startup(starter_ctx)
+            try:
+                await starter.on_interaction(starter_ctx, "start_ten_half", keyword_payload())
+                redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
+            finally:
+                await starter.on_shutdown(starter_ctx)
+
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis)
+            await plugin.on_startup(ctx)
+            try:
+                actions = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
+
+                self.assertEqual([action["type"] for action in actions], ["send_message", "start_session"])
+                send_action = next(action for action in actions if action["type"] == "send_message")
+                session_action = next(action for action in actions if action["type"] == "start_session")
+                self.assertIn("加入牌局成功", send_action["text"])
+                self.assertEqual(session_action["paid_user_ids"], [111])
+                self.assertEqual(session_action["participant_user_ids"], [111])
+                self.assertIn("ten_half_lobby", session_action["data"])
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.bet, 100)
+                self.assertEqual(game.lobby_players, [(111, "玩家A")])
+                self.assertEqual(game.dealer_id, 111)
+                self.assertEqual(game.player_message_ids[111], 700)
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -1070,7 +1119,8 @@ class TenHalfInteractionTest(unittest.TestCase):
 
                 game = plugin._games[-100123]
                 self.assertEqual(game.bet, 1000)
-                self.assertIn("底注: <b>1000</b>", actions[0]["text"])
+                start_message = next(action for action in actions if action["type"] == "send_message")
+                self.assertIn("底注: <b>1000</b>", start_message["text"])
 
                 wrong = await plugin.on_interaction(
                     ctx,
@@ -1178,7 +1228,8 @@ class TenHalfInteractionTest(unittest.TestCase):
 
                 game = plugin._games[-100123]
                 self.assertEqual(game.bet, 1000)
-                self.assertIn("底注: <b>1000</b>", actions[0]["text"])
+                start_message = next(action for action in actions if action["type"] == "send_message")
+                self.assertIn("底注: <b>1000</b>", start_message["text"])
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -1258,8 +1309,8 @@ class TenHalfInteractionTest(unittest.TestCase):
             try:
                 actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
 
-                self.assertEqual(len(actions), 1)
-                action = actions[0]
+                self.assertEqual([action["type"] for action in actions], ["start_session", "send_message"])
+                action = next(action for action in actions if action["type"] == "send_message")
                 self.assertEqual(action["type"], "send_message")
                 self.assertEqual(action["reply_to_message_id"], 600)
                 self.assertEqual(action["save_message_id_key"], plugin_module._main_msg_key(1, -100123))

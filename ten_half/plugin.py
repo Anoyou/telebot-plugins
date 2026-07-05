@@ -8,6 +8,7 @@ A=1, 2-9=面值, 10/J/Q/K=0.5点。目标 10.5 点。
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 import secrets
 import time
@@ -64,6 +65,8 @@ REDIS_MAIN_MSG_KEY_PREFIX = "ten_half:main:"
 REDIS_JOIN_NOTICE_KEY_PREFIX = "ten_half:join_notice:"
 REDIS_SETTLEMENT_MSG_KEY_PREFIX = "ten_half:settlement:"
 REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
+REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
+PLUGIN_VERSION = "0.3.8"
 
 
 @dataclass
@@ -111,6 +114,10 @@ def _settlement_msg_key(account_id: int, chat_id: int, game_id: str) -> str:
 
 def _reward_msg_key(account_id: int, chat_id: int, game_id: str, user_id: int) -> str:
     return f"{REDIS_REWARD_MSG_KEY_PREFIX}{account_id}:{chat_id}:{game_id}:{user_id}"
+
+
+def _lobby_state_key(account_id: int, chat_id: int) -> str:
+    return f"{REDIS_LOBBY_STATE_KEY_PREFIX}{account_id}:{chat_id}"
 
 
 def _normalize_command_name(raw: Any) -> str:
@@ -850,6 +857,38 @@ def _session_sync_action(g: TenHalfGame, payload: dict[str, Any]) -> dict[str, A
         "participant_policy": "paid_pool",
         "paid_user_ids": participant_ids,
         "participant_user_ids": participant_ids,
+        "data": {"ten_half_lobby": _lobby_snapshot(g)},
+    }
+
+
+def _lobby_snapshot(g: TenHalfGame) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "plugin_version": PLUGIN_VERSION,
+        "chat_id": g.chat_id,
+        "bet": g.bet,
+        "max_players": g.max_players,
+        "turn_timeout": g.turn_timeout,
+        "lobby_timeout": g.lobby_timeout,
+        "settlement_cleanup_delay": g.settlement_cleanup_delay,
+        "idle_start_seconds": g.idle_start_seconds,
+        "game_id": g.game_id,
+        "phase": g.phase,
+        "dealer_id": g.dealer_id,
+        "dealer_name": g.dealer_name,
+        "dealer_locked": g.dealer_locked,
+        "host_user_id": g.host_user_id,
+        "host_name": g.host_name,
+        "lobby_players": [{"user_id": uid, "name": name} for uid, name in g.lobby_players],
+        "started_wall_time": time.time() - max(0.0, time.monotonic() - float(g.started_at or time.monotonic())),
+        "via_interaction": g.via_interaction,
+        "main_message_id": g.main_message_id,
+        "join_notice_msg_id": g.join_notice_msg_id,
+        "payment_receiver_name": g.payment_receiver_name,
+        "status_note": g.status_note,
+        "awaiting_start_confirmation": g.awaiting_start_confirmation,
+        "lobby_version": g.lobby_version,
+        "player_message_ids": {str(uid): mid for uid, mid in g.player_message_ids.items()},
     }
 
 
@@ -915,6 +954,113 @@ class TenHalfPlugin(Plugin):
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="ignore")
         return _pint(raw, 0) or None
+
+    async def _save_lobby_state(self, ctx: PluginContext, g: TenHalfGame) -> None:
+        redis = getattr(ctx, "redis", None)
+        if redis is None:
+            return
+        key = _lobby_state_key(ctx.account_id, g.chat_id)
+        ttl = max(60, int(g.lobby_timeout or self._lobby_timeout or 60) + 180)
+        try:
+            await redis.set(key, json.dumps(_lobby_snapshot(g), ensure_ascii=False), ex=ttl)
+        except Exception:
+            if ctx.log:
+                await ctx.log("debug", f"[ten_half] save_lobby_state_failed: chat_id={g.chat_id}")
+
+    async def _delete_lobby_state(self, ctx: PluginContext, g: TenHalfGame) -> None:
+        redis = getattr(ctx, "redis", None)
+        if redis is None:
+            return
+        key = _lobby_state_key(ctx.account_id, g.chat_id)
+        try:
+            delete = getattr(redis, "delete", None)
+            if callable(delete):
+                await delete(key)
+        except Exception:
+            if ctx.log:
+                await ctx.log("debug", f"[ten_half] delete_lobby_state_failed: chat_id={g.chat_id}")
+
+    async def _restore_lobby_state(self, ctx: PluginContext, payload: dict[str, Any], cid: int) -> TenHalfGame | None:
+        snapshot = self._lobby_snapshot_from_payload(payload)
+        if snapshot is None:
+            snapshot = await self._read_lobby_snapshot(ctx, cid)
+        if snapshot is None:
+            return None
+        return self._game_from_lobby_snapshot(snapshot, cid)
+
+    async def _read_lobby_snapshot(self, ctx: PluginContext, cid: int) -> dict[str, Any] | None:
+        redis = getattr(ctx, "redis", None)
+        if redis is None:
+            return None
+        key = _lobby_state_key(ctx.account_id, cid)
+        try:
+            raw = await redis.get(key)
+        except Exception:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    @staticmethod
+    def _lobby_snapshot_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+        session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+        data = session.get("data") if isinstance(session.get("data"), dict) else {}
+        snapshot = data.get("ten_half_lobby")
+        return dict(snapshot) if isinstance(snapshot, dict) else None
+
+    def _game_from_lobby_snapshot(self, snapshot: dict[str, Any], cid: int) -> TenHalfGame | None:
+        if str(snapshot.get("phase") or "lobby") != "lobby":
+            return None
+        bet = _pint(snapshot.get("bet"), 0, minimum=1)
+        if bet <= 0:
+            return None
+        started_wall = float(snapshot.get("started_wall_time") or time.time())
+        elapsed = max(0.0, time.time() - started_wall)
+        g = TenHalfGame(
+            chat_id=cid,
+            bet=bet,
+            max_players=_pint(snapshot.get("max_players"), self._max_players, minimum=2),
+            turn_timeout=_pint(snapshot.get("turn_timeout"), self._turn_timeout, minimum=5),
+            lobby_timeout=_pint(snapshot.get("lobby_timeout"), self._lobby_timeout, minimum=10),
+            settlement_cleanup_delay=_pint(snapshot.get("settlement_cleanup_delay"), self._settlement_cleanup_delay, minimum=0),
+            phase="lobby",
+            started_at=time.monotonic() - elapsed,
+            via_interaction=bool(snapshot.get("via_interaction", True)),
+            host_user_id=_pint(snapshot.get("host_user_id"), 0, minimum=0),
+            host_name=str(snapshot.get("host_name") or ""),
+        )
+        g.idle_start_seconds = _pint(snapshot.get("idle_start_seconds"), g.idle_start_seconds, minimum=1)
+        g.game_id = str(snapshot.get("game_id") or g.game_id)
+        g.dealer_id = _pint(snapshot.get("dealer_id"), 0, minimum=0)
+        g.dealer_name = str(snapshot.get("dealer_name") or g.dealer_name)
+        g.dealer_locked = bool(snapshot.get("dealer_locked"))
+        g.main_message_id = _pint(snapshot.get("main_message_id"), 0) or None
+        g.join_notice_msg_id = _pint(snapshot.get("join_notice_msg_id"), 0) or None
+        g.payment_receiver_name = str(snapshot.get("payment_receiver_name") or "")
+        g.status_note = str(snapshot.get("status_note") or "")
+        g.awaiting_start_confirmation = bool(snapshot.get("awaiting_start_confirmation"))
+        g.lobby_version = _pint(snapshot.get("lobby_version"), 0, minimum=0)
+        raw_players = snapshot.get("lobby_players") if isinstance(snapshot.get("lobby_players"), list) else []
+        for item in raw_players:
+            if not isinstance(item, dict):
+                continue
+            uid = _pint(item.get("user_id"), 0, minimum=0)
+            name = str(item.get("name") or "玩家").strip() or "玩家"
+            if uid:
+                g.lobby_players.append((uid, name))
+        raw_message_ids = snapshot.get("player_message_ids") if isinstance(snapshot.get("player_message_ids"), dict) else {}
+        for key, value in raw_message_ids.items():
+            uid = _pint(key, 0, minimum=0)
+            mid = _pint(value, 0, minimum=0)
+            if uid and mid:
+                g.player_message_ids[uid] = mid
+        return g
 
     def _receiver_label(
         self,
@@ -1577,6 +1723,7 @@ class TenHalfPlugin(Plugin):
             else:
                 g.status_note = "首位成功加入的玩家将自动成为本局庄家。"
             self._games[cid] = g
+            await self._save_lobby_state(ctx, g)
 
         if ctx.log:
             await ctx.log("info",
@@ -1600,6 +1747,7 @@ class TenHalfPlugin(Plugin):
             "started_by_user_id": host_id,
             "started_by_message_id": int(getattr(event, "id", 0) or 0) or None,
             "participant_policy": "paid_pool",
+            "data": {"ten_half_lobby": _lobby_snapshot(g)},
         }
         if host_id:
             session_action["paid_user_ids"] = [host_id]
@@ -1626,6 +1774,7 @@ class TenHalfPlugin(Plugin):
             if not g.lobby_players:
                 g.finished = True
                 self._games.pop(cid, None)
+                await self._delete_lobby_state(ctx, g)
                 g.status_note = "没人加入，牌局已取消。"
                 actions.append(await self._main_action(
                     ctx,
@@ -1640,6 +1789,7 @@ class TenHalfPlugin(Plugin):
                 if len(g.lobby_players) < 2:
                     g.finished = True
                     self._games.pop(cid, None)
+                    await self._delete_lobby_state(ctx, g)
                     g.status_note = "大厅等待已结束，参与人数不足 2 人，牌局已取消。"
                     actions.append(await self._main_action(
                         ctx,
@@ -1773,7 +1923,9 @@ class TenHalfPlugin(Plugin):
             return await self._ix_message(ctx, payload, cid)
         if etype == "session_close":
             async with self._lock(cid):
-                self._games.pop(cid, None)
+                g = self._games.pop(cid, None)
+                if g is not None:
+                    await self._delete_lobby_state(ctx, g)
             return [{"type": "end_session"}]
         return []
 
@@ -1817,6 +1969,7 @@ class TenHalfPlugin(Plugin):
             )
             g.payment_receiver_name = self._receiver_label(ctx, payload, g)
             self._games[cid] = g
+            await self._save_lobby_state(ctx, g)
 
         if ctx.log:
             await ctx.log("info",
@@ -1829,6 +1982,7 @@ class TenHalfPlugin(Plugin):
 
         reply_markup = _kb_join(bet)
         return [
+            _session_sync_action(g, payload),
             await self._main_action(
                 ctx,
                 g,
@@ -1869,7 +2023,20 @@ class TenHalfPlugin(Plugin):
         async with self._lock(cid):
             g = self._games.get(cid)
             if not g or g.finished:
-                return await _skip("no_lobby", g)
+                restored = await self._restore_lobby_state(ctx, payload, cid)
+                if restored is None:
+                    return await _skip("no_lobby", g)
+                self._games[cid] = restored
+                g = restored
+                self._track(asyncio.create_task(
+                    self._lobby_timeout_task(cid, g.started_at, ctx),
+                ))
+                if ctx.log:
+                    await ctx.log(
+                        "info",
+                        f"[ten_half] lobby_restored_for_payment: chat_id={cid}, "
+                        f"players={len(g.lobby_players)}/{g.max_players}",
+                    )
             if not g.via_interaction:
                 return await _skip("not_interaction_lobby", g)
             if not g.payment_receiver_name:
@@ -1917,6 +2084,7 @@ class TenHalfPlugin(Plugin):
             if len(g.lobby_players) == 1:
                 self._lock_first_dealer(g, payer_id, payer_name)
             self._touch_lobby(g)
+            await self._save_lobby_state(ctx, g)
             cnt = len(g.lobby_players)
 
             if ctx.log:
@@ -1931,6 +2099,7 @@ class TenHalfPlugin(Plugin):
                 payer_name=payer_name,
                 amount=amount,
             )
+            actions.append(_session_sync_action(g, payload))
 
             if cnt >= g.max_players and g.dealer_locked:
                 actions.extend(await self._ix_begin(cid, g, g.dealer_id, g.dealer_name, ctx))
@@ -2042,6 +2211,7 @@ class TenHalfPlugin(Plugin):
         if len(g.lobby_players) == 1:
             self._lock_first_dealer(g, aid, aname)
         self._touch_lobby(g)
+        await self._save_lobby_state(ctx, g)
         cnt = len(g.lobby_players)
         if is_callback:
             result: list[dict[str, Any]] = [_answer_action(payload, f"加入成功，牌桌 {g.game_id}")]
@@ -2091,6 +2261,7 @@ class TenHalfPlugin(Plugin):
 
         self._touch_lobby(g)
         g.status_note = f"{_display_name(g.dealer_name)} 选择继续等待后续玩家加入。"
+        await self._save_lobby_state(ctx, g)
         self._schedule_idle_start_prompt(g.chat_id, g, ctx)
         return [
             _answer_action(payload, "继续等待后续玩家加入。"),
@@ -2228,6 +2399,7 @@ class TenHalfPlugin(Plugin):
     ) -> list[dict[str, Any]]:
         g.dealer_id = dealer_id
         g.dealer_name = dealer_name
+        await self._delete_lobby_state(ctx, g)
         g.deck = create_deck()
         g.dealer_cards.clear()
         g.players.clear()
