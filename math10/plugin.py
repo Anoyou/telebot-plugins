@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import json
 import random
 import secrets
@@ -15,6 +14,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 
 MATH10_GAME_PREFIX = "account_bot:math10:"
 MATH10_CLAIM_PREFIX = "account_bot:math10_claim:"
+MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30
@@ -75,6 +75,14 @@ def _game_key(account_id: int, chat_id: int) -> str:
 
 def _claim_key(state: Math10GameState) -> str:
     return f"{MATH10_CLAIM_PREFIX}{state.account_id}:{state.chat_id}:{state.game_id}"
+
+
+def _question_message_key(state: Math10GameState) -> str:
+    return f"math10:{state.account_id}:{state.chat_id}:{state.game_id}:question"
+
+
+def _saved_message_redis_key(account_id: int, save_key: str) -> str:
+    return f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(account_id)}:{save_key}"
 
 
 def _state_from_payload(payload: Any) -> Math10GameState | None:
@@ -168,6 +176,11 @@ def _interaction_actor_name(payload: dict[str, Any], event: dict[str, Any]) -> s
     )
 
 
+def _short_actor_name(name: str) -> str:
+    compact = " ".join(str(name or "").strip().split())
+    return (compact or "未知用户")[:10]
+
+
 def _interaction_payout_info(payload: dict[str, Any]) -> tuple[str, str]:
     settlement = _payload_dict(payload, "settlement")
     payout_account = str(
@@ -194,14 +207,34 @@ async def _interaction_send(
     text: str,
     *,
     reply_to_message_id: int | None = None,
+    save_message_id_key: str | None = None,
 ) -> list[dict[str, Any]]:
     if ctx.messages is not None:
-        await ctx.messages.send(text=text, reply_to_message_id=reply_to_message_id)
+        await ctx.messages.send(
+            text=text,
+            reply_to_message_id=reply_to_message_id,
+            save_message_id_key=save_message_id_key,
+        )
         return []
     action: dict[str, Any] = {"type": "send_message", "text": text}
     if reply_to_message_id is not None:
         action["reply_to_message_id"] = reply_to_message_id
+    if save_message_id_key:
+        action["save_message_id_key"] = save_message_id_key
     return [action]
+
+
+async def _interaction_edit(
+    ctx: PluginContext,
+    text: str,
+    *,
+    chat_id: int,
+    message_id: int,
+) -> list[dict[str, Any]]:
+    if ctx.messages is not None:
+        await ctx.messages.edit(chat_id=chat_id, message_id=message_id, text=text)
+        return []
+    return [{"type": "edit_message", "chat_id": chat_id, "message_id": message_id, "text": text}]
 
 
 @register
@@ -273,7 +306,11 @@ class Math10Plugin(Plugin):
             ttl_seconds=ttl,
             game_id=state.game_id,
         )
-        return await _interaction_send(ctx, self._render_start_message(question, prize))
+        return await _interaction_send(
+            ctx,
+            self._render_start_message(question, prize),
+            save_message_id_key=_question_message_key(state),
+        )
 
     async def _handle_answer(
         self,
@@ -300,7 +337,7 @@ class Math10Plugin(Plugin):
         actor = _payload_dict(payload, "actor")
         winner_user_id = _int_payload(actor.get("user_id"))
         payout_account, payout_mode = _interaction_payout_info(payload)
-        winner_display = html.escape(winner)
+        winner_display = _short_actor_name(winner)
         reply_to_message_id = _interaction_message_id(payload, event)
         await _log(
             ctx,
@@ -312,15 +349,17 @@ class Math10Plugin(Plugin):
             prize=state.prize,
             winner_message_id=reply_to_message_id,
         )
-        message_actions = await _interaction_send(
-            ctx,
-            (
-                f"答对了：{winner_display}\n"
-                f"题目：{state.question} = {state.answer}\n"
-                f"奖金：{state.prize}"
-            ),
-            reply_to_message_id=reply_to_message_id,
-        )
+        result_text = self._render_success_message(state, winner_display)
+        question_message_id = await self._read_question_message_id(ctx, state)
+        if question_message_id is not None:
+            message_actions = await _interaction_edit(
+                ctx,
+                result_text,
+                chat_id=chat_id,
+                message_id=question_message_id,
+            )
+        else:
+            message_actions = await _interaction_send(ctx, result_text, reply_to_message_id=reply_to_message_id)
         return [
             *message_actions,
             {
@@ -418,6 +457,20 @@ class Math10Plugin(Plugin):
         await self._save_state(ctx, state)
         return True
 
+    async def _read_question_message_id(self, ctx: PluginContext, state: Math10GameState) -> int | None:
+        if ctx.redis is None:
+            return None
+        save_key = _question_message_key(state)
+        try:
+            raw = await ctx.redis.get(_saved_message_redis_key(state.account_id, save_key))
+            if raw is None:
+                raw = await ctx.redis.get(save_key)
+        except Exception:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        return _int_payload(raw)
+
     @staticmethod
     def _render_start_message(question: str, prize: int) -> str:
         return (
@@ -425,6 +478,15 @@ class Math10Plugin(Plugin):
             f"题目：{question} = ?\n"
             f"奖金：{prize}\n"
             "直接发送数字答案，答对后我会公告赢家。"
+        )
+
+    @staticmethod
+    def _render_success_message(state: Math10GameState, winner_display: str) -> str:
+        return (
+            "本题结束\n"
+            f"题目：{state.question} = ? 答案是 {state.answer}。\n"
+            f"奖金：{state.prize}\n"
+            f"你心里已经有答案了（{winner_display}）  答对了。"
         )
 
 

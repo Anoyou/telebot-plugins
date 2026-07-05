@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import html
 import json
 import random
 import re
@@ -30,6 +29,7 @@ MIN_TIMEOUT = 30
 MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "account_bot:game24:"
 INTERACTION_GAME_CLAIM_PREFIX = "account_bot:game24_claim:"
+MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
 
 
 # ─────────────────────────────────────────────────────
@@ -345,6 +345,14 @@ def _interaction_claim_key(state: InteractionGameState) -> str:
     return f"{INTERACTION_GAME_CLAIM_PREFIX}{state.account_id}:{state.chat_id}:{state.game_id}"
 
 
+def _interaction_message_key(state: InteractionGameState) -> str:
+    return f"game24:{state.account_id}:{state.chat_id}:{state.game_id}:question"
+
+
+def _saved_message_redis_key(account_id: int, save_key: str) -> str:
+    return f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(account_id)}:{save_key}"
+
+
 def _interaction_state_from_payload(payload: Any) -> InteractionGameState | None:
     if isinstance(payload, bytes):
         payload = payload.decode("utf-8", errors="ignore")
@@ -398,14 +406,34 @@ async def _interaction_send(
     text: str,
     *,
     reply_to_message_id: int | None = None,
+    save_message_id_key: str | None = None,
 ) -> list[dict[str, Any]]:
     if ctx.messages is not None:
-        await ctx.messages.send(text=text, reply_to_message_id=reply_to_message_id)
+        await ctx.messages.send(
+            text=text,
+            reply_to_message_id=reply_to_message_id,
+            save_message_id_key=save_message_id_key,
+        )
         return []
     action: dict[str, Any] = {"type": "send_message", "text": text}
     if reply_to_message_id is not None:
         action["reply_to_message_id"] = reply_to_message_id
+    if save_message_id_key:
+        action["save_message_id_key"] = save_message_id_key
     return [action]
+
+
+async def _interaction_edit(
+    ctx: PluginContext,
+    text: str,
+    *,
+    chat_id: int,
+    message_id: int,
+) -> list[dict[str, Any]]:
+    if ctx.messages is not None:
+        await ctx.messages.edit(chat_id=chat_id, message_id=message_id, text=text)
+        return []
+    return [{"type": "edit_message", "chat_id": chat_id, "message_id": message_id, "text": text}]
 
 
 def _event_message(event: Any) -> Any:
@@ -591,7 +619,11 @@ class Game24Plugin(Plugin):
             timeout=timeout,
             game_id=state.game_id,
         )
-        return await _interaction_send(ctx, self._render_interaction_start_message(numbers, prize))
+        return await _interaction_send(
+            ctx,
+            self._render_interaction_start_message(numbers, prize),
+            save_message_id_key=_interaction_message_key(state),
+        )
 
     async def _handle_interaction_answer(
         self,
@@ -626,8 +658,8 @@ class Game24Plugin(Plugin):
         actor = _payload_dict(payload, "actor")
         winner_user_id = _int_payload(actor.get("user_id"))
         payout_account, payout_mode = _interaction_payout_info(payload)
-        winner_display = html.escape(winner)
-        nums_disp = " ".join(str(item) for item in state.numbers)
+        winner_display = winner
+        reply_to_message_id = _interaction_message_id(payload, event)
         await self._log(
             ctx,
             "info",
@@ -639,16 +671,12 @@ class Game24Plugin(Plugin):
             numbers=state.numbers,
             prize=state.prize,
         )
-        actions = await _interaction_send(
-            ctx,
-            (
-                f"答对了：{winner_display}\n"
-                f"题目：24 点 [{nums_disp}]\n"
-                f"答案：{result.normalized_expr} = 24\n"
-                f"奖金：{state.prize}"
-            ),
-            reply_to_message_id=_interaction_message_id(payload, event),
-        )
+        success_text = self._render_interaction_success_message(state, winner_display, result.normalized_expr)
+        question_message_id = await self._read_interaction_message_id(ctx, state)
+        if question_message_id is not None:
+            actions = await _interaction_edit(ctx, success_text, chat_id=chat_id, message_id=question_message_id)
+        else:
+            actions = await _interaction_send(ctx, success_text, reply_to_message_id=reply_to_message_id)
         actions.extend(
             [
             {
@@ -657,7 +685,7 @@ class Game24Plugin(Plugin):
                 "amount": state.prize,
                 "text": f"+{state.prize}",
                 "parse_mode": "plain",
-                "reply_to_message_id": _interaction_message_id(payload, event),
+                "reply_to_message_id": reply_to_message_id,
                 **({"reply_to_user_id": winner_user_id, "reply_to_search_limit": 50} if winner_user_id is not None else {}),
             },
             {
@@ -667,7 +695,7 @@ class Game24Plugin(Plugin):
                     "status": "winner",
                     "winner_user_id": winner_user_id,
                     "winner_name": winner,
-                    "winner_message_id": _interaction_message_id(payload, event),
+                    "winner_message_id": reply_to_message_id,
                     "question": state.numbers,
                     "answer": result.normalized_expr,
                     "prize": state.prize,
@@ -744,6 +772,20 @@ class Game24Plugin(Plugin):
         state.winner_message_id = _interaction_message_id(payload, event)
         await self._save_interaction_state(ctx, state)
         return True
+
+    async def _read_interaction_message_id(self, ctx: PluginContext, state: InteractionGameState) -> int | None:
+        if ctx.redis is None:
+            return None
+        save_key = _interaction_message_key(state)
+        try:
+            raw = await ctx.redis.get(_saved_message_redis_key(state.account_id, save_key))
+            if raw is None:
+                raw = await ctx.redis.get(save_key)
+        except Exception:
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="ignore")
+        return _int_payload(raw)
 
     # ── 命令 handler（outgoing 触发）────────────
     async def _cmd_handler(
@@ -1194,6 +1236,15 @@ class Game24Plugin(Plugin):
             f"奖金：{prize}\n"
             "可用符号：+ - x ÷ * / ( )\n"
             "请直接发送算式，结果必须等于 24，并且恰好使用这 4 个数字各一次。"
+        )
+
+    @staticmethod
+    def _render_interaction_success_message(state: InteractionGameState, winner_display: str, answer: str) -> str:
+        return (
+            f"{Game24Plugin._render_interaction_start_message(state.numbers, state.prize)}\n\n"
+            f"恭喜 {winner_display} 答对！\n"
+            f"答案：{answer} = 24\n"
+            f"奖金：{state.prize}"
         )
 
     @staticmethod

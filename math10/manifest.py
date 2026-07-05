@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="math10",
     display_name="随机算数题",
-    version="1.0.3",
+    version="1.0.4",
     author="TelePilot Official",
     description="由交互 Bot 开启一局 10 以内算数题，群内第一个答对者获得奖金",
     usage='随机算数题主要由交互中心规则启动：群友通过关键词或付款触发后抢答。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行；结算说明写入 settlement/Trace。',
@@ -43,7 +43,7 @@ MANIFEST = Manifest(
                 "required_event_fields": ["type", "chat_id"],
             },
             "result_contract": {
-                "actions": ["send_message", "send_photo", "send_file", "payout", "end_session", "result", "settlement"]},
+                "actions": ["send_message", "edit_message", "send_photo", "send_file", "payout", "end_session", "result", "settlement"]},
             "settlement": {
                 "mode": "announce_only",
                 "winner_field": "actor.user_id",
@@ -71,7 +71,7 @@ MANIFEST = Manifest(
             },
         }
     ],
-    permissions=["send_message"],
+    permissions=["send_message", "edit_message"],
     config_schema={
         "type": "object",
         "x-ui-mode": "single",
