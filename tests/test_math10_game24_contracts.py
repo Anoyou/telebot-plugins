@@ -154,7 +154,7 @@ class InteractionPayoutContractTests(unittest.TestCase):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
             self.assertIn("v1.0.8", math_actions[0]["text"])
-            self.assertIn("v1.1.7", game_actions[0]["text"])
+            self.assertIn("v1.1.8", game_actions[0]["text"])
 
         asyncio.run(scenario())
 
@@ -194,8 +194,10 @@ class InteractionPayoutContractTests(unittest.TestCase):
                 "start_paid_game",
                 answer_payload(text="(1+2+3)*4", user_id=222, message_id=33),
             )
+            message = next(action for action in actions if action.get("type") == "send_message")
             payout = next(action for action in actions if action.get("type") == "payout")
 
+            self.assertEqual(message["text"].count("奖金：777"), 1)
             self.assertEqual(payout["chat_id"], -100123)
             self.assertEqual(payout["amount"], 777)
             self.assertEqual(payout["reply_to_message_id"], 33)

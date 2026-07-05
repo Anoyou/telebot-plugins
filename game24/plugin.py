@@ -30,7 +30,7 @@ MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "account_bot:game24:"
 INTERACTION_GAME_CLAIM_PREFIX = "account_bot:game24_claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.1.7"
+PLUGIN_VERSION = "1.1.8"
 
 
 # ─────────────────────────────────────────────────────
@@ -1161,7 +1161,7 @@ class Game24Plugin(Plugin):
             if prize_sent
             else f"⚠️ 已识别正确答案，但 +{gs.prize} 奖励消息发送失败，请看插件日志。"
         )
-        suffix = f"\n\n🏆 恭喜 {msg.sender_name} 答对！\n{prize_line}"
+        suffix = f"\n\n🏆 恭喜 {msg.sender_name} 答对！"
         await self._edit_game_message(
             ctx,
             gs,
@@ -1244,8 +1244,7 @@ class Game24Plugin(Plugin):
         return (
             f"{Game24Plugin._render_interaction_start_message(state.numbers, state.prize)}\n\n"
             f"恭喜 {winner_display} 答对！\n"
-            f"答案：{answer} = 24\n"
-            f"奖金：{state.prize}"
+            f"答案：{answer} = 24"
         )
 
     @staticmethod
