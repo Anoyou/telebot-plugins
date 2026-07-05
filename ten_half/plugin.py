@@ -68,7 +68,7 @@ REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.2"
+PLUGIN_VERSION = "0.4.3"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 JOIN_MODE_TRANSFER = "transfer"
 JOIN_MODE_SILENT_DEBIT = "silent_debit"
@@ -740,7 +740,7 @@ def _bump_target_action_version(g: TenHalfGame, uid: int) -> None:
 
 def _kb_unified_action_row() -> list[dict[str, str]]:
     return [
-        {"text": "👀 我的牌", "callback_data": "th:view:0"},
+        {"text": "👀 看我的牌", "callback_data": "th:view:0"},
         {"text": "🃏 要牌", "callback_data": "th:hit:0"},
         {"text": "🛑 停牌", "callback_data": "th:stand:0"},
         {"text": "💰 加倍", "callback_data": "th:double:0"},
@@ -1834,6 +1834,7 @@ class TenHalfPlugin(Plugin):
                 active_names.append(g.dealer_name)
             if active_names:
                 lines.append("⚡ 所有人共用下方按钮，系统按点击者识别自己的手牌；全部停牌/爆牌后统一结算。")
+                lines.append("⚠️ 无感模式下点击加倍会由 userbot 再次自动扣除本局底注；转账模式不自动代扣。")
                 lines.append("⏳ 等待：" + "、".join(_html_name(name) for name in active_names))
         if g.phase == "dealer_turn" and not g.dealer_is_bot and not g.finished:
             lines.append("👉 所有玩家已行动，庄家请要牌或停牌。")
@@ -2806,6 +2807,10 @@ class TenHalfPlugin(Plugin):
             if payload is not None:
                 return [_answer_action(payload, "加倍只能在第一张牌后使用。")]
             return [_send_action("⚠️ 加倍只能在第一张牌后使用。")]
+        if g.join_mode != JOIN_MODE_SILENT_DEBIT:
+            if payload is not None:
+                return [_answer_action(payload, "转账模式不会自动扣款，本局暂不支持按钮加倍；可切换无感模式后再开局。", show_alert=True)]
+            return [_send_action("⚠️ 转账模式不会自动扣款，本局暂不支持按钮加倍。")]
 
         current_stake = int(p.stake or g.paid_stakes.get(p.user_id) or g.bet)
         p.stake = current_stake + g.bet

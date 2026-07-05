@@ -1224,7 +1224,13 @@ class TenHalfInteractionTest(unittest.TestCase):
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             ctx = PluginContext()
-            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="playing", via_interaction=True)
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                phase="playing",
+                via_interaction=True,
+                join_mode=plugin_module.JOIN_MODE_SILENT_DEBIT,
+            )
             game.main_message_id = 900
             game.dealer_id = 333
             game.dealer_name = "庄家"
@@ -1266,6 +1272,62 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(actions[1]["reply_to_user_id"], 111)
             self.assertEqual(actions[2]["type"], "edit_message")
             self.assertIn("已加倍", actions[2]["text"])
+
+        asyncio.run(scenario())
+
+    def test_transfer_mode_double_does_not_auto_debit_or_change_state(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                phase="playing",
+                via_interaction=True,
+                join_mode=plugin_module.JOIN_MODE_TRANSFER,
+            )
+            game.main_message_id = 900
+            game.dealer_id = 333
+            game.dealer_name = "庄家"
+            game.dealer_cards = [plugin_module.Card("♣️", "4"), plugin_module.Card("♦️", "5")]
+            player = plugin_module.PlayerHand(
+                user_id=111,
+                name="玩家A",
+                cards=[plugin_module.Card("♠️", "5")],
+                stake=100,
+            )
+            game.players = [player]
+            game.deck = [plugin_module.Card("♥️", "A")]
+            game.paid_stakes[111] = 100
+            plugin._games[-100123] = game
+
+            actions = await plugin.on_interaction(
+                ctx,
+                "start_ten_half",
+                {
+                    "source": {
+                        "type": "callback_query",
+                        "chat_id": -100123,
+                        "message_id": 900,
+                        "callback_query_id": "cb-double-transfer",
+                        "callback_data": "th:double:0",
+                    },
+                    "actor": {"user_id": 111, "display_name": "玩家A"},
+                },
+            )
+
+            self.assertEqual(actions, [{
+                "type": "answer_callback",
+                "callback_query_id": "cb-double-transfer",
+                "text": "转账模式不会自动扣款，本局暂不支持按钮加倍；可切换无感模式后再开局。",
+                "show_alert": True,
+            }])
+            self.assertFalse(player.doubled)
+            self.assertFalse(player.stood)
+            self.assertEqual(player.stake, 100)
+            self.assertEqual(game.paid_stakes[111], 100)
+            self.assertEqual([card.rank for card in player.cards], ["5"])
+            self.assertEqual([card.rank for card in game.deck], ["A"])
 
         asyncio.run(scenario())
 
