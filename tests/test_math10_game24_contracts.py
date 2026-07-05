@@ -141,6 +141,23 @@ def answer_payload(*, text: str, user_id: int = 111, message_id: int = 20) -> di
 
 
 class InteractionPayoutContractTests(unittest.TestCase):
+    def test_start_messages_include_plugin_versions(self) -> None:
+        async def scenario() -> None:
+            math_plugin = math10_module.Math10Plugin()
+            math_ctx = PluginContext(feature_key="math10", redis=FakeRedis())
+            with patch.object(math10_module, "_new_math_question", return_value=("1 + 1", 2)):
+                math_actions = await math_plugin.on_interaction(math_ctx, "start_math_game", start_payload(prize=666))
+
+            game_plugin = game24_module.Game24Plugin()
+            game_ctx = PluginContext(feature_key="game24", redis=FakeRedis())
+            with patch.object(game24_module, "generate_24_puzzle", return_value=[1, 2, 3, 4]):
+                game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
+
+            self.assertIn("v1.0.5", math_actions[0]["text"])
+            self.assertIn("v1.1.6", game_actions[0]["text"])
+
+        asyncio.run(scenario())
+
     def test_math10_answer_payout_carries_prize_and_user_fallback(self) -> None:
         async def scenario() -> None:
             plugin = math10_module.Math10Plugin()

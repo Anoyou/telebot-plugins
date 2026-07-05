@@ -15,6 +15,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 MATH10_GAME_PREFIX = "account_bot:math10:"
 MATH10_CLAIM_PREFIX = "account_bot:math10_claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
+PLUGIN_VERSION = "1.0.5"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30
@@ -474,7 +475,7 @@ class Math10Plugin(Plugin):
     @staticmethod
     def _render_start_message(question: str, prize: int) -> str:
         return (
-            "算数题测试开始\n"
+            f"算数题测试开始 v{PLUGIN_VERSION}\n"
             f"题目：{question} = ?\n"
             f"奖金：{prize}\n"
             "直接发送数字答案，答对后我会公告赢家。"

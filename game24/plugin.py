@@ -30,6 +30,7 @@ MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "account_bot:game24:"
 INTERACTION_GAME_CLAIM_PREFIX = "account_bot:game24_claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
+PLUGIN_VERSION = "1.1.6"
 
 
 # ─────────────────────────────────────────────────────
@@ -1214,7 +1215,7 @@ class Game24Plugin(Plugin):
     def _render_start_message(self, numbers: list[int], prize: int) -> str:
         nums_disp = " ] [ ".join(str(n) for n in numbers)
         return (
-            "🎯 24 点开始\n"
+            f"🎯 24 点开始 v{PLUGIN_VERSION}\n"
             "━━━━━━━━\n"
             f"🎲 数字：[ {nums_disp} ]\n"
             f"💰 奖金：{prize}\n"
@@ -1230,7 +1231,7 @@ class Game24Plugin(Plugin):
     def _render_interaction_start_message(numbers: list[int], prize: int) -> str:
         nums_disp = " ] [ ".join(str(n) for n in numbers)
         return (
-            "24 点开始\n"
+            f"24 点开始 v{PLUGIN_VERSION}\n"
             "━━━━━━━━\n"
             f"数字：[ {nums_disp} ]\n"
             f"奖金：{prize}\n"
