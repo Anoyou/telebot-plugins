@@ -31,7 +31,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.23"
+PLUGIN_VERSION = "1.1.24"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -529,16 +529,20 @@ class DiceGridHuntPlugin(Plugin):
                 f"[dice_grid_hunt] 交互 Bot 答对 chat={chat_id} winner={rd.winner_name!r} answer={rd.answer_index} prize={rd.prize}",
             )
         success_caption = self._render_interaction_success(rd, payout_account, payout_mode)
+        edit_action: dict[str, Any] = {
+            "type": "edit_caption",
+            "chat_id": chat_id,
+            "message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
+            "caption": success_caption,
+            "text": success_caption,
+            "parse_mode": "html",
+            "send_via": "interaction_bot",
+        }
+        question_message_id = self._payload_reply_to_message_id(payload)
+        if question_message_id:
+            edit_action["message_id"] = question_message_id
         return [
-            {
-                "type": "edit_caption",
-                "chat_id": chat_id,
-                "message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
-                "caption": success_caption,
-                "text": success_caption,
-                "parse_mode": "html",
-                "send_via": "interaction_bot",
-            },
+            edit_action,
             {
                 "type": "payout",
                 "chat_id": chat_id,
@@ -807,6 +811,21 @@ class DiceGridHuntPlugin(Plugin):
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         value = payload.get("message_id") or source.get("message_id") or payload.get("source_message_id") or event.get("message_id")
+        parsed = self._positive_int(value, 0, minimum=0)
+        return parsed or None
+
+    def _payload_reply_to_message_id(self, payload: dict[str, Any]) -> int | None:
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        reply_to = payload.get("reply_to") if isinstance(payload.get("reply_to"), dict) else {}
+        value = (
+            reply_to.get("message_id")
+            or payload.get("reply_to_message_id")
+            or message.get("reply_to_message_id")
+            or source.get("reply_to_message_id")
+            or event.get("reply_to_message_id")
+        )
         parsed = self._positive_int(value, 0, minimum=0)
         return parsed or None
 

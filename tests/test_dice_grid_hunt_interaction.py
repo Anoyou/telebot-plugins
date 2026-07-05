@@ -73,14 +73,17 @@ def start_payload(*, prize: int = 100) -> dict:
     }
 
 
-def answer_payload(*, text: str, user_id: int = 222, name: str = "uhaveanswer") -> dict:
-    return {
+def answer_payload(*, text: str, user_id: int = 222, name: str = "uhaveanswer", reply_to_message_id: int | None = None) -> dict:
+    payload = {
         "source": {"type": "message", "chat_id": -100123, "message_id": 100, "text": text},
         "actor": {"user_id": user_id, "display_name": name},
         "sender_user_id": user_id,
         "sender_name": name,
         "message_text": text,
     }
+    if reply_to_message_id is not None:
+        payload["reply_to"] = {"message_id": reply_to_message_id}
+    return payload
 
 
 class DiceGridHuntInteractionTests(unittest.TestCase):
@@ -106,16 +109,17 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(start_actions[0]["parse_mode"], "html")
             self.assertEqual(start_actions[0]["send_via"], "interaction_bot")
             self.assertEqual(start_actions[0]["save_message_id_key"], "dice_grid_hunt:1:-100123:round")
-            self.assertIn("九宫格竞猜v1.1.23 开始", start_actions[0]["caption"])
+            self.assertIn("九宫格竞猜v1.1.24 开始", start_actions[0]["caption"])
 
             answer_actions = await plugin.on_interaction(
                 ctx,
                 "start_dice_grid_hunt",
-                answer_payload(text="2"),
+                answer_payload(text="2", reply_to_message_id=777),
             )
 
             self.assertEqual(answer_actions[0]["type"], "edit_caption")
             self.assertEqual(answer_actions[0]["chat_id"], -100123)
+            self.assertEqual(answer_actions[0]["message_id"], 777)
             self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
             self.assertEqual(answer_actions[0]["parse_mode"], "html")
             self.assertEqual(answer_actions[0]["send_via"], "interaction_bot")
@@ -128,6 +132,35 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(answer_actions[1]["type"], "payout")
             self.assertEqual(answer_actions[1]["amount"], 1000)
             self.assertEqual(answer_actions[1]["reply_to_message_id"], 100)
+
+        asyncio.run(scenario())
+
+    def test_correct_answer_keeps_saved_key_fallback_without_reply_target(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.DiceGridHuntPlugin()
+            ctx = PluginContext(account_id=1, feature_key="dice_grid_hunt")
+            plugin_module._render_grid_png = lambda _rd: b"png-bytes"
+            plugin._new_round = lambda prize, timeout=None: plugin_module.RoundState(
+                rolls=[[1, 1, 1, 1, 1, 1]] * 9,
+                sums=[6] * 9,
+                answer_index=2,
+                target_sum=22,
+                prize=prize,
+                started_at=time.monotonic() - 54.1,
+                timeout=timeout or 90,
+                last_guess_at={},
+            )
+
+            await plugin.on_interaction(ctx, "start_dice_grid_hunt", start_payload(prize=1000))
+            answer_actions = await plugin.on_interaction(
+                ctx,
+                "start_dice_grid_hunt",
+                answer_payload(text="2"),
+            )
+
+            self.assertEqual(answer_actions[0]["type"], "edit_caption")
+            self.assertNotIn("message_id", answer_actions[0])
+            self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
 
         asyncio.run(scenario())
 
@@ -151,7 +184,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
         text = plugin._render_round_text(rd, include_guide=True)
 
-        self.assertIn("<b>九宫格竞猜v1.1.23 开始</b>", text)
+        self.assertIn("<b>九宫格竞猜v1.1.24 开始</b>", text)
         self.assertIn("竞猜目标：找出点数和为 21", text)
 
 
