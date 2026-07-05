@@ -1255,11 +1255,17 @@ class TenHalfInteractionTest(unittest.TestCase):
 
             self.assertTrue(player.doubled)
             self.assertTrue(player.stood)
+            self.assertEqual(player.stake, 200)
+            self.assertEqual(game.paid_stakes[111], 200)
             self.assertEqual([card.rank for card in player.cards], ["5", "A"])
             self.assertEqual(actions[0]["type"], "answer_callback")
-            self.assertIn("加倍要到 A", actions[0]["text"])
-            self.assertEqual(actions[1]["type"], "edit_message")
-            self.assertIn("已加倍", actions[1]["text"])
+            self.assertIn("加倍扣款 100，要到 A", actions[0]["text"])
+            self.assertEqual(actions[1]["type"], "send_message")
+            self.assertEqual(actions[1]["send_via"], plugin_module.USERBOT_SEND_VIA)
+            self.assertEqual(actions[1]["text"], "-100")
+            self.assertEqual(actions[1]["reply_to_user_id"], 111)
+            self.assertEqual(actions[2]["type"], "edit_message")
+            self.assertIn("已加倍", actions[2]["text"])
 
         asyncio.run(scenario())
 
@@ -2015,6 +2021,38 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(rewards[0]["reply_to_user_id"], 111)
             self.assertTrue(any("庄家 <b>玩家A</b> 🎉是赢家 获得 <b>270</b>" in action.get("text", "") for action in actions))
             self.assertTrue(any("玩家B</b>: 2张 · 9点 → ❌ 输 100" in action.get("text", "") for action in actions))
+
+        asyncio.run(scenario())
+
+    def test_doubled_flag_without_extra_paid_stake_does_not_inflate_pot(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            game = plugin_module.TenHalfGame(chat_id=-100123, bet=100)
+            game.game_id = "84F383"
+            game.dealer_id = 111
+            game.dealer_name = "庄家"
+            game.paid_stakes = {111: 100, 222: 100}
+            game.dealer_cards = [
+                plugin_module.Card("♠️", "A"),
+                plugin_module.Card("♥️", "2"),
+                plugin_module.Card("♦️", "2"),
+                plugin_module.Card("♣️", "2"),
+                plugin_module.Card("♠️", "2"),
+            ]
+            player = plugin_module.PlayerHand(user_id=222, name="玩家", stake=100, doubled=True)
+            player.cards = [plugin_module.Card("♣️", "A"), plugin_module.Card("♦️", "A")]
+            game.players = [player]
+            game.player_message_ids = {111: 700, 222: 710}
+
+            actions = await plugin._ix_settle(-100123, game, PluginContext())
+            settlement = next(action for action in actions if action.get("type") == "send_message")
+            reward = next(action for action in actions if action.get("type") == "payout")
+
+            self.assertIn("总底注池: <b>200</b>", settlement["text"])
+            self.assertIn("玩家</b>: 2张 · 2点 → ❌ 输 100", settlement["text"])
+            self.assertIn("庄家 <b>庄家</b> 🎉是赢家 获得 <b>180</b>", settlement["text"])
+            self.assertEqual(reward["amount"], 180)
+            self.assertEqual(reward["reply_to_user_id"], 111)
 
         asyncio.run(scenario())
 

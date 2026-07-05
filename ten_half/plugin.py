@@ -68,7 +68,7 @@ REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.1"
+PLUGIN_VERSION = "0.4.2"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 JOIN_MODE_TRANSFER = "transfer"
 JOIN_MODE_SILENT_DEBIT = "silent_debit"
@@ -203,6 +203,7 @@ class PlayerHand:
     user_id: int
     name: str
     cards: list[Card] = field(default_factory=list)
+    stake: int = 0
     stood: bool = False
     busted: bool = False
     doubled: bool = False
@@ -283,6 +284,7 @@ class TenHalfGame:
     action_versions: dict[int, int] = field(default_factory=dict)
     timeout_versions: dict[int, int] = field(default_factory=dict)
     player_message_ids: dict[int, int] = field(default_factory=dict)
+    paid_stakes: dict[int, int] = field(default_factory=dict)
 
     # ── 庄家辅助 ─────────────────────────────────────
     @property
@@ -897,12 +899,13 @@ def _delete_action(
     return action
 
 
-def _debit_action(g: TenHalfGame, user_id: int) -> dict[str, Any]:
+def _debit_action(g: TenHalfGame, user_id: int, *, amount: int | None = None) -> dict[str, Any]:
+    debit_amount = int(amount if amount is not None else g.bet)
     return {
         "type": "send_message",
         "send_via": USERBOT_SEND_VIA,
         "chat_id": g.chat_id,
-        "text": f"-{g.bet}",
+        "text": f"-{debit_amount}",
         "parse_mode": "plain",
         "reply_to_user_id": int(user_id),
         "reply_to_search_limit": 50,
@@ -965,6 +968,7 @@ def _lobby_snapshot(g: TenHalfGame) -> dict[str, Any]:
         "awaiting_start_confirmation": g.awaiting_start_confirmation,
         "lobby_version": g.lobby_version,
         "player_message_ids": {str(uid): mid for uid, mid in g.player_message_ids.items()},
+        "paid_stakes": {str(uid): int(amount) for uid, amount in g.paid_stakes.items()},
     }
 
 
@@ -1187,6 +1191,14 @@ class TenHalfPlugin(Plugin):
             mid = _pint(value, 0, minimum=0)
             if uid and mid:
                 g.player_message_ids[uid] = mid
+        raw_stakes = snapshot.get("paid_stakes") if isinstance(snapshot.get("paid_stakes"), dict) else {}
+        for key, value in raw_stakes.items():
+            uid = _pint(key, 0, minimum=0)
+            amount = _pint(value, 0, minimum=0)
+            if uid and amount > 0:
+                g.paid_stakes[uid] = amount
+        for uid, _name in g.lobby_players:
+            g.paid_stakes.setdefault(uid, g.bet)
         return g
 
     def _receiver_label(
@@ -2199,6 +2211,7 @@ class TenHalfPlugin(Plugin):
                     ]
 
             g.lobby_players.append((payer_id, payer_name))
+            g.paid_stakes[payer_id] = g.bet
             self._remember_player_message(g, payer_id, mid)
             if len(g.lobby_players) == 1:
                 self._lock_first_dealer(g, payer_id, payer_name)
@@ -2334,6 +2347,7 @@ class TenHalfPlugin(Plugin):
             return [hint("人数已满。")]
 
         g.lobby_players.append((aid, aname))
+        g.paid_stakes[aid] = g.bet
         if not is_callback:
             self._remember_player_message(g, aid, mid)
         if len(g.lobby_players) == 1:
@@ -2574,7 +2588,7 @@ class TenHalfPlugin(Plugin):
 
         for uid, name in g.lobby_players:
             if uid != dealer_id:
-                g.players.append(PlayerHand(user_id=uid, name=name))
+                g.players.append(PlayerHand(user_id=uid, name=name, stake=int(g.paid_stakes.get(uid) or g.bet)))
 
         if not g.players:
             g.finished = True
@@ -2793,6 +2807,9 @@ class TenHalfPlugin(Plugin):
                 return [_answer_action(payload, "加倍只能在第一张牌后使用。")]
             return [_send_action("⚠️ 加倍只能在第一张牌后使用。")]
 
+        current_stake = int(p.stake or g.paid_stakes.get(p.user_id) or g.bet)
+        p.stake = current_stake + g.bet
+        g.paid_stakes[p.user_id] = p.stake
         p.doubled = True
         if not g.deck:
             g.deck = create_deck()
@@ -2804,17 +2821,18 @@ class TenHalfPlugin(Plugin):
             await ctx.log("info",
                 f"[ten_half] player_action: uid={p.user_id}, name={p.name}, "
                 f"action=double, card={card.display()}, new_value={_fv(p.value)}, "
-                f"bet_doubled={g.bet * 2}, busted={p.value > 10.5 + 1e-9}, chat_id={cid}")
+                f"stake={p.stake}, busted={p.value > 10.5 + 1e-9}, chat_id={cid}")
 
         actions: list[dict[str, Any]] = []
         if payload is not None:
-            actions.append(_answer_action(payload, f"加倍要到 {card.display()}，当前 {_fv(p.value)}点。"))
+            actions.append(_answer_action(payload, f"加倍扣款 {g.bet}，要到 {card.display()}，当前 {_fv(p.value)}点。"))
+        actions.append(_debit_action(g, p.user_id, amount=g.bet))
         if p.value > 10.5 + 1e-9:
             p.busted = True
-            g.status_note = f"{_display_name(p.name)} 加倍后爆牌，下注按 {g.bet * 2} 计算。"
+            g.status_note = f"{_display_name(p.name)} 加倍后爆牌，下注按 {p.stake} 计算。"
         else:
             p.stood = True
-            g.status_note = f"{_display_name(p.name)} 加倍后停牌，下注按 {g.bet * 2} 计算。"
+            g.status_note = f"{_display_name(p.name)} 加倍后停牌，下注按 {p.stake} 计算。"
 
         actions.extend(await self._ix_refresh_or_settle(cid, g, ctx))
         return actions
@@ -2867,9 +2885,9 @@ class TenHalfPlugin(Plugin):
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
-        # 总底注池 = 庄家基础入场金额 + 所有闲家有效下注（含加倍）
-        dealer_bet = g.bet if g.dealer_id else 0
-        total_pot = dealer_bet + sum(g.bet * (2 if p.doubled else 1) for p in g.players)
+        # 总底注池只能来自真实已支付 stake；加倍必须先追加扣款，不能只凭 doubled 标记扩池。
+        dealer_bet = int(g.paid_stakes.get(g.dealer_id) or (g.bet if g.dealer_id else 0))
+        total_pot = dealer_bet + sum(int(p.stake or g.paid_stakes.get(p.user_id) or g.bet) for p in g.players)
 
         # ── 结算明细 ──
         lines = [
@@ -2885,7 +2903,7 @@ class TenHalfPlugin(Plugin):
         losers: list[dict[str, Any]] = []
 
         for p in g.players:
-            eb = g.bet * (2 if p.doubled else 1)
+            eb = int(p.stake or g.paid_stakes.get(p.user_id) or g.bet)
             outcome = self._compare(p, dv, db, dn, dfs)
 
             # 倍数
