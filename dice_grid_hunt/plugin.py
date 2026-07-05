@@ -31,7 +31,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.25"
+PLUGIN_VERSION = "1.1.26"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -506,7 +506,7 @@ class DiceGridHuntPlugin(Plugin):
                     {"type": "end_session"},
                 ]
 
-            user_id = self._positive_int(payload.get("sender_user_id"), 0, minimum=0)
+            user_id = self._interaction_actor_user_id(payload)
             now = time.monotonic()
             last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
             last_at = last_guess_at.get(user_id, 0.0)
@@ -541,20 +541,19 @@ class DiceGridHuntPlugin(Plugin):
             "send_via": "interaction_bot",
             "send_via_options": ["interaction_bot", "userbot_reply"],
         }
-        question_message_id = self._payload_reply_to_message_id(payload)
-        if question_message_id:
-            edit_action["message_id"] = question_message_id
-            edit_action["edit_message_id"] = question_message_id
+        payout_action: dict[str, Any] = {
+            "type": "payout",
+            "chat_id": chat_id,
+            "amount": rd.prize,
+            "text": self._render_text(self._prize_message_template, {"prize": rd.prize}),
+            "parse_mode": "plain",
+            "reply_to_message_id": rd.winner_message_id,
+        }
+        if rd.winner_id:
+            payout_action["reply_to_user_id"] = rd.winner_id
         return [
             edit_action,
-            {
-                "type": "payout",
-                "chat_id": chat_id,
-                "amount": rd.prize,
-                "text": self._render_text(self._prize_message_template, {"prize": rd.prize}),
-                "parse_mode": "plain",
-                "reply_to_message_id": rd.winner_message_id,
-            },
+            payout_action,
             {
                 "type": "result",
                 "success": True,
@@ -762,7 +761,36 @@ class DiceGridHuntPlugin(Plugin):
     def _interaction_message_text(self, payload: dict[str, Any]) -> str:
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-        return str(payload.get("message_text") or source.get("text") or event.get("text") or "").strip()
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+        return str(
+            payload.get("message_text")
+            or payload.get("text")
+            or message.get("text")
+            or source.get("text")
+            or event.get("text")
+            or raw.get("text")
+            or ""
+        ).strip()
+
+    def _interaction_actor_user_id(self, payload: dict[str, Any]) -> int:
+        sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        player = payload.get("player") if isinstance(payload.get("player"), dict) else {}
+        source_actor = payload.get("source_actor") if isinstance(payload.get("source_actor"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        return self._positive_int(
+            payload.get("sender_user_id")
+            or payload.get("user_id")
+            or sender.get("user_id")
+            or actor.get("user_id")
+            or player.get("user_id")
+            or source_actor.get("user_id")
+            or event.get("user_id")
+            or event.get("sender_user_id"),
+            0,
+            minimum=0,
+        )
 
     def _interaction_actor_name(self, payload: dict[str, Any]) -> str:
         actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}

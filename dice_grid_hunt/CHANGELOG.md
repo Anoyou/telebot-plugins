@@ -1,4 +1,9 @@
 # 更新日志
+## 1.1.26 (2026-07-06)
+- 修复交互 Bot 会话答题时未读取 TelePilot 当前标准 payload 的 `message.text`，导致答对后返回空动作、无法触发 `edit_caption` 的问题。
+- 答对后的 caption 编辑统一依赖开局题图保存键定位原图片，避免玩家回复其他消息时误把 `reply_to_message_id` 当作图片消息 ID。
+- 交互链路发奖 action 补充 `reply_to_user_id`，方便平台在消息 ID 缺失时使用近期发言兜底，并提升结算日志可排查性。
+
 ## 1.1.25 (2026-07-06)
 - 九宫格开局题图 action 显式携带 `chat_id`，避免不同交互入口下仅依赖事件兜底导致保存原图消息 ID 不稳定。
 - 答对编辑 caption 同时携带 `message_id` / `edit_message_id` 和保存键，并声明优先交互 Bot、可回退 UserBot 的发送通道。
