@@ -31,7 +31,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.24"
+PLUGIN_VERSION = "1.1.25"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -470,11 +470,13 @@ class DiceGridHuntPlugin(Plugin):
         return [
             {
                 "type": "send_photo",
+                "chat_id": chat_id,
                 "photo_base64": base64.b64encode(_render_grid_png(rd)).decode("ascii"),
                 "filename": "dice_grid_hunt.png",
                 "caption": self._render_round_text(rd, include_guide=True),
                 "parse_mode": "html",
                 "send_via": "interaction_bot",
+                "send_via_options": ["interaction_bot", "userbot_reply"],
                 "reply_to_message_id": self._payload_message_id(payload),
                 "save_message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
             }
@@ -537,10 +539,12 @@ class DiceGridHuntPlugin(Plugin):
             "text": success_caption,
             "parse_mode": "html",
             "send_via": "interaction_bot",
+            "send_via_options": ["interaction_bot", "userbot_reply"],
         }
         question_message_id = self._payload_reply_to_message_id(payload)
         if question_message_id:
             edit_action["message_id"] = question_message_id
+            edit_action["edit_message_id"] = question_message_id
         return [
             edit_action,
             {
@@ -818,10 +822,12 @@ class DiceGridHuntPlugin(Plugin):
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        message_reply_to = message.get("reply_to") if isinstance(message.get("reply_to"), dict) else {}
         reply_to = payload.get("reply_to") if isinstance(payload.get("reply_to"), dict) else {}
         value = (
             reply_to.get("message_id")
             or payload.get("reply_to_message_id")
+            or message_reply_to.get("message_id")
             or message.get("reply_to_message_id")
             or source.get("reply_to_message_id")
             or event.get("reply_to_message_id")

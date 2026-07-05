@@ -105,11 +105,13 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
             start_actions = await plugin.on_interaction(ctx, "start_dice_grid_hunt", start_payload(prize=1000))
             self.assertEqual(start_actions[0]["type"], "send_photo")
+            self.assertEqual(start_actions[0]["chat_id"], -100123)
             self.assertEqual(start_actions[0]["filename"], "dice_grid_hunt.png")
             self.assertEqual(start_actions[0]["parse_mode"], "html")
             self.assertEqual(start_actions[0]["send_via"], "interaction_bot")
+            self.assertEqual(start_actions[0]["send_via_options"], ["interaction_bot", "userbot_reply"])
             self.assertEqual(start_actions[0]["save_message_id_key"], "dice_grid_hunt:1:-100123:round")
-            self.assertIn("九宫格竞猜v1.1.24 开始", start_actions[0]["caption"])
+            self.assertIn("九宫格竞猜v1.1.25 开始", start_actions[0]["caption"])
 
             answer_actions = await plugin.on_interaction(
                 ctx,
@@ -120,9 +122,11 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(answer_actions[0]["type"], "edit_caption")
             self.assertEqual(answer_actions[0]["chat_id"], -100123)
             self.assertEqual(answer_actions[0]["message_id"], 777)
+            self.assertEqual(answer_actions[0]["edit_message_id"], 777)
             self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
             self.assertEqual(answer_actions[0]["parse_mode"], "html")
             self.assertEqual(answer_actions[0]["send_via"], "interaction_bot")
+            self.assertEqual(answer_actions[0]["send_via_options"], ["interaction_bot", "userbot_reply"])
             self.assertIn("九宫格竞猜", answer_actions[0]["caption"])
             self.assertEqual(answer_actions[0]["text"], answer_actions[0]["caption"])
             self.assertIn("恭喜 uhaveanswer 答对！", answer_actions[0]["caption"])
@@ -184,7 +188,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
         text = plugin._render_round_text(rd, include_guide=True)
 
-        self.assertIn("<b>九宫格竞猜v1.1.24 开始</b>", text)
+        self.assertIn("<b>九宫格竞猜v1.1.25 开始</b>", text)
         self.assertIn("竞猜目标：找出点数和为 21", text)
 
 

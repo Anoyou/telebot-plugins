@@ -1,4 +1,9 @@
 # 更新日志
+## 1.1.25 (2026-07-06)
+- 九宫格开局题图 action 显式携带 `chat_id`，避免不同交互入口下仅依赖事件兜底导致保存原图消息 ID 不稳定。
+- 答对编辑 caption 同时携带 `message_id` / `edit_message_id` 和保存键，并声明优先交互 Bot、可回退 UserBot 的发送通道。
+- 兼容 TelePilot payload 中 `message.reply_to.message_id` 形态的原图回复 ID。
+
 ## 1.1.24 (2026-07-06)
 - 答对后编辑原图 caption 时优先使用玩家回复的原图 `message_id`，保留保存键兜底，避免题图消息 ID 未命中时只发奖不编辑。
 - 补充交互 Bot 回归测试，覆盖回复原图编辑和保存键兜底两种路径。
