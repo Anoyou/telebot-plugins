@@ -66,7 +66,9 @@ REDIS_JOIN_NOTICE_KEY_PREFIX = "ten_half:join_notice:"
 REDIS_SETTLEMENT_MSG_KEY_PREFIX = "ten_half:settlement:"
 REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
-PLUGIN_VERSION = "0.3.9"
+INTERACTION_SEND_VIA = "interaction_bot"
+USERBOT_SEND_VIA = "userbot_reply"
+PLUGIN_VERSION = "0.3.10"
 
 
 @dataclass
@@ -152,6 +154,10 @@ def _inline_payment_amount(text: str) -> int:
 def _is_userbot_message(payload: dict[str, Any]) -> bool:
     source = _ps(payload)
     return str(source.get("channel") or "").strip() == "userbot"
+
+
+def _is_userbot_self(payload: dict[str, Any], user_id: int) -> bool:
+    return _is_userbot_message(payload) or _is_payload_userbot_actor(payload, user_id)
 
 
 # ─────────────────────────────────────────────────────
@@ -795,7 +801,7 @@ def _send_action(
     reply_markup: dict[str, Any] | None = None,
     save_message_id_key: str | None = None,
     replace_saved_message_id_key: str | None = None,
-    send_via: str | None = None,
+    send_via: str | None = INTERACTION_SEND_VIA,
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
         "type": "send_message",
@@ -820,6 +826,7 @@ def _edit_action(
     text: str,
     *,
     reply_markup: dict[str, Any] | None = None,
+    send_via: str | None = INTERACTION_SEND_VIA,
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
         "type": "edit_message",
@@ -827,6 +834,8 @@ def _edit_action(
         "text": text,
         "parse_mode": "html",
     }
+    if send_via is not None:
+        action["send_via"] = send_via
     if reply_markup is not None:
         action["reply_markup"] = reply_markup
     return action
@@ -836,7 +845,7 @@ def _delete_action(
     message_id: int,
     *,
     chat_id: int | None = None,
-    send_via: str | None = None,
+    send_via: str | None = INTERACTION_SEND_VIA,
 ) -> dict[str, Any]:
     action: dict[str, Any] = {
         "type": "delete_message",
@@ -914,7 +923,7 @@ class TenHalfPlugin(Plugin):
     display_name = "十点半"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"command", "timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"}
+    command_config_keys = {"timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -960,13 +969,18 @@ class TenHalfPlugin(Plugin):
         redis = getattr(ctx, "redis", None)
         if redis is None:
             return None
-        try:
-            raw = await redis.get(key)
-        except Exception:
-            return None
-        if isinstance(raw, bytes):
-            raw = raw.decode("utf-8", errors="ignore")
-        return _pint(raw, 0) or None
+        keys = [key, f"tp:msgid:{ctx.account_id}:{key}"]
+        for read_key in dict.fromkeys(keys):
+            try:
+                raw = await redis.get(read_key)
+            except Exception:
+                continue
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="ignore")
+            parsed = _pint(raw, 0) or None
+            if parsed:
+                return parsed
+        return None
 
     async def _save_lobby_state(self, ctx: PluginContext, g: TenHalfGame) -> None:
         redis = getattr(ctx, "redis", None)
@@ -1313,11 +1327,11 @@ class TenHalfPlugin(Plugin):
                 userbot_message_ids.add(reward_mid)
 
         actions = [
-            _delete_action(mid, chat_id=cid, send_via="interaction_bot")
+            _delete_action(mid, chat_id=cid, send_via=INTERACTION_SEND_VIA)
             for mid in sorted(interaction_message_ids)
         ]
         actions.extend(
-            _delete_action(mid, chat_id=cid, send_via="userbot_reply")
+            _delete_action(mid, chat_id=cid, send_via=USERBOT_SEND_VIA)
             for mid in sorted(userbot_message_ids)
         )
         if not actions:
@@ -1570,7 +1584,7 @@ class TenHalfPlugin(Plugin):
 
     def _build_lobby_text(self, g: TenHalfGame, receiver_label: str) -> str:
         lines = [
-            "🃏 <b>十点半开局！</b>",
+            f"🃏 <b>十点半开局 v{PLUGIN_VERSION}！</b>",
             f"💰 底注: <b>{g.bet}</b>",
             "",
         ]
@@ -1659,9 +1673,9 @@ class TenHalfPlugin(Plugin):
         self._lobby_timeout = _pint(cfg.get("lobby_timeout"), 60, minimum=10)
         self._settlement_cleanup_delay = _pint(cfg.get("settlement_cleanup_delay"), 60, minimum=0)
         self._max_players = _pint(cfg.get("max_players"), 5, minimum=2)
-        self.commands = {self._command: self._cmd, "十点半": self._cmd}
+        self.commands = {}
         if ctx.log:
-            await ctx.log("info", f"[ten_half] 已启动，指令：{self._command}")
+            await ctx.log("info", "[ten_half] 已启动，开局入口：交互 Bot 关键词/规则")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for t in list(self._tasks):
@@ -1675,103 +1689,17 @@ class TenHalfPlugin(Plugin):
             await ctx.log("info", "[ten_half] 已停止")
 
     # ═══════════════════════════════════════════════════
-    # 命令入口（userbot 开桌，后续仍走交互 Bot 按钮）
+    # 旧命令入口只保留迁移提示；十点半业务开局只走交互 Bot 关键词/规则。
     # ═══════════════════════════════════════════════════
     async def _cmd(
         self, client: Any, event: Any, args: list[str],
         account_id: int, ctx: PluginContext,
     ) -> None:
-        cid = int(getattr(event.chat_id, "channel_id", None) or event.chat_id or 0)
-        if not cid:
-            return
-
-        lock = self._lock(cid)
-        async with lock:
-            g = self._games.get(cid)
-            if g and not g.finished:
-                await event.reply("⚠️ 当前已有进行中的十点半游戏。", parse_mode="html")
-                return
-
-            bet = 0
-            if args:
-                try:
-                    bet = max(0, min(1_000_000, int(args[0])))
-                except ValueError:
-                    pass
-            if bet <= 0:
-                prefix = current_command_prefix(fallback=",")
-                await event.reply(
-                    f"请指定下注金额，例如：{prefix}{self._command} 100",
-                    parse_mode="html",
-                )
-                return
-
-            host_id = int(getattr(event, "sender_id", 0) or 0)
-            host_name = "管理员"
-            receiver_name = ""
-            try:
-                me = await client.get_me()
-                host_id = int(getattr(me, "id", host_id) or host_id)
-                host_name = public_entity_display_name(me, fallback_id=host_id, default="管理员")
-                receiver_name = _receiver_label_from_entity(me, fallback=host_name)
-            except Exception:
-                pass
-
-            g = TenHalfGame(
-                chat_id=cid,
-                bet=bet,
-                max_players=max(2, self._max_players),
-                turn_timeout=self._turn_timeout,
-                lobby_timeout=self._lobby_timeout,
-                settlement_cleanup_delay=self._settlement_cleanup_delay,
-                phase="lobby", started_at=time.monotonic(),
-                via_interaction=True,
-                host_user_id=host_id,
-                host_name=host_name,
-            )
-            g.payment_receiver_name = receiver_name or host_name or self._receiver_label(ctx, None, g)
-            if host_id:
-                g.lobby_players.append((host_id, host_name))
-                self._lock_command_dealer(g, host_id, host_name)
-            else:
-                g.status_note = "首位成功加入的玩家将自动成为本局庄家。"
-            self._games[cid] = g
-            await self._save_lobby_state(ctx, g)
-
-        if ctx.log:
-            await ctx.log("info",
-                f"[ten_half] game_start: chat_id={cid}, bet={bet}, "
-                f"lobby_timeout={g.lobby_timeout}, via_interaction=True, "
-                f"dealer={'command_host' if g.dealer_locked else 'first_player'}, "
-                f"players={len(g.lobby_players)}/{g.max_players}")
-
-        action = await self._main_action(
-            ctx,
-            g,
-            self._build_lobby_text(g, g.payment_receiver_name or g.dealer_name),
-            reply_to_message_id=int(getattr(event, "id", 0) or 0) or None,
-            force_send=True,
+        await event.reply(
+            "十点半现在只通过交互 Bot 关键词/规则开局；账号 userbot 只负责收付款和发奖。"
+            " 已有等待大厅时，账号 userbot 可发送「入局」直接加入。",
+            parse_mode="html",
         )
-        session_action = {
-            "type": "start_session",
-            "chat_id": cid,
-            "entry_key": "start_ten_half",
-            "event_type": "command",
-            "started_by_user_id": host_id,
-            "started_by_message_id": int(getattr(event, "id", 0) or 0) or None,
-            "participant_policy": "paid_pool",
-            "data": {"ten_half_lobby": _lobby_snapshot(g)},
-        }
-        if host_id:
-            session_action["paid_user_ids"] = [host_id]
-            session_action["participant_user_ids"] = [host_id]
-        await self._emit_background_actions(ctx, [
-            session_action,
-            action,
-        ])
-        self._track(asyncio.create_task(
-            self._lobby_timeout_task(cid, g.started_at, ctx),
-        ))
 
     # ═══════════════════════════════════════════════════
     # 大厅
@@ -1924,12 +1852,14 @@ class TenHalfPlugin(Plugin):
         etype = _ie_type(payload)
         cid = _ie_chat(payload)
         if not cid:
-            return [{"type": "send_message", "text": "❌ 十点半需要在群聊里使用。"}]
+            return [_send_action("❌ 十点半需要在群聊里使用。")]
 
         if etype == "payment_confirmed":
             return await self._ix_payment_join(ctx, payload, cid)
         if etype == "keyword":
             return await self._ix_start(ctx, payload, cid)
+        if etype == "command":
+            return [{"type": "no_session"}]
         if etype == "callback_query":
             return await self._ix_callback(ctx, payload, cid)
         if etype == "message":
@@ -2166,15 +2096,13 @@ class TenHalfPlugin(Plugin):
 
             # ── join ──
             if action == "join":
-                paid_exempt = bool(g.bet > 0 and _is_payload_userbot_actor(payload, aid))
-                if g.bet > 0 and not paid_exempt:
-                    return [_answer_action(payload, "请转账底注加入。", show_alert=True)]
-                result = await self._ix_join(ctx, payload, g, aid, aname, paid_exempt=paid_exempt)
+                if g.bet > 0:
+                    return [_answer_action(payload, "请转账底注加入；账号 userbot 可发送「入局」直接入桌。", show_alert=True)]
+                result = await self._ix_join(ctx, payload, g, aid, aname, paid_exempt=False)
                 if ctx.log:
                     await ctx.log("info",
                         f"[ten_half] player_joined: uid={aid}, name={aname}, "
-                        f"via={'userbot_button' if paid_exempt else 'button'}, "
-                        f"chat_id={cid}, count={len(g.lobby_players)}/{g.max_players}")
+                        f"via=button, chat_id={cid}, count={len(g.lobby_players)}/{g.max_players}")
                 return result
 
             # ── dealer_yes / dealer_no ──
@@ -2370,33 +2298,6 @@ class TenHalfPlugin(Plugin):
         if not text:
             return []
         mid = _ie_mid(payload)
-        inline_amount = _inline_payment_amount(text)
-        if inline_amount > 0 and _is_userbot_message(payload):
-            payer_id, payer_name = _ie_actor(payload)
-            payment_message_id = _ie_message_mid(payload) or mid
-            synthetic = dict(payload)
-            source = dict(_ps(payload))
-            source["type"] = "payment_confirmed"
-            synthetic["source"] = source
-            synthetic["event_type"] = "payment_confirmed"
-            synthetic["amount"] = inline_amount
-            synthetic["payment"] = {
-                "status": "confirmed",
-                "amount": inline_amount,
-                "payer_user_id": payer_id,
-                "payer_name": payer_name,
-                "payer_display_name": payer_name,
-                "reply_to_message_id": payment_message_id,
-                "notice_message_id": payment_message_id,
-                "source_message_id": payment_message_id,
-            }
-            if ctx.log:
-                await ctx.log(
-                    "debug",
-                    f"[ten_half] inline_payment_message: payer={payer_id} ({payer_name}), "
-                    f"amount={inline_amount}, chat_id={cid}",
-                )
-            return await self._ix_payment_join(ctx, synthetic, cid)
 
         async with self._lock(cid):
             g = self._games.get(cid)
@@ -2407,22 +2308,21 @@ class TenHalfPlugin(Plugin):
 
             # ── 大厅 ──
             if g.phase == "lobby":
-                if text in ("加入", "join"):
-                    paid_exempt = bool(g.bet > 0 and _is_payload_userbot_actor(payload, aid))
+                if text in ("加入", "join", "入局"):
+                    paid_exempt = bool(g.bet > 0 and text == "入局" and _is_userbot_self(payload, aid))
                     if g.bet > 0 and not paid_exempt:
-                        # Paid game: hint to pay instead
                         return [
                             _send_action(
-                                f"请先转账 <b>{g.bet}</b> 给 <b>{_html(self._receiver_label(ctx, payload, g))}</b> 加入牌局。",
+                                f"请先转账 <b>{g.bet}</b> 给 <b>{_html(self._receiver_label(ctx, payload, g))}</b> 加入牌局。"
+                                "账号 userbot 可发送「入局」直接入桌。",
                                 reply_to_message_id=mid,
                             )
                         ]
-                    # Free game or the account userbot in a paid lobby: join directly.
                     result = await self._ix_join(ctx, payload, g, aid, aname, paid_exempt=paid_exempt)
                     if ctx.log:
                         await ctx.log("info",
                             f"[ten_half] player_joined: uid={aid}, name={aname}, "
-                            f"via={'userbot_keyword' if paid_exempt else 'keyword'}, chat_id={cid}")
+                            f"via={'userbot_entry' if paid_exempt else 'keyword'}, chat_id={cid}")
                     return result
                 return []
 
@@ -2841,7 +2741,7 @@ class TenHalfPlugin(Plugin):
             else None
         )
 
-        # ── 结算公告（普通回复继承当前会话通道） ──
+        # ── 结算公告固定由交互 Bot 发送 ──
         if ctx is not None:
             actions.append(_send_action(
                 "\n".join(lines),

@@ -8,17 +8,9 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额 创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。群内规则关键词开桌时，仍由首位成功转账加入的玩家自动成为庄家；付款加入只会立即更新内存并发送加入提示，大厅主消息由后台带版本合并刷新，避免同一秒多笔付款互相阻塞。开局后所有玩家和真人庄家都在同一牌桌面板上共用同一排按钮，系统按点击者身份操作自己的手牌，可同时要牌/停牌/加倍，全部停牌/爆牌后统一结算；普通回复继承当前会话通道，结算发奖返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
+    "x-usage-guide": '在交互中心为十点半配置关键词和底注金额后，由交互 Bot 在群内开局、发大厅、刷新按钮、超时提示和结算公告。普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；账号 userbot 本人在等待大厅可发送“入局”免转账加入。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
     "additionalProperties": False,
     "properties": {
-        "command": {
-            "type": "string",
-            "title": "触发指令名（不含前缀）",
-            "default": "10d",
-            "minLength": 1,
-            "maxLength": 32,
-            "pattern": "^\\S+$",
-        },
         "timeout": {
             "type": "integer",
             "title": "每个玩家抓牌/操作限时（秒）",
@@ -49,17 +41,13 @@ CONFIG_SCHEMA = {
             "maximum": 3600,
         },
     },
-    "required": ["command", "timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"],
+    "required": ["timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"],
 }
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = '管理员发送 {prefix}{command} 下注金额创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。开局后所有玩家和真人庄家共用同一牌桌按钮，系统按点击者身份操作自己的手牌。普通回复继承 TelePilot 当前会话通道；结算发奖返回 `payout`，由 userbot 执行，结算后的本局消息默认 60 秒自动清理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot；兼容 legacy userbot `+底注` 入局消息。'
-EVENT_SUBSCRIPTIONS = [{'events': ['command'],
-  'source': ['userbot'],
-  'scope': 'owner_only',
-  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
- {'events': ['message', 'callback_query', 'session_close'],
+USAGE = '十点半只通过交互 Bot 关键词/规则开局；大厅、按钮、后台刷新、超时开局和结算公告固定由 interaction_bot 发送。普通玩家精确转账底注给账号 userbot 后，由平台 payment_confirmed 作为资金证据入局；账号 userbot 本人在等待大厅可发送“入局”免转账加入。结算发奖返回 `payout`，始终由 userbot 执行。'
+EVENT_SUBSCRIPTIONS = [{'events': ['message', 'callback_query', 'session_close'],
   'entry_key': 'start_ten_half',
   'source': ['interaction_bot'],
   'scope': 'rule_bound',
@@ -73,14 +61,14 @@ EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'entry_key': 'start_ten_half',
   'source': ['userbot'],
   'scope': 'all_allowed_chats',
-  'filters': {'contains': ['+']},
-  'description': '兼容 legacy 转账链路：等待大厅中，玩家通过 userbot 发出的纯 +底注 消息可作为入局信号。'}]
+  'filters': {'contains': ['入局']},
+  'description': '等待大厅中，账号 userbot 本人发送“入局”可作为免转账入局证据；普通玩家仍必须通过 payment_confirmed 入局。'}]
 CAPABILITIES = {}
 
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.3.9",
+    version="0.3.10",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -93,11 +81,11 @@ MANIFEST = Manifest(
   'title': '开始十点半',
   'description': '由交互 Bot 在群内开启一局十点半纸牌游戏。',
   'interaction_profile': 'session_game',
-  'launch_mode': 'hybrid',
+  'launch_mode': 'bridge',
   'session_scope': 'chat',
   'events': ['payment_confirmed', 'keyword', 'message', 'callback_query', 'session_close'],
   'preserve_command_trigger': True,
-  'command_fallback': {'enabled': True, 'command': '10d', 'mode': 'hint_only'},
+  'default_trigger_modes': 'keyword_only',
   'session_policy': {'ttl_seconds': 300,
                      'duplicate_start': 'reject',
                      'close_on': ['winner', 'timeout', 'session_close']},
@@ -140,8 +128,8 @@ MANIFEST = Manifest(
                                                                'minimum': 0,
                                                                'maximum': 3600}}},
   'settlement': {'mode': 'announce_only'},
-  'dispatch_modes': ['admin_command', 'public_keyword'],
-  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'dispatch_modes': ['public_keyword'],
+  'message_channels': {'public_keyword': 'interaction_bot'},
   'money_channel': 'userbot_reply',
   'participant_policy': 'paid_pool'}],
     config_schema=CONFIG_SCHEMA,

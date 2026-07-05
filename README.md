@@ -15,7 +15,7 @@ TelePilot 远程插件仓库。
 | [dice_grid_hunt](./dice_grid_hunt/) | `{prefix}dicegrid 金额` | 九宫格骰子图片竞猜 |
 | [lottery_plus](./lottery_plus/) | `{prefix}lotto` | 群内彩票下注与开奖 |
 | [mindreader_survival](./mindreader_survival/) | `{prefix}mind` | 多人读心生存赛 |
-| [ten_half](./ten_half/) | `{prefix}10d` | 多人十点半纸牌游戏 |
+| [ten_half](./ten_half/) | 交互规则关键词 | 多人十点半纸牌游戏 |
 | [auto_reply](./auto_reply/) | 规则配置 | 插件库推荐自动回复，按规则匹配关键词或正则后自动回复 |
 | [autorepeat](./autorepeat/) | 规则配置 | 插件库推荐自动复读，多人发送相同内容时自动复读 |
 | [game24](./game24/) | `{prefix}24d` | 插件库维护 24 点竞速答题，支持交互 Bot 调度 |
