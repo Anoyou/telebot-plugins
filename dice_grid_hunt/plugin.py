@@ -31,6 +31,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+PLUGIN_VERSION = "1.1.20"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -342,13 +343,13 @@ class DiceGridHuntPlugin(Plugin):
         self._template_guide_line = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
         self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
         self._round_message_template = (
-            "<b>九宫格竞猜</b>\n"
+            "<b>九宫格竞猜v{version} 开始</b>\n"
             "目标：<b>{target_sum}</b> · 回 <code>1-9</code>\n"
             "奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s"
         )
         self._in_progress_message_template = IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT
         self._success_message_template = (
-            "{winner} 答对：<b>{answer_index}</b>\n"
+            "{winner} 答对：图 <b>{answer_index}</b>\n"
             "用时 {elapsed}s · 奖励 <b>+{prize}</b>"
         )
         self._timeout_message_template = (
@@ -472,7 +473,9 @@ class DiceGridHuntPlugin(Plugin):
                 "photo_base64": base64.b64encode(_render_grid_png(rd)).decode("ascii"),
                 "filename": "dice_grid_hunt.png",
                 "caption": self._render_round_text(rd, include_guide=True),
+                "parse_mode": "html",
                 "reply_to_message_id": self._payload_message_id(payload),
+                "save_message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
             }
         ]
 
@@ -504,7 +507,7 @@ class DiceGridHuntPlugin(Plugin):
             now = time.monotonic()
             last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
             last_at = last_guess_at.get(user_id, 0.0)
-            if now - last_at < self._guess_cooldown:
+            if user_id in last_guess_at and now - last_at < self._guess_cooldown:
                 return []
             last_guess_at[user_id] = now
             rd.last_guess_at = last_guess_at
@@ -526,9 +529,11 @@ class DiceGridHuntPlugin(Plugin):
             )
         return [
             {
-                "type": "send_message",
-                "text": self._render_interaction_success(rd, payout_account, payout_mode),
-                "reply_to_message_id": rd.winner_message_id,
+                "type": "edit_caption",
+                "chat_id": chat_id,
+                "message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
+                "caption": self._render_interaction_success(rd, payout_account, payout_mode),
+                "parse_mode": "html",
             },
             {
                 "type": "payout",
@@ -708,14 +713,18 @@ class DiceGridHuntPlugin(Plugin):
         return self._render_text(template, template_vars)
 
     def _render_interaction_success(self, rd: RoundState, payout_account: str, payout_mode: str) -> str:
-        winner = escape(rd.winner_name or "玩家")
         elapsed = max(0.0, time.monotonic() - rd.started_at)
-        return (
-            f"答对了：{winner}\n"
-            f"题目：九宫格竞猜，目标点数 {rd.target_sum}，答案第 {rd.answer_index} 格\n"
-            f"用时：{elapsed:.1f}s\n"
-            f"奖金：{rd.prize}"
+        success_text = self._render_text(
+            self._success_message_template,
+            {
+                "winner": escape(rd.winner_name or "玩家"),
+                "answer_index": rd.answer_index,
+                "target_sum": rd.target_sum,
+                "elapsed": f"{elapsed:.1f}",
+                "prize": rd.prize,
+            },
         )
+        return f"{self._render_round_text(rd, include_guide=True)}\n\n{success_text}"
 
     def _interaction_event_type(self, payload: dict[str, Any]) -> str:
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
@@ -788,6 +797,9 @@ class DiceGridHuntPlugin(Plugin):
         parsed = self._positive_int(value, 0, minimum=0)
         return parsed or None
 
+    def _interaction_message_key(self, account_id: int, chat_id: int) -> str:
+        return f"dice_grid_hunt:{int(account_id)}:{int(chat_id)}:round"
+
     def _positive_int(self, value: Any, default: int, *, minimum: int, maximum: int | None = None) -> int:
         try:
             parsed = int(value)
@@ -835,7 +847,7 @@ class DiceGridHuntPlugin(Plugin):
             now = time.monotonic()
             last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
             last_at = last_guess_at.get(user_id, 0.0)
-            if now - last_at < self._guess_cooldown:
+            if user_id in last_guess_at and now - last_at < self._guess_cooldown:
                 return
             last_guess_at[user_id] = now
             rd.last_guess_at = last_guess_at
