@@ -54,7 +54,7 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = '管理员发送 {prefix}{command} 下注金额创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。开局后所有玩家和真人庄家共用同一牌桌按钮，系统按点击者身份操作自己的手牌。普通回复继承 TelePilot 当前会话通道；结算发奖返回 `payout`，由 userbot 执行，结算后的本局消息默认 60 秒自动清理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
+USAGE = '管理员发送 {prefix}{command} 下注金额创建十点半大厅时，开桌账号会直接作为庄家入局；其他玩家精确转账底注给账号 userbot 后加入。开局后所有玩家和真人庄家共用同一牌桌按钮，系统按点击者身份操作自己的手牌。普通回复继承 TelePilot 当前会话通道；结算发奖返回 `payout`，由 userbot 执行，结算后的本局消息默认 60 秒自动清理。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot；兼容 legacy userbot `+底注` 入局消息。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
@@ -68,13 +68,19 @@ EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'entry_key': 'start_ten_half',
   'source': ['external_payment_notice', 'userbot'],
   'scope': 'all_allowed_chats',
-  'description': '付款确认按已允许群投递，插件只接收当前等待牌桌且金额等于本桌底注的转账。'}]
+  'description': '付款确认按已允许群投递，插件只接收当前等待牌桌且金额等于本桌底注的转账。'},
+ {'events': ['message'],
+  'entry_key': 'start_ten_half',
+  'source': ['userbot'],
+  'scope': 'all_allowed_chats',
+  'filters': {'contains': ['+']},
+  'description': '兼容 legacy 转账链路：等待大厅中，玩家通过 userbot 发出的纯 +底注 消息可作为入局信号。'}]
 CAPABILITIES = {}
 
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.3.8",
+    version="0.3.9",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

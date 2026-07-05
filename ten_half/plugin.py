@@ -66,7 +66,7 @@ REDIS_JOIN_NOTICE_KEY_PREFIX = "ten_half:join_notice:"
 REDIS_SETTLEMENT_MSG_KEY_PREFIX = "ten_half:settlement:"
 REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
-PLUGIN_VERSION = "0.3.8"
+PLUGIN_VERSION = "0.3.9"
 
 
 @dataclass
@@ -139,6 +139,19 @@ def _normalize_command_name(raw: Any) -> str:
                 changed = True
                 break
     return text or "10d"
+
+
+def _inline_payment_amount(text: str) -> int:
+    cleaned = str(text or "").strip()
+    if not cleaned.startswith("+"):
+        return 0
+    amount = cleaned[1:].strip()
+    return int(amount) if amount.isdigit() else 0
+
+
+def _is_userbot_message(payload: dict[str, Any]) -> bool:
+    source = _ps(payload)
+    return str(source.get("channel") or "").strip() == "userbot"
 
 
 # ─────────────────────────────────────────────────────
@@ -2357,6 +2370,33 @@ class TenHalfPlugin(Plugin):
         if not text:
             return []
         mid = _ie_mid(payload)
+        inline_amount = _inline_payment_amount(text)
+        if inline_amount > 0 and _is_userbot_message(payload):
+            payer_id, payer_name = _ie_actor(payload)
+            payment_message_id = _ie_message_mid(payload) or mid
+            synthetic = dict(payload)
+            source = dict(_ps(payload))
+            source["type"] = "payment_confirmed"
+            synthetic["source"] = source
+            synthetic["event_type"] = "payment_confirmed"
+            synthetic["amount"] = inline_amount
+            synthetic["payment"] = {
+                "status": "confirmed",
+                "amount": inline_amount,
+                "payer_user_id": payer_id,
+                "payer_name": payer_name,
+                "payer_display_name": payer_name,
+                "reply_to_message_id": payment_message_id,
+                "notice_message_id": payment_message_id,
+                "source_message_id": payment_message_id,
+            }
+            if ctx.log:
+                await ctx.log(
+                    "debug",
+                    f"[ten_half] inline_payment_message: payer={payer_id} ({payer_name}), "
+                    f"amount={inline_amount}, chat_id={cid}",
+                )
+            return await self._ix_payment_join(ctx, synthetic, cid)
 
         async with self._lock(cid):
             g = self._games.get(cid)
