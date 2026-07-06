@@ -69,11 +69,12 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.8"
+PLUGIN_VERSION = "0.4.9"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
 JOIN_MODE_SILENT_DEBIT = "silent_debit"
+PENDING_DEBIT_TTL_SECONDS = 45
 
 
 @dataclass
@@ -167,6 +168,10 @@ def _inline_payment_amount(text: str) -> int:
 
 def _identity_token(raw: Any) -> str:
     return "".join(str(raw or "").strip().casefold().split())
+
+
+def _is_anonymous_payer_name(raw: Any) -> bool:
+    return str(raw or "").strip() in {"匿名用户", "未知用户", "用户"}
 
 
 def _normalize_join_mode(raw: Any, default: str = JOIN_MODE_TRANSFER) -> str:
@@ -1353,6 +1358,18 @@ class TenHalfPlugin(Plugin):
         }
 
     @staticmethod
+    def _prune_pending_debits(g: TenHalfGame, *, now: float | None = None) -> None:
+        current = time.time() if now is None else float(now)
+        joined = {int(uid) for uid, _ in g.lobby_players}
+        for uid, item in list(g.pending_debits.items()):
+            try:
+                requested_at = float(item.get("requested_at") or 0.0)
+            except (TypeError, ValueError):
+                requested_at = 0.0
+            if uid in joined or (requested_at and current - requested_at > PENDING_DEBIT_TTL_SECONDS):
+                g.pending_debits.pop(uid, None)
+
+    @staticmethod
     def _resolve_pending_debit_payer(
         g: TenHalfGame,
         *,
@@ -1360,10 +1377,7 @@ class TenHalfPlugin(Plugin):
         payer_name: str,
         amount: int,
     ) -> tuple[int, str] | None:
-        joined = {int(uid) for uid, _ in g.lobby_players}
-        for uid in list(g.pending_debits):
-            if uid in joined:
-                g.pending_debits.pop(uid, None)
+        TenHalfPlugin._prune_pending_debits(g)
 
         candidates: list[tuple[int, dict[str, Any]]] = []
         for uid, item in g.pending_debits.items():
@@ -1377,7 +1391,7 @@ class TenHalfPlugin(Plugin):
             if _pint(item.get("amount"), 0, minimum=0) == int(amount or 0):
                 return int(payer_id), str(item.get("name") or payer_name or "玩家").strip() or "玩家"
 
-        payer_token = _identity_token(payer_name)
+        payer_token = "" if _is_anonymous_payer_name(payer_name) else _identity_token(payer_name)
         if payer_token:
             name_matches = [
                 (uid, item)
@@ -2544,6 +2558,9 @@ class TenHalfPlugin(Plugin):
                         return [_answer_action(payload, "你已经加入了。", show_alert=False)]
                     if len(g.lobby_players) >= g.max_players:
                         return [_answer_action(payload, "人数已满。", show_alert=True)]
+                    self._prune_pending_debits(g)
+                    if aid in g.pending_debits:
+                        return [_answer_action(payload, "扣款处理中，请稍等。", show_alert=True)]
                     debit_key = _transient_userbot_msg_key(ctx.account_id, g.chat_id, f"debit_{aid}")
                     self._remember_pending_debit(g, aid, aname, amount=g.bet, message_id=mid)
                     await self._save_lobby_state(ctx, g)
@@ -2671,7 +2688,7 @@ class TenHalfPlugin(Plugin):
     ) -> list[dict[str, Any]]:
         controller_uid = self._start_controller_uid(g)
         if aid != controller_uid:
-            return [_answer_action(payload, "点点点！啥你都点！", show_alert=True)]
+            return [_answer_action(payload, "只有庄家可以决定是否开局。", show_alert=True)]
         if g.phase != "lobby" or not g.dealer_locked:
             return [_answer_action(payload, "当前不能直接开局。", show_alert=True)]
         if len(g.lobby_players) < 2:
@@ -2738,7 +2755,7 @@ class TenHalfPlugin(Plugin):
             return [_answer_action(payload or {}, "按钮已过期，请看最新牌桌。", show_alert=False)] if payload else []
 
         if aid != target_uid:
-            return [_answer_action(payload or {}, "点点点！啥你都点！", show_alert=True)] if payload else []
+            return [_answer_action(payload or {}, "这不是你的操作按钮。", show_alert=True)] if payload else []
 
         if g.phase != "playing":
             if payload:

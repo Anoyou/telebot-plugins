@@ -940,6 +940,67 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_silent_debit_duplicate_join_click_does_not_charge_twice(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                first = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join", message_id=900),
+                )
+                second = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join-2", message_id=900),
+                )
+
+                game = plugin._games[-100123]
+                self.assertEqual(list(game.pending_debits), [111])
+                self.assertEqual(first[0]["type"], "send_message")
+                self.assertEqual(second, [{
+                    "type": "answer_callback",
+                    "callback_query_id": "cb-silent-join-2",
+                    "text": "扣款处理中，请稍等。",
+                    "show_alert": True,
+                }])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_expired_pending_can_retry_join_click(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join", message_id=900),
+                )
+                game = plugin._games[-100123]
+                game.pending_debits[111]["requested_at"] = plugin_module.time.time() - plugin_module.PENDING_DEBIT_TTL_SECONDS - 1
+
+                retry = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join-retry", message_id=900),
+                )
+
+                self.assertEqual(retry[0]["type"], "send_message")
+                self.assertEqual(retry[0]["text"], "-100")
+                self.assertEqual(game.pending_debits[111]["amount"], 100)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_silent_debit_payment_notice_joins_after_debit_confirmed(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
@@ -965,6 +1026,38 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertIn("入场金额: 自动扣款 100", join_notice["text"])
                 session_action = next(action for action in actions if action.get("type") == "start_session")
                 self.assertEqual(session_action["paid_user_ids"], [111])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_anonymous_notice_uses_single_pending_player(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=5843467471, name="ㅤㅤ", callback_query_id="cb-silent-blank", message_id=900),
+                )
+                debit_notice = payment_payload(payer_id=1682400007, payer_name="匿名用户")
+                debit_notice["payment"] = {
+                    "direction": "debit",
+                    "payer_user_id": 1682400007,
+                    "payer_name": "匿名用户",
+                }
+
+                actions = await plugin.on_interaction(ctx, "start_ten_half", debit_notice)
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.lobby_players, [(5843467471, "ㅤㅤ")])
+                self.assertEqual(game.paid_stakes, {5843467471: 100})
+                self.assertNotIn(5843467471, game.pending_debits)
+                session_action = next(action for action in actions if action.get("type") == "start_session")
+                self.assertEqual(session_action["paid_user_ids"], [5843467471])
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -1277,7 +1370,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(actions, [{
                 "type": "answer_callback",
                 "callback_query_id": "cb-start-wrong-user",
-                "text": "点点点！啥你都点！",
+                "text": "只有庄家可以决定是否开局。",
                 "show_alert": True,
             }])
             self.assertEqual(game.phase, "lobby")
@@ -1428,7 +1521,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(actions, [{
                 "type": "answer_callback",
                 "callback_query_id": "cb-1",
-                "text": "点点点！啥你都点！",
+                "text": "这不是你的操作按钮。",
                 "show_alert": True,
             }])
 
