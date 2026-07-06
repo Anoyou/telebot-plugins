@@ -69,7 +69,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.7"
+PLUGIN_VERSION = "0.4.8"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -748,7 +748,7 @@ def _kb_join(bet: int, join_mode: str = JOIN_MODE_TRANSFER) -> dict[str, Any] | 
     """
     rows: list[list[dict[str, str]]] = []
     if not (bet > 0 and join_mode != JOIN_MODE_SILENT_DEBIT):
-        label = f"💸 扣款 {bet} 并加入" if bet > 0 else "🎮 加入游戏"
+        label = f"🙋🏻‍♂️ 我同意被 扣款 {bet} 后加入牌局" if bet > 0 else "🎮 加入游戏"
         rows.append([{"text": label, "callback_data": "th:join:0"}])
     rows.append([_rules_button()])
     return {
@@ -764,7 +764,7 @@ def _kb_start_decision(uid: int, bet: int = 0, join_mode: str = JOIN_MODE_TRANSF
         ]
     ]
     if not (bet > 0 and join_mode != JOIN_MODE_SILENT_DEBIT):
-        label = f"💸 扣款 {bet} 并加入" if bet > 0 else "🎮 加入游戏"
+        label = f"🙋🏻‍♂️ 我同意被 扣款 {bet} 后加入牌局" if bet > 0 else "🎮 加入游戏"
         rows.append([{"text": label, "callback_data": "th:join:0"}])
     rows.append([_rules_button()])
     return {"inline_keyboard": rows}
@@ -1982,8 +1982,7 @@ class TenHalfPlugin(Plugin):
         ]
         if g.bet > 0 and g.join_mode == JOIN_MODE_SILENT_DEBIT:
             lines.append(
-                f"📢 点击下方“扣款 {g.bet} 并加入（⚠️会被自动扣款哦）”"
-                f"<code>-{g.bet}</code> 完成扣款并加入本桌。"
+                f"📢 点击下方“【扣款 {g.bet} 并加入】按钮完成扣款即可加入本桌（⚠️会被自动扣款哦）”"
             )
         elif g.bet > 0:
             lines.append(
@@ -2042,7 +2041,7 @@ class TenHalfPlugin(Plugin):
             "finished": "已结算",
         }.get(g.phase, "进行中")
         lines = [
-            f"🃏 <b>十点半 · 牌桌 <code>{g.game_id}</code></b>",
+            f"🃏 <b>十点半v{PLUGIN_VERSION} · 牌桌 <code>{g.game_id}</code></b>",
             f"💰 底注: <b>{g.bet}</b> · {phase_text}",
             "",
             f"🎰 庄家 <b>{_html_name(g.dealer_name)}</b>: {_dealer_public_brief(g, reveal=reveal_dealer)}",
@@ -2053,7 +2052,7 @@ class TenHalfPlugin(Plugin):
                 active_names.append(g.dealer_name)
             if active_names:
                 lines.append("⚡ 所有人共用下方按钮，系统按点击者识别自己的手牌；全部停牌/爆牌后统一结算。")
-                lines.append("⚠️ 加倍需已有 2 张牌；无感模式会由 userbot 再扣本局底注，转账模式不自动代扣所以无法加倍。")
+                lines.append("⚠️ 加倍需已有 2 张牌；无感模式下加倍会再次被扣本局底注，转账模式无法自动代扣所以无法加倍。盈利也是翻倍")
                 lines.append("⏳ 等待：" + "、".join(_html_name(name) for name in active_names))
         if g.phase == "dealer_turn" and not g.dealer_is_bot and not g.finished:
             lines.append("👉 所有玩家已行动，庄家请要牌或停牌。")

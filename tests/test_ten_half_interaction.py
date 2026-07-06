@@ -863,10 +863,11 @@ class TenHalfInteractionTest(unittest.TestCase):
                 start_message = next(action for action in actions if action["type"] == "send_message")
 
                 self.assertIn("入局模式: <b>无感模式</b>", start_message["text"])
-                self.assertIn("扣款 100 并加入（⚠️会被自动扣款哦）", start_message["text"])
-                self.assertIn("<code>-100</code>", start_message["text"])
+                self.assertIn("【扣款 100 并加入】按钮完成扣款即可加入本桌", start_message["text"])
+                self.assertIn("⚠️会被自动扣款哦", start_message["text"])
+                self.assertNotIn("<code>-100</code>", start_message["text"])
                 self.assertNotIn("请转账 <b>100</b>", start_message["text"])
-                self.assertIn("扣款 100 并加入", str(start_message["reply_markup"]))
+                self.assertIn("我同意被 扣款 100 后加入牌局", str(start_message["reply_markup"]))
                 self.assertIn("th:rules:0", str(start_message["reply_markup"]))
             finally:
                 await plugin.on_shutdown(ctx)
@@ -1032,7 +1033,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 action = messages.applied[-1]["actions"][0]
                 self.assertEqual(action["type"], "edit_message")
                 self.assertEqual(action["message_id"], 900)
-                self.assertIn("扣款 100 并加入", str(action["reply_markup"]))
+                self.assertIn("我同意被 扣款 100 后加入牌局", str(action["reply_markup"]))
                 self.assertIn("th:join:0", str(action["reply_markup"]))
             finally:
                 await plugin.on_shutdown(ctx)
