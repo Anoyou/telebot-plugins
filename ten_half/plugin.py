@@ -1,8 +1,8 @@
 """十点半纸牌游戏插件。
 
 经典十点半纸牌游戏：支持多人对战、加倍、五小等规则。
-A=1, 2-9=面值, 10/J/Q/K=0.5点。目标 10.5 点。
-五小(5张不爆)和天生十点半(前两张=10.5)双倍赔付。
+A=1, 2-10=面值, J/Q/K=0.5点。目标 10.5 点。
+五小(5张不爆)最高，天生十点半(前两张=10.5)保留。
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
 REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.3"
+PLUGIN_VERSION = "0.4.4"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 JOIN_MODE_TRANSFER = "transfer"
 JOIN_MODE_SILENT_DEBIT = "silent_debit"
@@ -83,7 +83,7 @@ class Card:
     def value(self) -> float:
         if self.rank == "A":
             return 1.0
-        if self.rank in ("10", "J", "Q", "K"):
+        if self.rank in ("J", "Q", "K"):
             return 0.5
         return float(self.rank)
 
@@ -699,28 +699,47 @@ def _start_keyword_label(payload: dict[str, Any], fallback: str) -> str:
 # ─────────────────────────────────────────────────────
 # Inline keyboard builders
 # ─────────────────────────────────────────────────────
+def _rules_button() -> dict[str, str]:
+    return {"text": "📜 规则", "callback_data": "th:rules:0"}
+
+
+def _rules_text(g: TenHalfGame | None = None) -> str:
+    mode_note = "无感模式加倍会再扣底注；转账模式不按钮加倍。"
+    if g is not None and g.join_mode == JOIN_MODE_SILENT_DEBIT:
+        mode_note = f"加倍会再扣 {g.bet}，补1张即停。"
+    return "\n".join([
+        "规则：A=1，2-10按牌面，J/Q/K=0.5。",
+        "目标≤10.5且越大越好；开局每人1张，庄家首牌暗牌。",
+        "天生十点半自动停；五小最大；同点庄家胜，双爆闲家输。",
+        f"已有2张后可加倍，{mode_note}",
+    ])
+
+
 def _kb_join(bet: int, join_mode: str = JOIN_MODE_TRANSFER) -> dict[str, Any] | None:
     """Lobby join button.
 
     Paid transfer mode uses transfer-to-userbot flow; silent-debit mode uses
     the button and asks userbot to debit the clicked player.
     """
-    if bet > 0 and join_mode != JOIN_MODE_SILENT_DEBIT:
-        return None
-    label = f"💸 扣款 {bet} 并加入" if bet > 0 else "🎮 加入游戏"
+    rows: list[list[dict[str, str]]] = []
+    if not (bet > 0 and join_mode != JOIN_MODE_SILENT_DEBIT):
+        label = f"💸 扣款 {bet} 并加入" if bet > 0 else "🎮 加入游戏"
+        rows.append([{"text": label, "callback_data": "th:join:0"}])
+    rows.append([_rules_button()])
     return {
-        "inline_keyboard": [[
-            {"text": label, "callback_data": "th:join:0"},
-        ]]
+        "inline_keyboard": rows,
     }
 
 
 def _kb_start_decision(uid: int) -> dict[str, Any]:
     return {
-        "inline_keyboard": [[
-            {"text": "▶️ 直接开局", "callback_data": f"th:start_now:{uid}"},
-            {"text": "⏳ 继续等待", "callback_data": f"th:wait_more:{uid}"},
-        ]]
+        "inline_keyboard": [
+            [
+                {"text": "▶️ 直接开局", "callback_data": f"th:start_now:{uid}"},
+                {"text": "⏳ 继续等待", "callback_data": f"th:wait_more:{uid}"},
+            ],
+            [_rules_button()],
+        ],
     }
 
 
@@ -748,7 +767,7 @@ def _kb_unified_action_row() -> list[dict[str, str]]:
 
 
 def _kb_parallel_actions(g: TenHalfGame) -> dict[str, Any] | None:
-    return {"inline_keyboard": [_kb_unified_action_row()]} if _active_action_targets(g) else None
+    return {"inline_keyboard": [_kb_unified_action_row(), [_rules_button()]]} if _active_action_targets(g) else None
 
 
 def _active_action_targets(g: TenHalfGame) -> list[int]:
@@ -1834,7 +1853,7 @@ class TenHalfPlugin(Plugin):
                 active_names.append(g.dealer_name)
             if active_names:
                 lines.append("⚡ 所有人共用下方按钮，系统按点击者识别自己的手牌；全部停牌/爆牌后统一结算。")
-                lines.append("⚠️ 无感模式下点击加倍会由 userbot 再次自动扣除本局底注；转账模式不自动代扣。")
+                lines.append("⚠️ 加倍需已有 2 张牌；无感模式会由 userbot 再扣本局底注，转账模式不自动代扣。")
                 lines.append("⏳ 等待：" + "、".join(_html_name(name) for name in active_names))
         if g.phase == "dealer_turn" and not g.dealer_is_bot and not g.finished:
             lines.append("👉 所有玩家已行动，庄家请要牌或停牌。")
@@ -1959,7 +1978,7 @@ class TenHalfPlugin(Plugin):
     ) -> str:
         """比较玩家与庄家，返回结果标识。
 
-        返回值: win_nat | win_5s | win | push | lose
+        返回值: win_nat | win_5s | win | lose
         """
         pn = p.is_natural
         pfs = p.is_five_small
@@ -1969,34 +1988,32 @@ class TenHalfPlugin(Plugin):
 
         if dealer_busted:
             # 庄家爆牌：没爆的玩家赢
-            if pn:
-                return "win_nat"
             if pfs:
                 return "win_5s"
+            if pn:
+                return "win_nat"
             return "win"
 
-        # ── 天生十点半优先级最高 ──
-        if pn and dealer_natural:
-            return "push"
-        if pn:
-            return "win_nat"
-        if dealer_natural:
-            return "lose"
-
-        # ── 五小次之 ──
+        # ── 五小最高；五小互比时点数小者胜，同点庄家胜 ──
         if pfs and dealer_five_small:
-            return "push"
+            return "win_5s" if p.value < dealer_val else "lose"
         if pfs:
             return "win_5s"
         if dealer_five_small:
             return "lose"
 
-        # ── 普通比较 ──
+        # ── 天生十点半保留；同为天生时庄家胜 ──
+        if pn and dealer_natural:
+            return "lose"
+        if pn:
+            return "win_nat"
+        if dealer_natural:
+            return "lose"
+
+        # ── 普通比较；同点庄家胜 ──
         if p.value > dealer_val:
             return "win"
-        if p.value < dealer_val:
-            return "lose"
-        return "push"
+        return "lose"
 
     @staticmethod
     def _settlement_outcome_text(
@@ -2250,7 +2267,7 @@ class TenHalfPlugin(Plugin):
         """Handle callback_query events from inline keyboard buttons.
 
         Callback data format: th:<action>:<id>
-        Actions: join, hit, stand, double; dealer_yes/dealer_no are stale-button compatibility only.
+        Actions: join, rules, hit, stand, double; dealer_yes/dealer_no are stale-button compatibility only.
         """
         callback_data = _ie_callback_data(payload)
         if not callback_data:
@@ -2280,9 +2297,13 @@ class TenHalfPlugin(Plugin):
             if not g or g.finished:
                 return [{"type": "no_session"}]
             callback_message_id = _ie_message_mid(payload)
-            if callback_message_id and action in ("join", "view", "hit", "stand", "double"):
+            if callback_message_id and action in ("join", "rules", "view", "hit", "stand", "double"):
                 g.main_message_id = callback_message_id
                 self._remember_interaction_message(g, callback_message_id)
+
+            # ── rules ──
+            if action == "rules":
+                return [_answer_action(payload, _rules_text(g), show_alert=True)]
 
             # ── join ──
             if action == "join":
@@ -2602,7 +2623,6 @@ class TenHalfPlugin(Plugin):
         for p in g.players:
             p.cards.append(g.deck.pop())
         g.dealer_cards.append(g.deck.pop())
-        g.dealer_cards.append(g.deck.pop())
 
         g.phase = "playing"
         g.turn_order = [p.user_id for p in g.players]
@@ -2618,7 +2638,7 @@ class TenHalfPlugin(Plugin):
         actions.extend(await self._delete_current_join_notice_actions(ctx, g))
         if payload is not None:
             actions.append(_answer_action(payload, _dealer_private_brief(g), show_alert=True))
-        g.status_note = f"{_display_name(g.dealer_name)} 当庄，玩家起手 1 张明牌。所有人共用下方按钮，系统按点击者识别自己的手牌。"
+        g.status_note = f"{_display_name(g.dealer_name)} 当庄，每人起手 1 张；庄家首牌暗牌。所有人共用下方按钮，系统按点击者识别自己的手牌。"
         actions.extend(await self._ix_refresh_or_settle(cid, g, ctx, schedule_all=True))
         return actions
 
@@ -2799,14 +2819,10 @@ class TenHalfPlugin(Plugin):
         if player is None:
             return []
         p = player
-        if len(g.dealer_cards) < 2:
+        if len(p.cards) != 2:
             if payload is not None:
-                return [_answer_action(payload, "庄家发满两张牌后才能加倍。")]
-            return [_send_action("⚠️ 庄家发满两张牌后才能加倍。")]
-        if len(p.cards) != 1:
-            if payload is not None:
-                return [_answer_action(payload, "加倍只能在第一张牌后使用。")]
-            return [_send_action("⚠️ 加倍只能在第一张牌后使用。")]
+                return [_answer_action(payload, "加倍只能在已有 2 张牌时使用。")]
+            return [_send_action("⚠️ 加倍只能在已有 2 张牌时使用。")]
         if g.join_mode != JOIN_MODE_SILENT_DEBIT:
             if payload is not None:
                 return [_answer_action(payload, "转账模式不会自动扣款，本局暂不支持按钮加倍；可切换无感模式后再开局。", show_alert=True)]
@@ -2882,7 +2898,7 @@ class TenHalfPlugin(Plugin):
 
     # ── 交互：结算 ──────────────────────────────────
     async def _ix_settle(self, cid: int, g: TenHalfGame, ctx: PluginContext | None = None) -> list[dict[str, Any]]:
-        """结算：赢家获得总底注池 × 倍数 × 0.9（平台抽水10%），由 userbot 发放。"""
+        """结算：每个闲家独立对庄家结算，payout 始终由 userbot 发放。"""
         g.phase = "finished"
         g.finished = True
         dv = g.dealer_val()
@@ -2890,14 +2906,14 @@ class TenHalfPlugin(Plugin):
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
-        # 总底注池只能来自真实已支付 stake；加倍必须先追加扣款，不能只凭 doubled 标记扩池。
+        # 入池金额只用于展示真实已支付 stake；单个玩家派奖按自己的真实 stake 独立计算。
         dealer_bet = int(g.paid_stakes.get(g.dealer_id) or (g.bet if g.dealer_id else 0))
-        total_pot = dealer_bet + sum(int(p.stake or g.paid_stakes.get(p.user_id) or g.bet) for p in g.players)
+        total_paid = dealer_bet + sum(int(p.stake or g.paid_stakes.get(p.user_id) or g.bet) for p in g.players)
 
         # ── 结算明细 ──
         lines = [
             f"🏆 <b>十点半结算 · 牌桌 <code>{g.game_id}</code></b>",
-            f"💰 总底注池: <b>{total_pot}</b>",
+            f"💰 总入池金额: <b>{total_paid}</b>",
             f"🎰 庄家 <b>{_html_name(g.dealer_name)}</b>: {_dealer_public_brief(g, reveal=True)}",
             "",
             "👥 玩家",
@@ -2905,23 +2921,27 @@ class TenHalfPlugin(Plugin):
 
         player_results: list[dict[str, Any]] = []
         winners: list[dict[str, Any]] = []
-        losers: list[dict[str, Any]] = []
+        dealer_reward = 0
+
+        def payout_multiplier(outcome: str) -> float:
+            if outcome == "win_5s":
+                return 3.0
+            if outcome == "win_nat":
+                return 2.0
+            if outcome == "win":
+                return 1.0
+            return 0.0
 
         for p in g.players:
             eb = int(p.stake or g.paid_stakes.get(p.user_id) or g.bet)
             outcome = self._compare(p, dv, db, dn, dfs)
+            win_multiplier = payout_multiplier(outcome)
 
-            # 倍数
-            multiplier = (
-                2.0 if outcome == "win_nat"
-                else 2.0 if outcome == "win_5s"
-                else 1.0 if outcome == "win"
-                else 0.0
-            )
-
-            # 赢家获得 = 总底注池 × 倍数 × 0.9（抽水10%）
-            reward = int(total_pot * multiplier * 0.9) if multiplier > 0 else 0
+            # 赢家拿回本金口径：实际 stake × (本金 1 + 牌型倍率) × 0.9。
+            reward = int(eb * (1.0 + win_multiplier) * 0.9) if win_multiplier > 0 else 0
             loss = eb if outcome == "lose" else 0
+            if loss > 0 and g.dealer_id:
+                dealer_reward += int(eb * 2.0 * 0.9)
 
             # 显示文案
             outcome_display = self._settlement_outcome_text(
@@ -2939,7 +2959,7 @@ class TenHalfPlugin(Plugin):
                 "user_id": p.user_id,
                 "name": p.name,
                 "outcome": outcome,
-                "multiplier": multiplier,
+                "multiplier": win_multiplier,
                 "reward": reward,
                 "loss": loss,
                 "bet": eb,
@@ -2947,20 +2967,13 @@ class TenHalfPlugin(Plugin):
             player_results.append(pr)
             if reward > 0:
                 winners.append(pr)
-            elif loss > 0:
-                losers.append(pr)
 
             if ctx and ctx.log:
                 await ctx.log("info",
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
-                    f"outcome={outcome}, multiplier={multiplier}, reward={reward}, "
-                    f"loss={loss}, bet={eb}, total_pot={total_pot}, chat_id={cid}")
+                    f"outcome={outcome}, multiplier={win_multiplier}, reward={reward}, "
+                    f"loss={loss}, bet={eb}, total_paid={total_paid}, chat_id={cid}")
 
-        dealer_reward = (
-            int(total_pot * 0.9)
-            if not winners and g.players and len(losers) == len(g.players) and g.dealer_id
-            else 0
-        )
         if dealer_reward > 0:
             dealer_result = {
                 "user_id": g.dealer_id,
@@ -2981,7 +2994,7 @@ class TenHalfPlugin(Plugin):
                 await ctx.log(
                     "info",
                     f"[ten_half] dealer_reward: uid={g.dealer_id}, name={g.dealer_name}, "
-                    f"amount={dealer_reward}, bet={dealer_bet}, total_pot={total_pot}, chat_id={cid}",
+                    f"amount={dealer_reward}, bet={dealer_bet}, total_paid={total_paid}, chat_id={cid}",
                 )
 
         actions: list[dict[str, Any]] = []
@@ -3036,7 +3049,8 @@ class TenHalfPlugin(Plugin):
                     "status": "finished",
                     "dealer_name": g.dealer_name,
                     "dealer_value": dv,
-                    "total_pot": total_pot,
+                    "total_pot": total_paid,
+                    "total_paid": total_paid,
                     "winner_user_id": primary["user_id"],
                     "winner_name": primary["name"],
                     "winner_count": len(winners),
@@ -3061,7 +3075,8 @@ class TenHalfPlugin(Plugin):
                     "status": "dealer_wins",
                     "dealer_name": g.dealer_name,
                     "dealer_value": dv,
-                    "total_pot": total_pot,
+                    "total_pot": total_paid,
+                    "total_paid": total_paid,
                     "players": player_results,
                 },
             })
