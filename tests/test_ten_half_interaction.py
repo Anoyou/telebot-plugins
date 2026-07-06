@@ -193,6 +193,42 @@ def callback_payload(
     return payload
 
 
+def stake_payload(
+    *,
+    amount: int = 100,
+    user_id: int = 999,
+    name: str = "管理员",
+    callback_query_id: str = "cb-stake",
+    message_id: int = 601,
+) -> dict:
+    return callback_payload(
+        user_id=user_id,
+        name=name,
+        callback_data=f"th:stake:{amount}",
+        callback_query_id=callback_query_id,
+        message_id=message_id,
+    )
+
+
+async def start_lobby(
+    plugin,
+    ctx,
+    *,
+    amount: int = 100,
+    payload: dict | None = None,
+    user_id: int = 999,
+    name: str = "管理员",
+) -> list[dict]:
+    start_payload = dict(payload or keyword_payload())
+    start_payload.setdefault("stake_options", [amount])
+    await plugin.on_interaction(ctx, "start_ten_half", start_payload)
+    return await plugin.on_interaction(
+        ctx,
+        "start_ten_half",
+        stake_payload(amount=amount, user_id=user_id, name=name),
+    )
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.sent: list[dict] = []
@@ -443,7 +479,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis)
             await plugin.on_startup(ctx)
             try:
-                start_actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                start_actions = await start_lobby(plugin, ctx)
                 start_message = next(action for action in start_actions if action["type"] == "send_message")
                 self.assertIn("十点半开局", start_message["text"])
                 self.assertIn("当前牌桌 ID", start_message["text"])
@@ -483,7 +519,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
 
                 first = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
@@ -530,7 +566,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             join_key = plugin_module._join_notice_key(1, -100123)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
                 await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
                 redis.store[join_key] = "910"
@@ -574,7 +610,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             join_key = plugin_module._join_notice_key(1, -100123)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
                 await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
                 game = plugin._games[-100123]
@@ -622,7 +658,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             starter_ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis)
             await starter.on_startup(starter_ctx)
             try:
-                await starter.on_interaction(starter_ctx, "start_ten_half", keyword_payload())
+                await start_lobby(starter, starter_ctx)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
             finally:
                 await starter.on_shutdown(starter_ctx)
@@ -657,7 +693,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
 
                 actions = await plugin.on_interaction(
                     ctx,
@@ -679,7 +715,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
 
                 actions = await plugin.on_interaction(
@@ -701,7 +737,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
 
                 actions = await plugin.on_interaction(
                     ctx,
@@ -722,7 +758,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
 
                 actions = await plugin.on_interaction(
                     ctx,
@@ -743,7 +779,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
 
                 actions = await plugin.on_interaction(
                     ctx,
@@ -769,7 +805,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
 
                 actions = await plugin.on_interaction(
                     ctx,
@@ -797,7 +833,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
 
                 actions = await plugin.on_interaction(
                     ctx,
@@ -859,7 +895,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                actions = await start_lobby(plugin, ctx)
                 start_message = next(action for action in actions if action["type"] == "send_message")
 
                 self.assertIn("入局模式: <b>无感模式</b>", start_message["text"])
@@ -910,7 +946,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 actions = await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -946,7 +982,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 first = await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -978,7 +1014,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -1007,7 +1043,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -1037,7 +1073,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -1069,7 +1105,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -1101,7 +1137,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60}, messages=messages)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -1139,7 +1175,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 actions = await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
 
                 self.assertEqual(actions, [{"type": "no_session"}])
@@ -1160,7 +1196,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60}, redis=redis, messages=messages)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
 
                 await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
@@ -1256,7 +1292,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             join_key = plugin_module._join_notice_key(1, -100123)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
                 redis.store[join_key] = "800"
 
@@ -1985,7 +2021,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             try:
                 payload = keyword_payload()
                 payload["module_config"] = {"max_players": 3}
-                await plugin.on_interaction(ctx, "start_ten_half", payload)
+                await start_lobby(plugin, ctx, payload=payload)
                 game = plugin._games[-100123]
                 self.assertEqual(game.max_players, 3)
 
@@ -2017,7 +2053,7 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_keyword_lobby_prefers_module_config_bet_over_framework_fallback_prize(self) -> None:
+    def test_keyword_start_uses_configured_stake_options_before_lobby(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
@@ -2026,12 +2062,43 @@ class TenHalfInteractionTest(unittest.TestCase):
                 payload = keyword_payload()
                 payload["bet"] = 100
                 payload["prize"] = 123
-                payload["module_config"] = {"bet": 1000}
+                payload["module_config"] = {"stake_options": [1000, 2000]}
                 actions = await plugin.on_interaction(ctx, "start_ten_half", payload)
 
                 game = plugin._games[-100123]
+                self.assertEqual(game.phase, "select_bet")
+                self.assertEqual(game.bet, 0)
+                self.assertEqual(game.stake_options, [1000, 2000])
+                select_message = next(action for action in actions if action["type"] == "send_message")
+                self.assertIn("请选择要开局的底注额度", select_message["text"])
+                callbacks = [
+                    button["callback_data"]
+                    for row in select_message["reply_markup"]["inline_keyboard"]
+                    for button in row
+                ]
+                self.assertEqual(callbacks, ["th:stake:1000", "th:stake:2000"])
+
+                rejected = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    stake_payload(amount=1000, user_id=111, name="玩家A"),
+                )
+                self.assertEqual(rejected, [{
+                    "type": "answer_callback",
+                    "callback_query_id": "cb-stake",
+                    "text": "只有发起开局的人可以选择本局底注。",
+                    "show_alert": True,
+                }])
+                self.assertEqual(game.phase, "select_bet")
+
+                lobby_actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    stake_payload(amount=1000),
+                )
+                self.assertEqual(game.phase, "lobby")
                 self.assertEqual(game.bet, 1000)
-                start_message = next(action for action in actions if action["type"] == "send_message")
+                start_message = next(action for action in lobby_actions if action["type"] == "send_message")
                 self.assertIn("底注: <b>1000</b>", start_message["text"])
 
                 wrong = await plugin.on_interaction(
@@ -2059,8 +2126,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             await plugin.on_startup(ctx)
             try:
                 payload = keyword_payload()
-                payload["module_config"] = {"bet": 7895}
-                await plugin.on_interaction(ctx, "start_ten_half", payload)
+                await start_lobby(plugin, ctx, payload=payload, amount=7895)
 
                 self.assertIn(-100123, plugin._games)
                 self.assertEqual(plugin._games[-100123].bet, 7895)
@@ -2099,7 +2165,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", {**keyword_payload(), "bet": 1000})
+                await start_lobby(plugin, ctx, amount=1000)
 
                 first_payload = payment_payload(amount=1000, payer_id=111, payer_name="玩家A")
                 first_payload.pop("payer_user_id", None)
@@ -2133,10 +2199,10 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_keyword_lobby_accepts_explicit_module_prize(self) -> None:
+    def test_keyword_start_ignores_legacy_module_prize_until_stake_selected(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
-            ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
+            ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60, "stake_options": [2000]})
             await plugin.on_startup(ctx)
             try:
                 payload = keyword_payload()
@@ -2145,15 +2211,28 @@ class TenHalfInteractionTest(unittest.TestCase):
                 actions = await plugin.on_interaction(ctx, "start_ten_half", payload)
 
                 game = plugin._games[-100123]
-                self.assertEqual(game.bet, 1000)
-                start_message = next(action for action in actions if action["type"] == "send_message")
-                self.assertIn("底注: <b>1000</b>", start_message["text"])
+                self.assertEqual(game.phase, "select_bet")
+                self.assertEqual(game.bet, 0)
+                self.assertEqual(game.stake_options, [2000])
+                select_message = next(action for action in actions if action["type"] == "send_message")
+                self.assertIn("th:stake:2000", str(select_message["reply_markup"]))
+                self.assertNotIn("底注: <b>1000</b>", select_message["text"])
+
+                lobby_actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    stake_payload(amount=2000),
+                )
+                self.assertEqual(game.phase, "lobby")
+                self.assertEqual(game.bet, 2000)
+                start_message = next(action for action in lobby_actions if action["type"] == "send_message")
+                self.assertIn("底注: <b>2000</b>", start_message["text"])
             finally:
                 await plugin.on_shutdown(ctx)
 
         asyncio.run(scenario())
 
-    def test_keyword_lobby_ignores_bare_framework_fallback_prize(self) -> None:
+    def test_keyword_start_without_bet_shows_default_stake_options(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             ctx = PluginContext(config={"max_players": 3, "lobby_timeout": 60})
@@ -2164,8 +2243,16 @@ class TenHalfInteractionTest(unittest.TestCase):
                 payload["prize"] = 123
                 actions = await plugin.on_interaction(ctx, "start_ten_half", payload)
 
-                self.assertNotIn(-100123, plugin._games)
-                self.assertIn("请指定下注金额", actions[0]["text"])
+                game = plugin._games[-100123]
+                self.assertEqual(game.phase, "select_bet")
+                self.assertEqual(game.bet, 0)
+                self.assertEqual(game.stake_options, [1000, 10000, 50000, 100000])
+                select_message = next(action for action in actions if action["type"] == "send_message")
+                self.assertIn("请选择要开局的底注额度", select_message["text"])
+                self.assertIn("th:stake:1000", str(select_message["reply_markup"]))
+                self.assertIn("th:stake:10000", str(select_message["reply_markup"]))
+                self.assertIn("th:stake:50000", str(select_message["reply_markup"]))
+                self.assertIn("th:stake:100000", str(select_message["reply_markup"]))
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -2178,7 +2265,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, redis=redis)
             await plugin.on_startup(ctx)
             try:
-                start_actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                start_actions = await start_lobby(plugin, ctx)
                 start_message = next(action for action in start_actions if action["type"] == "send_message")
                 redis.store[plugin_module._main_msg_key(1, -100123)] = "900"
 
@@ -2227,12 +2314,15 @@ class TenHalfInteractionTest(unittest.TestCase):
             redis.store[plugin_module._main_msg_key(1, -100123)] = "599"
             await plugin.on_startup(ctx)
             try:
-                actions = await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                actions = await start_lobby(plugin, ctx)
 
-                self.assertEqual([action["type"] for action in actions], ["start_session", "send_message"])
+                self.assertEqual(
+                    [action["type"] for action in actions],
+                    ["answer_callback", "edit_message", "start_session", "send_message"],
+                )
                 action = next(action for action in actions if action["type"] == "send_message")
                 self.assertEqual(action["type"], "send_message")
-                self.assertEqual(action["reply_to_message_id"], 600)
+                self.assertEqual(action["reply_to_message_id"], 601)
                 self.assertEqual(action["save_message_id_key"], plugin_module._main_msg_key(1, -100123))
                 self.assertEqual(action["replace_saved_message_id_key"], plugin_module._main_msg_key(1, -100123))
                 self.assertIn("十点半开局", action["text"])
@@ -2251,7 +2341,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, messages=messages)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(ctx, "start_ten_half", userbot_entry_payload())
                 game = plugin._games[-100123]
                 game.main_message_id = 599
@@ -2287,7 +2377,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, messages=messages)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
                 game = plugin._games[-100123]
                 game.main_message_id = 599
@@ -2327,7 +2417,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 2, "lobby_timeout": 60}, messages=messages)
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
@@ -2369,7 +2459,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 plugin_module.Card("♠️", "9"),
             ]
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(ctx, "start_ten_half", userbot_entry_payload())
                 game = plugin._games[-100123]
                 game.main_message_id = 900
@@ -2398,7 +2488,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 plugin_module.Card("♠️", "9"),
             ]
             try:
-                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await start_lobby(plugin, ctx)
                 await plugin.on_interaction(ctx, "start_ten_half", userbot_entry_payload())
                 game = plugin._games[-100123]
                 game.main_message_id = 900

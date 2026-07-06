@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '在交互中心为十点半配置关键词和底注金额后，由交互 Bot 在群内开局、发大厅、刷新按钮、超时提示和结算公告。当前规则为每人起手 1 张，庄家首牌暗牌，保留天生十点半；按钮里可点击“规则”快速查看。转账模式下普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局，已有 2 张牌后加倍会再次扣除底注并补 1 张停牌。账号 userbot 可发送“10d模式”切换入局模式，也可在等待大厅发送“入局”免转账加入。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
+    "x-usage-guide": '在交互中心配置关键词后，由交互 Bot 先让触发者选择本局底注额度，再进入对应额度的开局大厅。当前规则为每人起手 1 张，庄家首牌暗牌，保留天生十点半；按钮里可点击“规则”快速查看。转账模式下普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局，已有 2 张牌后加倍会再次扣除底注并补 1 张停牌。账号 userbot 可发送“10d模式”切换入局模式，也可在等待大厅发送“入局”免转账加入。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
     "additionalProperties": False,
     "properties": {
         "timeout": {
@@ -48,6 +48,19 @@ CONFIG_SCHEMA = {
             "enum": ["transfer", "silent_debit"],
             "enumNames": ["转账模式", "无感扣款模式"],
         },
+        "stake_options": {
+            "type": "array",
+            "title": "可选底注额度",
+            "description": "关键词触发后展示给开局发起人的底注按钮，按顺序显示；默认 1000、10000、50000、100000。",
+            "default": [1000, 10000, 50000, 100000],
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000000,
+            },
+        },
     },
     "required": ["timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"],
 }
@@ -76,7 +89,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.4.10",
+    version="0.4.11",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -110,10 +123,15 @@ MANIFEST = Manifest(
                                   'settlement'],},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
-                   'properties': {'bet': {'type': 'integer',
-                                          'title': '下注金额',
-                                          'default': 100,
-                                          'minimum': 1},
+                   'properties': {'stake_options': {'type': 'array',
+                                                    'title': '可选底注额度',
+                                                    'description': '关键词触发后展示给开局发起人的底注按钮，按顺序显示。',
+                                                    'default': [1000, 10000, 50000, 100000],
+                                                    'minItems': 1,
+                                                    'maxItems': 8,
+                                                    'items': {'type': 'integer',
+                                                              'minimum': 1,
+                                                              'maximum': 1000000000}},
                                   'timeout': {'type': 'integer',
                                               'title': '每个玩家抓牌/操作限时（秒）',
                                               'default': 45,

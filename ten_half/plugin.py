@@ -69,11 +69,12 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.10"
+PLUGIN_VERSION = "0.4.11"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
 JOIN_MODE_SILENT_DEBIT = "silent_debit"
+DEFAULT_STAKE_OPTIONS = (1000, 10000, 50000, 100000)
 PENDING_DEBIT_TTL_SECONDS = 45
 
 
@@ -281,7 +282,7 @@ class TenHalfGame:
     settlement_cleanup_delay: int = 60
     idle_start_seconds: int = 15
     game_id: str = field(default_factory=lambda: secrets.token_hex(3).upper())
-    # lobby -> playing -> dealer_turn -> finished
+    # select_bet -> lobby -> playing -> dealer_turn -> finished
     phase: str = "lobby"
     join_mode: str = JOIN_MODE_TRANSFER
     dealer_id: int = 0          # 0 = bot 庄家
@@ -315,6 +316,7 @@ class TenHalfGame:
     player_message_ids: dict[int, int] = field(default_factory=dict)
     paid_stakes: dict[int, int] = field(default_factory=dict)
     pending_debits: dict[int, dict[str, Any]] = field(default_factory=dict)
+    stake_options: list[int] = field(default_factory=list)
 
     # ── 庄家辅助 ─────────────────────────────────────
     @property
@@ -657,42 +659,69 @@ def _config_int(
     return max(minimum, min(maximum, int(default)))
 
 
-def _interaction_bet_from_payload(payload: dict[str, Any]) -> int:
-    module_config = _module_config(payload)
-    trigger_payload = _trigger_payload(payload)
+def _format_stake_label(amount: int) -> str:
+    amount = int(amount)
+    if amount % 10000 == 0:
+        return f"{amount // 10000}万"
+    if amount % 1000 == 0:
+        return f"{amount // 1000}千"
+    return str(amount)
 
-    def first_positive(source: dict[str, Any], keys: tuple[str, ...]) -> int:
-        for key in keys:
-            parsed = _pint(source.get(key), 0, minimum=1)
-            if parsed > 0:
-                return parsed
-        return 0
 
-    rule_keys = ("module_prize", "math_prize")
-    amount_keys = (
-        "entry_fee",
-        "entry_amount",
-        "threshold_amount",
-        "payment_threshold",
-        "default_bet",
-        "bet_amount",
-        "stake",
-        "bet",
-        "amount",
-        "prize",
-    )
-    payload_amount_keys = tuple(key for key in amount_keys if key != "prize")
+def _stake_options_from_payload(ctx: PluginContext | None, payload: dict[str, Any]) -> list[int]:
+    sources: list[Any] = [
+        payload.get("stake_options"),
+        _module_config(payload).get("stake_options"),
+        _module_config(payload).get("bet_options"),
+        _trigger_payload(payload).get("stake_options"),
+        _trigger_payload(payload).get("bet_options"),
+    ]
+    if ctx is not None and isinstance(ctx.config, dict):
+        sources.extend([
+            ctx.config.get("stake_options"),
+            ctx.config.get("bet_options"),
+        ])
 
-    for source, keys in (
-        (payload, rule_keys),
-        (module_config, amount_keys),
-        (trigger_payload, amount_keys),
-        (payload, payload_amount_keys),
-    ):
-        parsed = first_positive(source, keys)
-        if parsed > 0:
+    for raw in sources:
+        values: list[Any]
+        if isinstance(raw, str):
+            values = [item.strip() for item in raw.replace("，", ",").split(",")]
+        elif isinstance(raw, (list, tuple)):
+            values = list(raw)
+        else:
+            values = []
+        parsed: list[int] = []
+        seen: set[int] = set()
+        for value in values:
+            amount = _pint(value, 0, minimum=1)
+            if amount <= 0 or amount in seen:
+                continue
+            parsed.append(amount)
+            seen.add(amount)
+            if len(parsed) >= 8:
+                break
+        if parsed:
             return parsed
-    return 0
+    return list(DEFAULT_STAKE_OPTIONS)
+
+
+def _stake_selection_text(g: TenHalfGame) -> str:
+    host = _display_name(g.host_name) if g.host_name else "发起人"
+    return "\n".join([
+        "🃏 <b>十点半开局</b>",
+        "",
+        "请选择要开局的底注额度：",
+        f"只有 <b>{_html_name(host)}</b> 可以选择本局底注。",
+    ])
+
+
+def _kb_stake_options(options: list[int]) -> dict[str, Any]:
+    buttons = [
+        {"text": _format_stake_label(amount), "callback_data": f"th:stake:{amount}"}
+        for amount in options
+    ]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    return {"inline_keyboard": rows}
 
 
 def _start_keyword_label(payload: dict[str, Any], fallback: str) -> str:
@@ -1040,6 +1069,7 @@ def _lobby_snapshot(g: TenHalfGame) -> dict[str, Any]:
         "player_message_ids": {str(uid): mid for uid, mid in g.player_message_ids.items()},
         "paid_stakes": {str(uid): int(amount) for uid, amount in g.paid_stakes.items()},
         "pending_debits": {str(uid): dict(item) for uid, item in g.pending_debits.items()},
+        "stake_options": [int(amount) for amount in g.stake_options],
     }
 
 
@@ -1052,7 +1082,7 @@ class TenHalfPlugin(Plugin):
     display_name = "十点半"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay", "join_mode"}
+    command_config_keys = {"timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay", "join_mode", "stake_options"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -1250,10 +1280,11 @@ class TenHalfPlugin(Plugin):
         return dict(snapshot) if isinstance(snapshot, dict) else None
 
     def _game_from_lobby_snapshot(self, snapshot: dict[str, Any], cid: int) -> TenHalfGame | None:
-        if str(snapshot.get("phase") or "lobby") != "lobby":
+        phase = str(snapshot.get("phase") or "lobby")
+        if phase not in {"select_bet", "lobby"}:
             return None
         bet = _pint(snapshot.get("bet"), 0, minimum=1)
-        if bet <= 0:
+        if bet <= 0 and phase != "select_bet":
             return None
         started_wall = float(snapshot.get("started_wall_time") or time.time())
         elapsed = max(0.0, time.time() - started_wall)
@@ -1264,7 +1295,7 @@ class TenHalfPlugin(Plugin):
             turn_timeout=_pint(snapshot.get("turn_timeout"), self._turn_timeout, minimum=5),
             lobby_timeout=_pint(snapshot.get("lobby_timeout"), self._lobby_timeout, minimum=10),
             settlement_cleanup_delay=_pint(snapshot.get("settlement_cleanup_delay"), self._settlement_cleanup_delay, minimum=0),
-            phase="lobby",
+            phase=phase,
             started_at=time.monotonic() - elapsed,
             via_interaction=bool(snapshot.get("via_interaction", True)),
             host_user_id=_pint(snapshot.get("host_user_id"), 0, minimum=0),
@@ -1318,6 +1349,14 @@ class TenHalfPlugin(Plugin):
                 }
         for uid, _name in g.lobby_players:
             g.paid_stakes.setdefault(uid, g.bet)
+        raw_options = snapshot.get("stake_options") if isinstance(snapshot.get("stake_options"), list) else []
+        g.stake_options = []
+        seen_options: set[int] = set()
+        for item in raw_options:
+            amount = _pint(item, 0, minimum=1)
+            if amount > 0 and amount not in seen_options:
+                g.stake_options.append(amount)
+                seen_options.add(amount)
         return g
 
     def _receiver_label(
@@ -2295,21 +2334,15 @@ class TenHalfPlugin(Plugin):
     ) -> list[dict[str, Any]]:
         join_mode = await self._load_join_mode(ctx)
         limits = self._game_limits_from_payload(ctx, payload)
-        bet = _interaction_bet_from_payload(payload)
-
-
-
-        if bet <= 0:
-            return [
-                _send_action(
-                    f"请指定下注金额。例：{{prefix}}{self._command} 100",
-                    reply_to_message_id=_ie_mid(payload),
-                ),
-                {"type": "end_session"},
-            ]
+        stake_options = _stake_options_from_payload(ctx, payload)
 
         async with self._lock(cid):
-            if cid in self._games and not self._games[cid].finished:
+            existing = self._games.get(cid)
+            if existing and not existing.finished and existing.phase == "select_bet":
+                self._games.pop(cid, None)
+                await self._delete_lobby_state(ctx, existing)
+                existing = None
+            if existing and not existing.finished:
                 return [
                     _send_action(
                         "⚠️ 当前已有进行中的十点半游戏。",
@@ -2318,42 +2351,85 @@ class TenHalfPlugin(Plugin):
                 ]
             host_id, host_name = _ie_actor(payload)
             g = TenHalfGame(
-                chat_id=cid, bet=bet,
+                chat_id=cid, bet=0,
                 max_players=limits["max_players"],
                 turn_timeout=limits["turn_timeout"],
                 lobby_timeout=limits["lobby_timeout"],
                 settlement_cleanup_delay=limits["settlement_cleanup_delay"],
-                phase="lobby", join_mode=join_mode, started_at=time.monotonic(),
+                phase="select_bet", join_mode=join_mode, started_at=time.monotonic(),
                 via_interaction=True,
                 host_user_id=host_id,
                 host_name=host_name,
             )
+            g.stake_options = stake_options
             g.payment_receiver_name = self._receiver_label(ctx, payload, g)
             self._games[cid] = g
             await self._save_lobby_state(ctx, g)
 
         if ctx.log:
             await ctx.log("info",
-                f"[ten_half] game_start: chat_id={cid}, bet={bet}, "
+                f"[ten_half] stake_select_start: chat_id={cid}, "
+                f"host={host_name} ({host_id}), options={stake_options}, "
+                f"join_mode={g.join_mode}, max_players={g.max_players}")
+
+        return [
+            _session_sync_action(g, payload),
+            _send_action(
+                _stake_selection_text(g),
+                reply_markup=_kb_stake_options(stake_options),
+                reply_to_message_id=_ie_mid(payload),
+            ),
+        ]
+
+    async def _ix_start_lobby_with_bet(
+        self,
+        ctx: PluginContext,
+        payload: dict[str, Any],
+        g: TenHalfGame,
+        bet: int,
+    ) -> list[dict[str, Any]]:
+        g.bet = int(bet)
+        g.phase = "lobby"
+        g.started_at = time.monotonic()
+        g.game_id = secrets.token_hex(3).upper()
+        g.status_note = ""
+        g.awaiting_start_confirmation = False
+        g.lobby_version = 0
+        g.payment_receiver_name = self._receiver_label(ctx, payload, g)
+        await self._save_lobby_state(ctx, g)
+
+        if ctx.log:
+            await ctx.log("info",
+                f"[ten_half] game_start: chat_id={g.chat_id}, bet={g.bet}, "
                 f"join_mode={g.join_mode}, max_players={g.max_players}, "
                 f"lobby_timeout={g.lobby_timeout}, via_interaction=True")
 
         self._track(asyncio.create_task(
-            self._lobby_timeout_task(cid, g.started_at, ctx),
+            self._lobby_timeout_task(g.chat_id, g.started_at, ctx),
         ))
 
-        reply_markup = _kb_join(bet, g.join_mode)
-        return [
+        actions: list[dict[str, Any]] = [_answer_action(payload, f"已选择底注 {_format_stake_label(g.bet)}。")]
+        selection_mid = _ie_message_mid(payload)
+        if selection_mid:
+            actions.append(
+                _edit_action(
+                    selection_mid,
+                    f"✅ 已选择底注 <b>{g.bet}</b>，正在开启十点半牌桌。",
+                    reply_markup=None,
+                )
+            )
+        actions.extend([
             _session_sync_action(g, payload),
             await self._main_action(
                 ctx,
                 g,
                 self._build_lobby_text(g, g.payment_receiver_name),
-                reply_markup=reply_markup,
+                reply_markup=_kb_join(g.bet, g.join_mode),
                 reply_to_message_id=_ie_mid(payload),
                 force_send=True,
-            )
-        ]
+            ),
+        ])
+        return actions
 
 
     # ── 交互：转账加入 ────────────────────────────────
@@ -2509,7 +2585,7 @@ class TenHalfPlugin(Plugin):
         """Handle callback_query events from inline keyboard buttons.
 
         Callback data format: th:<action>:<id>
-        Actions: join, rules, hit, stand, double; dealer_yes/dealer_no are stale-button compatibility only.
+        Actions: stake, join, rules, hit, stand, double; dealer_yes/dealer_no are stale-button compatibility only.
         """
         callback_data = _ie_callback_data(payload)
         if not callback_data:
@@ -2537,11 +2613,29 @@ class TenHalfPlugin(Plugin):
         async with self._lock(cid):
             g = self._games.get(cid)
             if not g or g.finished:
-                return [{"type": "no_session"}]
+                restored = await self._restore_lobby_state(ctx, payload, cid)
+                if restored is None:
+                    return [{"type": "no_session"}]
+                self._games[cid] = restored
+                g = restored
             callback_message_id = _ie_message_mid(payload)
             if callback_message_id and action in ("join", "rules", "view", "hit", "stand", "double"):
                 g.main_message_id = callback_message_id
                 self._remember_interaction_message(g, callback_message_id)
+
+            # ── stake selection ──
+            if action == "stake":
+                if g.phase != "select_bet":
+                    return [_answer_action(payload, "本局底注已经选好了。", show_alert=True)]
+                if g.host_user_id and aid != g.host_user_id:
+                    return [_answer_action(payload, "只有发起开局的人可以选择本局底注。", show_alert=True)]
+                options = g.stake_options or _stake_options_from_payload(ctx, payload)
+                if cb_id not in options:
+                    return [_answer_action(payload, "这个底注额度不可用，请重新开局选择。", show_alert=True)]
+                return await self._ix_start_lobby_with_bet(ctx, payload, g, cb_id)
+
+            if g.phase == "select_bet":
+                return [_answer_action(payload, "请先由发起开局的人选择底注。", show_alert=True)]
 
             # ── rules ──
             if action == "rules":
