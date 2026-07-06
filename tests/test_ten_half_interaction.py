@@ -2367,6 +2367,49 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_lobby_timeout_with_no_players_cleans_stake_and_main_messages(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, messages=messages)
+            await plugin.on_startup(ctx)
+            try:
+                await start_lobby(plugin, ctx)
+                game = plugin._games[-100123]
+                game.main_message_id = 599
+                self.assertIn(601, game.known_interaction_message_ids)
+
+                for task in list(plugin._tasks):
+                    task.cancel()
+                if plugin._tasks:
+                    await asyncio.gather(*plugin._tasks, return_exceptions=True)
+                plugin._tasks.clear()
+
+                with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                    await plugin._lobby_timeout_task(-100123, game.started_at, ctx)
+                    if plugin._tasks:
+                        await asyncio.gather(*list(plugin._tasks), return_exceptions=True)
+
+                self.assertNotIn(-100123, plugin._games)
+                timeout_actions = messages.applied[0]["actions"]
+                self.assertEqual([a["type"] for a in timeout_actions], ["edit_message", "end_session"])
+                self.assertIn("没人加入，牌局已取消", timeout_actions[0]["text"])
+                cleanup_actions = messages.applied[-1]["actions"]
+                self.assertEqual(
+                    cleanup_actions,
+                    [
+                        {"type": "delete_message", "message_id": 599, "send_via": "interaction_bot", "chat_id": -100123},
+                        {"type": "delete_message", "message_id": 601, "send_via": "interaction_bot", "chat_id": -100123},
+                    ],
+                )
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
     def test_lobby_timeout_with_single_paid_player_refunds_entry_fee(self) -> None:
         async def fast_sleep(_seconds):
             return None
@@ -2402,6 +2445,60 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(refund["text"], "+100")
                 self.assertEqual(refund["reply_to_user_id"], 111)
                 self.assertEqual(refund["reply_to_message_id"], 700)
+                self.assertIn("save_message_id_key", refund)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_old_lobby_timeout_does_not_override_late_idle_start_prompt(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            ctx = PluginContext(config={"max_players": 6, "lobby_timeout": 60}, messages=messages)
+            await plugin.on_startup(ctx)
+            try:
+                await start_lobby(plugin, ctx)
+                game = plugin._games[-100123]
+                initial_version = game.lobby_version
+                game.main_message_id = 599
+
+                for task in list(plugin._tasks):
+                    task.cancel()
+                if plugin._tasks:
+                    await asyncio.gather(*plugin._tasks, return_exceptions=True)
+                plugin._tasks.clear()
+
+                await plugin.on_interaction(ctx, "start_ten_half", payment_payload(payer_id=111, payer_name="玩家A"))
+                await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    payment_payload(payer_id=222, payer_name="玩家B", notice_message_id=711, reply_message_id=710),
+                )
+                current_version = game.lobby_version
+                self.assertGreater(current_version, initial_version)
+
+                for task in list(plugin._tasks):
+                    task.cancel()
+                if plugin._tasks:
+                    await asyncio.gather(*plugin._tasks, return_exceptions=True)
+                plugin._tasks.clear()
+
+                with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                    await plugin._lobby_timeout_task(-100123, game.started_at, ctx, version=initial_version)
+                    await plugin._idle_start_prompt_task(-100123, game.started_at, current_version, ctx)
+
+                self.assertIn(-100123, plugin._games)
+                self.assertEqual(game.phase, "lobby")
+                self.assertEqual(len(messages.applied), 1)
+                prompt_action = messages.applied[0]["actions"][0]
+                self.assertEqual(prompt_action["type"], "edit_message")
+                self.assertIn("可以选择直接开局或继续等待", prompt_action["text"])
+                self.assertIn("th:start_now:111", str(prompt_action["reply_markup"]))
+                self.assertIn("th:wait_more:111", str(prompt_action["reply_markup"]))
             finally:
                 await plugin.on_shutdown(ctx)
 

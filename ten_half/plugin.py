@@ -69,7 +69,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.11"
+PLUGIN_VERSION = "0.4.12"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -1134,9 +1134,28 @@ class TenHalfPlugin(Plugin):
         return refunds
 
     @staticmethod
-    def _lobby_refund_actions(g: TenHalfGame, refunds: list[tuple[int, str, int, int | None]]) -> list[dict[str, Any]]:
+    def _lobby_refund_message_keys(
+        ctx: PluginContext | None,
+        g: TenHalfGame,
+        refunds: list[tuple[int, str, int, int | None]],
+    ) -> list[str]:
+        if ctx is None:
+            return []
+        return [
+            _reward_msg_key(ctx.account_id, g.chat_id, f"{g.game_id}:refund", uid)
+            for uid, _name, _amount, _reply_to in refunds
+        ]
+
+    @staticmethod
+    def _lobby_refund_actions(
+        g: TenHalfGame,
+        refunds: list[tuple[int, str, int, int | None]],
+        *,
+        reward_message_keys: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
         actions: list[dict[str, Any]] = []
-        for uid, _name, amount, reply_to in refunds:
+        keys = list(reward_message_keys or [])
+        for index, (uid, _name, amount, reply_to) in enumerate(refunds):
             actions.append({
                 "type": "payout",
                 "chat_id": g.chat_id,
@@ -1146,6 +1165,7 @@ class TenHalfPlugin(Plugin):
                 "reply_to_user_id": uid,
                 "reply_to_search_limit": 50,
                 **({"reply_to_message_id": reply_to} if reply_to else {}),
+                **({"save_message_id_key": keys[index]} if index < len(keys) and keys[index] else {}),
             })
         return actions
 
@@ -1735,6 +1755,11 @@ class TenHalfPlugin(Plugin):
             )
         ))
 
+    def _schedule_lobby_timeout(self, cid: int, g: TenHalfGame, ctx: PluginContext) -> None:
+        self._track(asyncio.create_task(
+            self._lobby_timeout_task(cid, g.started_at, ctx, version=g.lobby_version),
+        ))
+
     async def _cleanup_game_messages_task(
         self,
         ctx: PluginContext,
@@ -1794,9 +1819,11 @@ class TenHalfPlugin(Plugin):
             return g.dealer_id
         return g.host_user_id or (g.lobby_players[0][0] if g.lobby_players else 0)
 
-    def _touch_lobby(self, g: TenHalfGame) -> None:
+    def _touch_lobby(self, g: TenHalfGame, *, clear_status: bool = False) -> None:
         g.lobby_version += 1
         g.awaiting_start_confirmation = False
+        if clear_status:
+            g.status_note = ""
 
     def _lock_dealer(self, g: TenHalfGame, uid: int, name: str, status_note: str) -> None:
         if g.dealer_locked:
@@ -2160,13 +2187,26 @@ class TenHalfPlugin(Plugin):
     # ═══════════════════════════════════════════════════
     # 大厅
     # ═══════════════════════════════════════════════════
-    async def _lobby_timeout_task(self, cid: int, sa: float, ctx: PluginContext) -> None:
+    async def _lobby_timeout_task(
+        self,
+        cid: int,
+        sa: float,
+        ctx: PluginContext,
+        *,
+        version: int | None = None,
+    ) -> None:
         g0 = self._games.get(cid)
         await asyncio.sleep(g0.lobby_timeout if g0 and g0.started_at == sa else self._lobby_timeout)
         actions: list[dict[str, Any] | None] = []
         async with self._lock(cid):
             g = self._games.get(cid)
-            if not g or g.phase != "lobby" or g.finished or g.started_at != sa:
+            if (
+                not g
+                or g.phase != "lobby"
+                or g.finished
+                or g.started_at != sa
+                or (version is not None and g.lobby_version != version)
+            ):
                 return
             if not g.lobby_players:
                 g.finished = True
@@ -2179,12 +2219,14 @@ class TenHalfPlugin(Plugin):
                     self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
                     reply_markup=None,
                 ))
+                self._schedule_settlement_cleanup(ctx, g, [])
                 actions.append({"type": "end_session"})
                 if ctx.log:
                     await ctx.log("info", f"[ten_half] lobby_timeout_cancel: players=0, chat_id={cid}")
             else:
                 if len(g.lobby_players) < 2:
                     refunds = self._lobby_cancel_refunds(g)
+                    refund_message_keys = self._lobby_refund_message_keys(ctx, g, refunds)
                     g.finished = True
                     self._games.pop(cid, None)
                     await self._delete_lobby_state(ctx, g)
@@ -2195,7 +2237,12 @@ class TenHalfPlugin(Plugin):
                         self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
                         reply_markup=None,
                     ))
-                    actions.extend(self._lobby_refund_actions(g, refunds))
+                    actions.extend(self._lobby_refund_actions(
+                        g,
+                        refunds,
+                        reward_message_keys=refund_message_keys,
+                    ))
+                    self._schedule_settlement_cleanup(ctx, g, refund_message_keys)
                     actions.append({"type": "end_session"})
                     if ctx.log:
                         await ctx.log("info", f"[ten_half] lobby_timeout_cancel: players={len(g.lobby_players)}, chat_id={cid}")
@@ -2404,9 +2451,7 @@ class TenHalfPlugin(Plugin):
                 f"join_mode={g.join_mode}, max_players={g.max_players}, "
                 f"lobby_timeout={g.lobby_timeout}, via_interaction=True")
 
-        self._track(asyncio.create_task(
-            self._lobby_timeout_task(g.chat_id, g.started_at, ctx),
-        ))
+        self._schedule_lobby_timeout(g.chat_id, g, ctx)
 
         actions: list[dict[str, Any]] = [_answer_action(payload, f"已选择底注 {_format_stake_label(g.bet)}。")]
         selection_mid = _ie_message_mid(payload)
@@ -2468,9 +2513,7 @@ class TenHalfPlugin(Plugin):
                     return await _skip("no_lobby", g)
                 self._games[cid] = restored
                 g = restored
-                self._track(asyncio.create_task(
-                    self._lobby_timeout_task(cid, g.started_at, ctx),
-                ))
+                self._schedule_lobby_timeout(cid, g, ctx)
                 if ctx.log:
                     await ctx.log(
                         "info",
@@ -2551,7 +2594,7 @@ class TenHalfPlugin(Plugin):
                 self._remember_player_message(g, payer_id, mid)
             if len(g.lobby_players) == 1:
                 self._lock_first_dealer(g, payer_id, payer_name)
-            self._touch_lobby(g)
+            self._touch_lobby(g, clear_status=g.awaiting_start_confirmation)
             await self._save_lobby_state(ctx, g)
             cnt = len(g.lobby_players)
 
@@ -2573,6 +2616,7 @@ class TenHalfPlugin(Plugin):
                 actions.extend(await self._ix_begin(cid, g, g.dealer_id, g.dealer_name, ctx))
                 return actions
 
+            self._schedule_lobby_timeout(cid, g, ctx)
             self._schedule_lobby_main_refresh(cid, g, ctx)
             if g.dealer_locked:
                 self._schedule_idle_start_prompt(cid, g, ctx)
@@ -2619,9 +2663,12 @@ class TenHalfPlugin(Plugin):
                 self._games[cid] = restored
                 g = restored
             callback_message_id = _ie_message_mid(payload)
-            if callback_message_id and action in ("join", "rules", "view", "hit", "stand", "double"):
-                g.main_message_id = callback_message_id
-                self._remember_interaction_message(g, callback_message_id)
+            if callback_message_id:
+                if action == "stake":
+                    self._remember_interaction_message(g, callback_message_id)
+                elif action in ("join", "rules", "view", "hit", "stand", "double"):
+                    g.main_message_id = callback_message_id
+                    self._remember_interaction_message(g, callback_message_id)
 
             # ── stake selection ──
             if action == "stake":
@@ -2733,7 +2780,7 @@ class TenHalfPlugin(Plugin):
             self._remember_player_message(g, aid, mid)
         if len(g.lobby_players) == 1:
             self._lock_first_dealer(g, aid, aname)
-        self._touch_lobby(g)
+        self._touch_lobby(g, clear_status=g.awaiting_start_confirmation)
         await self._save_lobby_state(ctx, g)
         cnt = len(g.lobby_players)
         if is_callback:
@@ -2760,6 +2807,7 @@ class TenHalfPlugin(Plugin):
         if cnt >= g.max_players and g.dealer_locked:
             result.extend(await self._ix_begin(g.chat_id, g, g.dealer_id, g.dealer_name, ctx, payload=payload))
         else:
+            self._schedule_lobby_timeout(g.chat_id, g, ctx)
             if g.dealer_locked:
                 self._schedule_idle_start_prompt(g.chat_id, g, ctx)
             result.append(
@@ -2795,6 +2843,7 @@ class TenHalfPlugin(Plugin):
         self._touch_lobby(g)
         g.status_note = f"{_display_name(g.dealer_name)} 选择继续等待后续玩家加入。"
         await self._save_lobby_state(ctx, g)
+        self._schedule_lobby_timeout(g.chat_id, g, ctx)
         self._schedule_idle_start_prompt(g.chat_id, g, ctx)
         return [
             _answer_action(payload, "继续等待后续玩家加入。"),
