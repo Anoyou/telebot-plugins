@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -78,6 +78,26 @@ CONFIG_SCHEMA = {
             "minimum": 0,
             "maximum": 20000,
         },
+        "protect_command_outputs": {
+            "type": "boolean",
+            "title": "拦截可执行指令输出",
+            "description": "开启后，AI 回复若像 Telegram/TelePilot 指令、转账数字或已配置命令，会改为安全提示，避免被其他 Bot 或 TelePilot 继续执行。",
+            "default": True,
+        },
+        "safe_reply_prefix": {
+            "type": "string",
+            "title": "安全回复前缀（可选）",
+            "description": "例如“天才：”。留空时会尝试从陪聊人设提示词中识别“回复必须以某前缀开头”的要求。",
+            "default": "",
+            "maxLength": 32,
+        },
+        "blocked_bare_outputs": {
+            "type": "string",
+            "title": "额外拦截的裸文本",
+            "description": "每行或逗号分隔一个词；AI 回复若以这些词开头且没有安全前缀，会被视为可能触发命令。",
+            "default": "re\nai\nfd",
+            "x-ui-widget": "textarea",
+        },
         "enable_private_chat": {
             "type": "boolean",
             "title": "私聊直接回复",
@@ -148,6 +168,9 @@ CONFIG_SCHEMA = {
         "timeout_seconds",
         "max_tokens",
         "max_output_chars",
+        "protect_command_outputs",
+        "safe_reply_prefix",
+        "blocked_bare_outputs",
         "enable_private_chat",
         "enable_group_chat",
         "group_chat_ids",

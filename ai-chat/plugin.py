@@ -3,19 +3,35 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
 
 from app.worker.command import current_command_prefix
+
+try:  # TelePilot 0.33+ exposes the worker-local command context here.
+    from app.worker.command import get_command_context
+except Exception:  # pragma: no cover - older runtimes
+    get_command_context = None  # type: ignore[assignment]
+
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
+DEFAULT_BLOCKED_BARE_OUTPUTS = "re\nai\nfd"
+DEFAULT_COMMAND_REFUSAL = "我不能代你发送可能触发 TelePilot 或其他 Bot 的可执行指令。"
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
+PAYMENT_LIKE_RE = re.compile(r"^\+\s*\d+(?:\.\d+)?$")
+REQUIRED_PREFIX_PATTERNS = (
+    re.compile(r"回复都必须以[“\"']([^”\"']{1,32})[”\"']开头"),
+    re.compile(r"每(?:个|次)回复.*?以[“\"']([^”\"']{1,32})[”\"']开头"),
+    re.compile(r"回复.*?必须以[“\"']([^”\"']{1,32})[”\"']开头"),
+)
+COMMON_COMMAND_PREFIXES = ("/", ".", "!", ",", "，", "。")
 
 DEFAULT_SYSTEM_PROMPT = (
     "你是一个自然、简洁、有边界感的中文聊天助手。"
@@ -73,6 +89,9 @@ def _cfg(ctx: PluginContext) -> dict[str, Any]:
         "timeout_seconds": _int(raw.get("timeout_seconds"), 60, 10, 600),
         "max_tokens": _int(raw.get("max_tokens"), 1200, 256, 8000),
         "max_output_chars": _int(raw.get("max_output_chars"), 0, 0, 20000),
+        "protect_command_outputs": _bool(raw.get("protect_command_outputs"), True),
+        "safe_reply_prefix": str(raw.get("safe_reply_prefix") or ""),
+        "blocked_bare_outputs": str(raw.get("blocked_bare_outputs") or DEFAULT_BLOCKED_BARE_OUTPUTS),
         "enable_private_chat": _bool(raw.get("enable_private_chat"), True),
         "enable_group_chat": _bool(raw.get("enable_group_chat"), True),
         "group_chat_ids": str(raw.get("group_chat_ids") or ""),
@@ -176,6 +195,137 @@ def _looks_like_command(text: str) -> bool:
         return False
     prefix = _command_prefix()
     return stripped.startswith((prefix, "/", ".", "!"))
+
+
+def _split_words(raw: Any) -> set[str]:
+    words: set[str] = set()
+    for item in re.split(r"[\s,，;；]+", str(raw or "")):
+        text = item.strip()
+        if text:
+            words.add(text)
+    return words
+
+
+def _command_module() -> Any | None:
+    try:
+        return importlib.import_module("app.worker.command")
+    except Exception:
+        return None
+
+
+def _available_command_words(cfg: dict[str, Any]) -> set[str]:
+    """Best-effort TelePilot command inventory for output guarding."""
+
+    words = _split_words(cfg.get("blocked_bare_outputs"))
+    command = str(cfg.get("command") or DEFAULT_COMMAND).strip()
+    if command:
+        words.add(command)
+
+    module = _command_module()
+    if module is not None:
+        for attr in ("_BUILTIN_ALIAS_TO_PRIMARY", "_PLUGIN_COMMANDS", "_BUILTIN"):
+            value = getattr(module, attr, None)
+            if isinstance(value, dict):
+                words.update(str(key).strip() for key in value.keys() if str(key).strip())
+
+    getter = get_command_context
+    if getter is not None:
+        try:
+            command_ctx = getter()
+        except Exception:
+            command_ctx = None
+        templates = getattr(command_ctx, "templates", None) or {}
+        if isinstance(templates, dict):
+            words.update(str(key).strip() for key in templates.keys() if str(key).strip())
+            for tpl in templates.values():
+                if not isinstance(tpl, dict):
+                    continue
+                words.update(_split_words(tpl.get("name")))
+                words.update(_split_words("\n".join(str(x) for x in tpl.get("aliases") or [])))
+        aliases = getattr(command_ctx, "aliases", None) or {}
+        if isinstance(aliases, dict):
+            words.update(str(key).strip() for key in aliases.keys() if str(key).strip())
+
+    return {word for word in words if word}
+
+
+def _required_reply_prefix(cfg: dict[str, Any]) -> str:
+    configured = str(cfg.get("safe_reply_prefix") or "").strip()
+    if configured:
+        return configured[:32]
+    prompt = str(cfg.get("system_prompt") or "")
+    for pattern in REQUIRED_PREFIX_PATTERNS:
+        match = pattern.search(prompt)
+        if match:
+            return match.group(1).strip()[:32]
+    return ""
+
+
+def _ensure_reply_prefix(text: str, prefix: str) -> str:
+    if not prefix:
+        return text
+    stripped = text.lstrip()
+    if stripped.startswith(prefix):
+        return text
+    return f"{prefix}{stripped}"
+
+
+def _command_prefixes() -> tuple[str, ...]:
+    prefixes = {_command_prefix(), *COMMON_COMMAND_PREFIXES}
+    return tuple(prefix for prefix in prefixes if prefix)
+
+
+def _starts_with_command_word(line: str, words: set[str]) -> bool:
+    candidate = line.casefold()
+    for word in sorted(words, key=len, reverse=True):
+        folded = word.casefold()
+        if not folded:
+            continue
+        if candidate == folded or candidate.startswith(folded + " "):
+            return True
+    return False
+
+
+def _looks_like_executable_output(line: str, command_words: set[str]) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if PAYMENT_LIKE_RE.match(stripped):
+        return True
+    if stripped.startswith(_command_prefixes()):
+        return True
+    return _starts_with_command_word(stripped, command_words)
+
+
+def _first_executable_output_line(text: str, command_words: set[str]) -> str:
+    for line in text.splitlines():
+        if _looks_like_executable_output(line, command_words):
+            return line.strip()
+    return ""
+
+
+def _guard_ai_output(ctx: PluginContext, cfg: dict[str, Any], text: str) -> str:
+    """Prevent model output from becoming a Telegram command or payment-like text."""
+
+    output = str(text or "").strip()
+    if not output:
+        return output
+    prefix = _required_reply_prefix(cfg)
+    if not cfg.get("protect_command_outputs", True):
+        return _ensure_reply_prefix(output, prefix)
+    command_words = _available_command_words(cfg)
+    blocked_line = _first_executable_output_line(output, command_words)
+    output = _ensure_reply_prefix(output, prefix)
+    blocked_line = blocked_line or _first_executable_output_line(output, command_words)
+    if blocked_line:
+        guarded = _ensure_reply_prefix(DEFAULT_COMMAND_REFUSAL, prefix)
+        log_detail = {
+            "reason": "command_like_output",
+            "line_preview": blocked_line[:80],
+        }
+        asyncio.create_task(_log(ctx, "warning", "已拦截 AI-Chat 可执行指令形态输出", **log_detail))
+        return guarded
+    return output
 
 
 def _trim_text(text: str, limit: int) -> str:
@@ -349,6 +499,7 @@ class AIChatPlugin(Plugin):
                 await _log(ctx, "warning", _classify_ai_error(exc), chat_id=chat_id)
                 return
 
+            reply = _guard_ai_output(ctx, cfg, reply)
             reply = _trim_text(reply, cfg["max_output_chars"])
             if not reply:
                 return
@@ -398,6 +549,7 @@ class AIChatPlugin(Plugin):
             await _safe_edit(event, _classify_ai_error(exc))
             return
 
+        answer = _guard_ai_output(ctx, cfg, answer)
         answer = _trim_text(answer, cfg["max_output_chars"])
         chunks = _split_text(answer or "AI 未返回内容。")
         await _safe_edit(event, chunks[0])

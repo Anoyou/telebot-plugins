@@ -3,7 +3,7 @@
   "display_name": "AI-Chat",
   "description": "调用 TelePilot AI Provider 的 AI-Chat 聊天与消息解释助手，支持私聊/群聊触发和短期上下文记忆。",
   "author": "Anoyou",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.33.0",
@@ -84,6 +84,26 @@
         "minimum": 0,
         "maximum": 20000
       },
+      "protect_command_outputs": {
+        "type": "boolean",
+        "title": "拦截可执行指令输出",
+        "description": "开启后，AI 回复若像 Telegram/TelePilot 指令、转账数字或已配置命令，会改为安全提示，避免被其他 Bot 或 TelePilot 继续执行。",
+        "default": true
+      },
+      "safe_reply_prefix": {
+        "type": "string",
+        "title": "安全回复前缀（可选）",
+        "description": "例如“天才：”。留空时会尝试从陪聊人设提示词中识别“回复必须以某前缀开头”的要求。",
+        "default": "",
+        "maxLength": 32
+      },
+      "blocked_bare_outputs": {
+        "type": "string",
+        "title": "额外拦截的裸文本",
+        "description": "每行或逗号分隔一个词；AI 回复若以这些词开头且没有安全前缀，会被视为可能触发命令。",
+        "default": "re\nai\nfd",
+        "x-ui-widget": "textarea"
+      },
       "enable_private_chat": {
         "type": "boolean",
         "title": "私聊直接回复",
@@ -154,6 +174,9 @@
       "timeout_seconds",
       "max_tokens",
       "max_output_chars",
+      "protect_command_outputs",
+      "safe_reply_prefix",
+      "blocked_bare_outputs",
       "enable_private_chat",
       "enable_group_chat",
       "group_chat_ids",

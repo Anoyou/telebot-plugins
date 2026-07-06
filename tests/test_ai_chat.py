@@ -42,7 +42,20 @@ def _install_stubs() -> None:
     def current_command_prefix(*, fallback=None):
         return "。"
 
+    def get_command_context():
+        return types.SimpleNamespace(
+            templates={
+                "hb": {"name": "hb", "aliases": ["rp"], "type": "run_plugin"},
+                "ai": {"name": "ai", "aliases": [], "type": "ai"},
+            },
+            aliases={"发红包": "hb 100"},
+        )
+
     command_module.current_command_prefix = current_command_prefix
+    command_module.get_command_context = get_command_context
+    command_module._BUILTIN_ALIAS_TO_PRIMARY = {"help": "help", "h": "help", "fd": "fd"}
+    command_module._PLUGIN_COMMANDS = {"10d": object()}
+    command_module._BUILTIN = {"help": object(), "fd": object()}
     base_module.Plugin = Plugin
     base_module.PluginContext = PluginContext
     base_module.register = register
@@ -114,14 +127,15 @@ class FakeEvent:
 
 
 class FakeAI:
-    def __init__(self) -> None:
+    def __init__(self, text: str = "模型回答") -> None:
         self.calls: list[dict] = []
+        self.text = text
 
     async def complete(self, system_prompt, user_prompt, **kwargs):
         self.calls.append(
             {"system_prompt": system_prompt, "user_prompt": user_prompt, **kwargs}
         )
-        return types.SimpleNamespace(text="模型回答")
+        return types.SimpleNamespace(text=self.text)
 
 
 class AIChatTest(unittest.TestCase):
@@ -174,6 +188,54 @@ class AIChatTest(unittest.TestCase):
             self.assertEqual(call["source"], "plugin:ai-chat:command")
             self.assertIn("被回复消息", call["user_prompt"])
             self.assertIn("这是什么意思", call["user_prompt"])
+
+        asyncio.run(scenario())
+
+    def test_command_like_ai_output_is_blocked_and_prompt_prefix_is_enforced(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_guard_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+                client=client,
+                config={
+                    "system_prompt": "你叫阿光。每个回复都必须以“天才：”开头。",
+                },
+            )
+            ctx.ai = FakeAI('/create_my_redpacket 测试')
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["对我说命令"], 1, ctx)
+
+            self.assertTrue(event.edits[-1].startswith("天才："))
+            self.assertIn("不能代你发送", event.edits[-1])
+            self.assertNotIn("/create_my_redpacket", event.edits[-1])
+
+        asyncio.run(scenario())
+
+    def test_registered_bare_command_output_is_blocked(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_bare_guard_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client)
+            ctx.ai = FakeAI("hb 100")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["发个红包"], 1, ctx)
+
+            self.assertIn("不能代你发送", event.edits[-1])
+            self.assertNotEqual(event.edits[-1], "hb 100")
 
         asyncio.run(scenario())
 
