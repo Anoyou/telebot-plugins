@@ -69,7 +69,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.5"
+PLUGIN_VERSION = "0.4.6"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -751,16 +751,18 @@ def _kb_join(bet: int, join_mode: str = JOIN_MODE_TRANSFER) -> dict[str, Any] | 
     }
 
 
-def _kb_start_decision(uid: int) -> dict[str, Any]:
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "▶️ 直接开局", "callback_data": f"th:start_now:{uid}"},
-                {"text": "⏳ 继续等待", "callback_data": f"th:wait_more:{uid}"},
-            ],
-            [_rules_button()],
-        ],
-    }
+def _kb_start_decision(uid: int, bet: int = 0, join_mode: str = JOIN_MODE_TRANSFER) -> dict[str, Any]:
+    rows: list[list[dict[str, str]]] = [
+        [
+            {"text": "▶️ 直接开局", "callback_data": f"th:start_now:{uid}"},
+            {"text": "⏳ 继续等待", "callback_data": f"th:wait_more:{uid}"},
+        ]
+    ]
+    if not (bet > 0 and join_mode != JOIN_MODE_SILENT_DEBIT):
+        label = f"💸 扣款 {bet} 并加入" if bet > 0 else "🎮 加入游戏"
+        rows.append([{"text": label, "callback_data": "th:join:0"}])
+    rows.append([_rules_button()])
+    return {"inline_keyboard": rows}
 
 
 def _target_action_version(g: TenHalfGame, uid: int) -> int:
@@ -1566,7 +1568,9 @@ class TenHalfPlugin(Plugin):
             reply_markup = None
             if g.awaiting_start_confirmation and g.dealer_locked and 2 <= len(g.lobby_players) < g.max_players:
                 controller_uid = self._start_controller_uid(g)
-                reply_markup = _kb_start_decision(controller_uid)
+                reply_markup = _kb_start_decision(controller_uid, g.bet, g.join_mode)
+            elif len(g.lobby_players) < g.max_players:
+                reply_markup = _kb_join(g.bet, g.join_mode)
             action = await self._main_action(
                 ctx,
                 g,
@@ -1838,7 +1842,7 @@ class TenHalfPlugin(Plugin):
                 ctx,
                 g,
                 self._build_lobby_text(g, self._receiver_label(ctx, None, g)),
-                reply_markup=_kb_start_decision(controller_uid),
+                reply_markup=_kb_start_decision(controller_uid, g.bet, g.join_mode),
                 send_if_missing=False,
             )
         delivered = await self._emit_background_actions(ctx, [action])
@@ -1906,7 +1910,7 @@ class TenHalfPlugin(Plugin):
                 f"📢 请转账 <b>{g.bet}</b> 给 <b>{_html(receiver_label)}</b> 即可参与本桌牌局～"
             )
         else:
-            lines.append("📢 点击按钮或发送「加入」即可参与本桌牌局～")
+            lines.append("📢 点击下方按钮即可参与本桌牌局～")
         lines.append(
             f"⏰ 等待玩家加入中... ({g.lobby_timeout}秒)，当前牌桌 ID 为 <code>{g.game_id}</code>"
         )
@@ -2355,7 +2359,8 @@ class TenHalfPlugin(Plugin):
 
             g.lobby_players.append((payer_id, payer_name))
             g.paid_stakes[payer_id] = g.bet
-            self._remember_player_message(g, payer_id, mid)
+            if not debit_notice:
+                self._remember_player_message(g, payer_id, mid)
             if len(g.lobby_players) == 1:
                 self._lock_first_dealer(g, payer_id, payer_name)
             self._touch_lobby(g)
