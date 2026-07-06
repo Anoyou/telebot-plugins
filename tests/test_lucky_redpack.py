@@ -663,6 +663,73 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_event_bus_claim_skips_non_whitelisted_chat_before_entity_lookup(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient(get_entity_error=RuntimeError("should not lookup"))
+            ctx.config = {
+                "command": "rp",
+                "allowed_chat_ids": [-100111],
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            actions = await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -100222, "message_id": 2814, "text": "还好我没 u"},
+                    "chat": {"id": -100222},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(actions, [])
+            self.assertEqual(ctx.client.get_entity_calls, [])
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_event_bus_command_respects_chat_whitelist(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext()
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "allowed_chat_ids": [-100111],
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+
+            actions = await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "command", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -100222, "message_id": 2848, "text": "rp 测试 100 2"},
+                    "chat": {"id": -100222},
+                    "sender": {"user_id": 1682400007, "display_name": "发起人"},
+                },
+            )
+
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0]["type"], "send_message")
+            self.assertIn("未启用拼手气口令红包", actions[0]["text"])
+            self.assertNotIn(-100222, plugin._packs)
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
     def test_event_bus_command_creates_claimable_pack(self) -> None:
         async def run_case() -> None:
             redis = FakeRedis()
@@ -1062,6 +1129,10 @@ class LuckyRedpackTest(unittest.TestCase):
 
         self.assertTrue(message_subscriptions)
         self.assertTrue(all(item.get("entry_key") == "claim_lucky_redpack" for item in message_subscriptions))
+
+        properties = manifest["config_schema"]["properties"]
+        self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
+        self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
 
     def test_last_claim_finishes_with_remaining_amount(self) -> None:
         pack = plugin_module.LuckyRedpack(

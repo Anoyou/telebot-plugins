@@ -27,6 +27,14 @@ CONFIG_SCHEMA = {
             "pattern": "^\\S+$",
             "description": "只填写命令本体，不要填写系统前缀。",
         },
+        "allowed_chat_ids": {
+            "type": "array",
+            "title": "群聊白名单",
+            "items": {"type": "integer"},
+            "default": [],
+            "x-ui-widget": "allowed-peer-multi-select",
+            "description": "从当前账号的已允许会话中选择。留空表示不限制群聊；选择后，创建、查看、关闭和领取红包都只在这些群内生效。",
+        },
         "default_amount": {
             "type": "integer",
             "title": "默认总额",
@@ -112,7 +120,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.3.9",
+    version="1.4.0",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

@@ -7,6 +7,7 @@ TelePilot 标准 payout action，由平台受控 userbot 发放。
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from contextlib import contextmanager
 import html
 import inspect
@@ -66,7 +67,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.3.9"
+PLUGIN_VERSION = "1.4.0"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -163,6 +164,24 @@ def _clamp_int(value: Any, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return min(max(parsed, minimum), maximum)
+
+
+def _int_set(value: Any) -> set[int]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        items: Iterable[Any] = value.replace("，", ",").replace("\n", ",").split(",")
+    elif isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray, dict)):
+        items = value
+    else:
+        items = [value]
+    result: set[int] = set()
+    for item in items:
+        try:
+            result.add(int(str(item).strip()))
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -904,6 +923,7 @@ class LuckyRedpackPlugin(Plugin):
         "image_password_enabled",
         "delete_command_message",
         "allow_owner_claim",
+        "allowed_chat_ids",
     }
 
     def __init__(self) -> None:
@@ -917,6 +937,7 @@ class LuckyRedpackPlugin(Plugin):
         self._image_password_enabled = DEFAULT_IMAGE_PASSWORD_ENABLED
         self._delete_command_message = False
         self._allow_owner_claim = DEFAULT_ALLOW_OWNER_CLAIM
+        self._allowed_chat_ids: set[int] = set()
         self._packs: dict[int, list[LuckyRedpack]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -929,6 +950,23 @@ class LuckyRedpackPlugin(Plugin):
     def _track_task(self, task: asyncio.Task) -> None:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _chat_allowed(self, chat_id: int) -> bool:
+        return not self._allowed_chat_ids or int(chat_id) in self._allowed_chat_ids
+
+    def _chat_not_allowed_text(self) -> str:
+        return "当前群聊未启用拼手气口令红包，请先在插件配置的群聊白名单中选择本群。"
+
+    async def _message_can_claim(self, ctx: PluginContext, *, chat_id: int, text: str) -> bool:
+        normalized_text = _normalize_password(text)
+        if not normalized_text:
+            return False
+        async with self._get_lock(chat_id):
+            with self._state_file_lock(ctx.account_id, chat_id):
+                packs = await self._load_active_packs(ctx, chat_id)
+                if packs:
+                    return any(normalized_text == _normalize_password(pack.current_password) for pack in packs)
+        return _looks_like_password_attempt(text, self._suffix_length)
 
     def _new_suffix(self, pack: LuckyRedpack | None = None) -> str:
         used = pack.used_passwords if pack is not None else set()
@@ -1219,10 +1257,15 @@ class LuckyRedpackPlugin(Plugin):
         self._image_password_enabled = bool(cfg.get("image_password_enabled", DEFAULT_IMAGE_PASSWORD_ENABLED))
         self._delete_command_message = bool(cfg.get("delete_command_message", False))
         self._allow_owner_claim = bool(cfg.get("allow_owner_claim", DEFAULT_ALLOW_OWNER_CLAIM))
+        self._allowed_chat_ids = _int_set(cfg.get("allowed_chat_ids"))
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
             storage = "redis+file" if getattr(ctx, "redis", None) is not None else "file"
-            await ctx.log("info", f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}，状态存储：{storage}")
+            whitelist = "不限制" if not self._allowed_chat_ids else f"{len(self._allowed_chat_ids)} 个群"
+            await ctx.log(
+                "info",
+                f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}，状态存储：{storage}，群聊白名单：{whitelist}",
+            )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         for task in list(self._tasks):
@@ -1248,6 +1291,10 @@ class LuckyRedpackPlugin(Plugin):
         chat_id = _payload_chat_id(payload)
         if not chat_id:
             return []
+        if not self._chat_allowed(chat_id):
+            return []
+        if not await self._message_can_claim(ctx, chat_id=chat_id, text=text):
+            return []
         sender_id = _payload_sender_id(payload)
         sender_name = await self._event_sender_display_name(ctx, payload, sender_id)
         actions, pack_to_resend = await self._claim_password(
@@ -1268,6 +1315,16 @@ class LuckyRedpackPlugin(Plugin):
         chat_id = _payload_chat_id(payload)
         if not chat_id:
             return []
+        if not self._chat_allowed(chat_id):
+            command_message_id = _payload_message_id(payload)
+            return [
+                _send_action(
+                    self._chat_not_allowed_text(),
+                    chat_id=chat_id,
+                    reply_to_message_id=command_message_id,
+                    parse_mode="html",
+                )
+            ]
 
         command_message_id = _payload_message_id(payload)
         tokens = _payload_command_args(payload, self._command)
@@ -1397,6 +1454,9 @@ class LuckyRedpackPlugin(Plugin):
         chat_id = _chat_id_from_event(event)
         if not chat_id:
             return
+        if not self._chat_allowed(chat_id):
+            await self._reply(event, self._chat_not_allowed_text())
+            return
 
         tokens = _split_args(args)
         action = tokens[0].casefold() if tokens else ""
@@ -1517,6 +1577,10 @@ class LuckyRedpackPlugin(Plugin):
             return
         chat_id = _chat_id_from_event(event)
         if not chat_id:
+            return
+        if not self._chat_allowed(chat_id):
+            return
+        if not await self._message_can_claim(ctx, chat_id=chat_id, text=text):
             return
         sender = await self._sender(event)
         sender_id = int(getattr(sender, "id", 0) or _sender_id_from_event(event))
