@@ -311,6 +311,70 @@ class TenHalfInteractionTest(unittest.TestCase):
             "lose",
         )
 
+    def test_dealer_public_brief_hides_hidden_card_bust_before_settlement(self) -> None:
+        game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="playing", via_interaction=True)
+        game.dealer_cards = [
+            plugin_module.Card("♠️", "9"),
+            plugin_module.Card("♥️", "2"),
+        ]
+
+        self.assertTrue(game.dealer_busted())
+        self.assertEqual(game.dealer_val(), 11)
+        self.assertEqual(
+            plugin_module._dealer_public_brief(game),
+            "2张（明牌 2点，暗牌 1张）",
+        )
+
+    def test_dealer_public_brief_freezes_visible_points_before_visible_bust(self) -> None:
+        game = plugin_module.TenHalfGame(chat_id=-100123, bet=100, phase="playing", via_interaction=True)
+        game.dealer_cards = [
+            plugin_module.Card("♠️", "A"),
+            plugin_module.Card("♥️", "9"),
+            plugin_module.Card("♦️", "2"),
+        ]
+
+        self.assertTrue(game.dealer_busted())
+        self.assertEqual(game.dealer_val(), 12)
+        self.assertEqual(
+            plugin_module._dealer_public_brief(game),
+            "3张（明牌 9点，暗牌 1张）",
+        )
+
+    def test_dealer_hit_bust_does_not_leak_bust_state_before_settlement(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext()
+            game = plugin_module.TenHalfGame(
+                chat_id=-100123,
+                bet=100,
+                phase="playing",
+                via_interaction=True,
+                dealer_id=333,
+                dealer_name="庄家",
+                main_message_id=900,
+            )
+            game.dealer_cards = [plugin_module.Card("♠️", "9")]
+            game.deck = [plugin_module.Card("♥️", "2")]
+            game.players = [
+                plugin_module.PlayerHand(
+                    user_id=111,
+                    name="玩家A",
+                    cards=[plugin_module.Card("♣️", "5")],
+                )
+            ]
+
+            actions = await plugin._ix_dealer_hit(-100123, game, ctx)
+
+            self.assertTrue(game.dealer_busted())
+            self.assertEqual(game.dealer_val(), 11)
+            self.assertEqual(game.status_note, "庄家 已要牌，当前 2张，明牌 2点。")
+            self.assertEqual(actions[0]["type"], "edit_message")
+            self.assertIn("庄家 <b>庄家</b>: 2张（明牌 2点，暗牌 1张）", actions[0]["text"])
+            self.assertNotIn("庄家 要牌后爆牌", actions[0]["text"])
+            self.assertNotIn("11点", actions[0]["text"])
+
+        asyncio.run(scenario())
+
     def test_userbot_command_only_returns_migration_hint(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
@@ -587,7 +651,7 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_paid_lobby_regular_message_join_still_requires_transfer(self) -> None:
+    def test_paid_lobby_regular_message_join_is_ignored(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             ctx = PluginContext(config={"max_players": 5, "lobby_timeout": 60})
@@ -601,9 +665,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                     message_payload(user_id=111, name="玩家A", text="加入"),
                 )
 
-                self.assertEqual(len(actions), 1)
-                self.assertEqual(actions[0]["type"], "send_message")
-                self.assertIn("请先转账 <b>100</b>", actions[0]["text"])
+                self.assertEqual(actions, [])
                 self.assertEqual(plugin._games[-100123].lobby_players, [])
             finally:
                 await plugin.on_shutdown(ctx)
@@ -692,7 +754,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(actions, [{
                     "type": "answer_callback",
                     "callback_query_id": "cb-normal-join",
-                    "text": "请转账底注加入；账号 userbot 可发送「入局」直接入桌。",
+                    "text": "请转账底注加入；管理员可发送「入局」直接入桌。",
                     "show_alert": True,
                 }])
                 self.assertEqual(plugin._games[-100123].lobby_players, [])
@@ -753,7 +815,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(actions, [{
                     "type": "answer_callback",
                     "callback_query_id": "cb-userbot-join",
-                    "text": "请转账底注加入；账号 userbot 可发送「入局」直接入桌。",
+                    "text": "请转账底注加入；管理员可发送「入局」直接入桌。",
                     "show_alert": True,
                 }])
             finally:
@@ -771,12 +833,13 @@ class TenHalfInteractionTest(unittest.TestCase):
                 first = await plugin.on_interaction(
                     ctx,
                     "start_ten_half",
-                    userbot_entry_payload(text="10d模式"),
+                    userbot_entry_payload(text="10d 模式"),
                 )
                 self.assertEqual(plugin._join_mode, plugin_module.JOIN_MODE_SILENT_DEBIT)
                 self.assertEqual(redis.store[plugin_module._join_mode_key(1)], plugin_module.JOIN_MODE_SILENT_DEBIT)
                 self.assertEqual(first[0]["send_via"], "userbot_reply")
                 self.assertIn("无感模式", first[0]["text"])
+                self.assertIn("save_message_id_key", first[0])
 
                 second = await plugin.on_interaction(
                     ctx,
@@ -800,7 +863,7 @@ class TenHalfInteractionTest(unittest.TestCase):
                 start_message = next(action for action in actions if action["type"] == "send_message")
 
                 self.assertIn("入局模式: <b>无感模式</b>", start_message["text"])
-                self.assertIn("点击下方“扣款 100 并加入”", start_message["text"])
+                self.assertIn("扣款 100 并加入（⚠️会被自动扣款哦）", start_message["text"])
                 self.assertIn("<code>-100</code>", start_message["text"])
                 self.assertNotIn("请转账 <b>100</b>", start_message["text"])
                 self.assertIn("扣款 100 并加入", str(start_message["reply_markup"]))
@@ -810,7 +873,28 @@ class TenHalfInteractionTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_silent_debit_button_joins_and_requests_userbot_debit(self) -> None:
+    def test_normal_user_mode_command_does_not_toggle_join_mode(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            redis = FakeRedis()
+            ctx = PluginContext(redis=redis)
+            await plugin.on_startup(ctx)
+            try:
+                actions = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    message_payload(user_id=111, name="玩家A", text="10d 模式"),
+                )
+
+                self.assertEqual(actions, [{"type": "no_session"}])
+                self.assertEqual(plugin._join_mode, plugin_module.JOIN_MODE_TRANSFER)
+                self.assertNotIn(plugin_module._join_mode_key(1), redis.store)
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_button_requests_userbot_debit_without_joining(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
@@ -825,26 +909,42 @@ class TenHalfInteractionTest(unittest.TestCase):
 
                 game = plugin._games[-100123]
                 self.assertEqual(game.join_mode, plugin_module.JOIN_MODE_SILENT_DEBIT)
-                self.assertEqual(game.lobby_players, [(111, "玩家A")])
+                self.assertEqual(game.lobby_players, [])
                 self.assertNotIn(111, game.player_message_ids)
 
-                self.assertEqual(actions[0], {
-                    "type": "answer_callback",
-                    "callback_query_id": "cb-silent-join",
-                    "text": f"加入成功，牌桌 {game.game_id}",
-                    "show_alert": False,
-                })
-                debit = actions[1]
+                self.assertEqual(len(actions), 1)
+                debit = actions[0]
                 self.assertEqual(debit["type"], "send_message")
                 self.assertEqual(debit["send_via"], "userbot_reply")
                 self.assertEqual(debit["text"], "-100")
                 self.assertEqual(debit["reply_to_user_id"], 111)
+                self.assertEqual(debit["reply_anchor_missing_text"], "无法扣款，加入失败。")
+                self.assertTrue(debit["suppress_reply_anchor_missing_notice"])
+                self.assertIn("save_message_id_key", debit)
+                self.assertEqual(debit["failure_callback"]["text"], "无法扣款，加入失败。")
+                self.assertEqual(debit["failure_callback"]["error_code"], "reply_anchor_missing")
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_payment_notice_joins_after_debit_confirmed(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                debit_notice = payment_payload()
+                debit_notice["payment"] = {"direction": "debit"}
+                actions = await plugin.on_interaction(ctx, "start_ten_half", debit_notice)
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.lobby_players, [(111, "玩家A")])
+                self.assertEqual(game.player_message_ids[111], 700)
 
                 join_notice = next(action for action in actions if action.get("type") == "send_message" and action.get("send_via") == "interaction_bot")
                 self.assertIn("入场金额: 自动扣款 100", join_notice["text"])
-                refresh = next(action for action in actions if action.get("type") == "edit_message")
-                self.assertEqual(refresh["message_id"], 900)
-                self.assertIn("👥 已加入 (1/5): 玩家A", refresh["text"])
                 session_action = next(action for action in actions if action.get("type") == "start_session")
                 self.assertEqual(session_action["paid_user_ids"], [111])
             finally:
@@ -1991,6 +2091,46 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(timeout_actions[0]["message_id"], 599)
                 self.assertEqual(timeout_actions[0]["send_via"], "interaction_bot")
                 self.assertIn("参与人数不足 2 人，牌局已取消", timeout_actions[0]["text"])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_lobby_timeout_with_single_paid_player_refunds_entry_fee(self) -> None:
+        async def fast_sleep(_seconds):
+            return None
+
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            messages = FakeMessages()
+            ctx = PluginContext(config={"max_players": 2, "lobby_timeout": 60}, messages=messages)
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await plugin.on_interaction(ctx, "start_ten_half", payment_payload())
+                game = plugin._games[-100123]
+                game.main_message_id = 599
+
+                for task in list(plugin._tasks):
+                    task.cancel()
+                if plugin._tasks:
+                    await asyncio.gather(*plugin._tasks, return_exceptions=True)
+                plugin._tasks.clear()
+
+                with patch.object(plugin_module.asyncio, "sleep", new=fast_sleep):
+                    await plugin._lobby_timeout_task(-100123, game.started_at, ctx)
+
+                self.assertNotIn(-100123, plugin._games)
+                self.assertEqual(len(messages.applied), 1)
+                timeout_actions = messages.applied[-1]["actions"]
+                self.assertEqual([a["type"] for a in timeout_actions], ["edit_message", "payout", "end_session"])
+                self.assertIn("参与人数不足 2 人，牌局已取消；已退还 玩家A 的入局费 100", timeout_actions[0]["text"])
+                refund = timeout_actions[1]
+                self.assertEqual(refund["chat_id"], -100123)
+                self.assertEqual(refund["amount"], 100)
+                self.assertEqual(refund["text"], "+100")
+                self.assertEqual(refund["reply_to_user_id"], 111)
+                self.assertEqual(refund["reply_to_message_id"], 700)
             finally:
                 await plugin.on_shutdown(ctx)
 
