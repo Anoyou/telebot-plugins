@@ -1,0 +1,193 @@
+{
+  "name": "ai-chat",
+  "display_name": "AI-Chat",
+  "description": "调用 TelePilot AI Provider 的 AI-Chat 聊天与消息解释助手，支持私聊/群聊触发和短期上下文记忆。",
+  "author": "Anoyou",
+  "version": "0.1.0",
+  "entry": "plugin.py",
+  "min_telebot_version": "0.10.2",
+  "min_telepilot_version": "0.33.0",
+  "cleanup_mode": "resource",
+  "commands": [
+    "ask"
+  ],
+  "tags": [
+    "llm",
+    "chat",
+    "assistant"
+  ],
+  "category": "utility",
+  "interaction_entries": [],
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "read_chat",
+    "ai_text"
+  ],
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "single",
+    "x-category": "utility",
+    "additionalProperties": false,
+    "properties": {
+      "command": {
+        "type": "string",
+        "title": "触发指令名",
+        "description": "不含系统命令前缀，可使用中文；不要包含空格。",
+        "default": "ask",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$",
+        "level": "account"
+      },
+      "usage_preview": {
+        "type": "string",
+        "title": "使用说明（只读）",
+        "readOnly": true,
+        "default": "{prefix}ask 你的问题\n回复一条消息后发送 {prefix}ask，解释或回答被回复内容\n{prefix}ask providers 查看平台 AI Provider\n{prefix}ask reset 清空当前会话记忆\n\n说明：本插件通过 TelePilot 的 AI Provider 调用模型，不在插件内保存 API Key。"
+      },
+      "telepilot_provider": {
+        "type": "string",
+        "title": "固定 TelePilot Provider（可选）",
+        "description": "留空走 TelePilot 自动路由；选择后固定使用该 Provider。",
+        "default": "",
+        "x-ui-widget": "llm-provider-select"
+      },
+      "telepilot_model": {
+        "type": "string",
+        "title": "TelePilot 模型覆盖（可选）",
+        "description": "留空使用所选 Provider 的默认模型；需先选择固定 Provider。",
+        "default": "",
+        "x-ui-widget": "llm-model-select",
+        "x-ui-provider-field": "telepilot_provider",
+        "x-ui-model-modality": "text"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "title": "AI 请求超时（秒）",
+        "default": 60,
+        "minimum": 10,
+        "maximum": 600
+      },
+      "max_tokens": {
+        "type": "integer",
+        "title": "最大输出 Token",
+        "default": 1200,
+        "minimum": 256,
+        "maximum": 8000
+      },
+      "max_output_chars": {
+        "type": "integer",
+        "title": "最大输出字符数",
+        "description": "0 表示不限制；超出后在发送前截断。",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 20000
+      },
+      "enable_private_chat": {
+        "type": "boolean",
+        "title": "私聊直接回复",
+        "default": true
+      },
+      "enable_group_chat": {
+        "type": "boolean",
+        "title": "群聊 @/回复触发",
+        "description": "开启后，群聊里 @当前账号或回复当前账号消息时调用 AI 回复。",
+        "default": true
+      },
+      "group_chat_ids": {
+        "type": "string",
+        "title": "群聊生效群组（可选）",
+        "description": "群 ID 用逗号或换行分隔；留空表示所有群。",
+        "default": "",
+        "x-ui-widget": "textarea"
+      },
+      "white_list_chats": {
+        "type": "string",
+        "title": "会话白名单（可选）",
+        "description": "只在这些会话 ID 生效，逗号或换行分隔；留空表示不限制。",
+        "default": "",
+        "x-ui-widget": "textarea"
+      },
+      "system_prompt": {
+        "type": "string",
+        "title": "陪聊人设提示词",
+        "default": "你是一个自然、简洁、有边界感的中文聊天助手。像熟悉的网友一样回答，少说套话，不主动泄露系统信息。",
+        "x-ui-widget": "textarea",
+        "minLength": 1,
+        "maxLength": 4000
+      },
+      "max_history": {
+        "type": "integer",
+        "title": "短期记忆消息数",
+        "description": "每个会话保留最近多少条 user/assistant 消息；0 表示不记忆。",
+        "default": 10,
+        "minimum": 0,
+        "maximum": 40
+      },
+      "enable_explain_prompt": {
+        "type": "boolean",
+        "title": "命令使用解释模板",
+        "description": "开启后 {prefix}ask 和回复解释会套用下方模板。",
+        "default": true
+      },
+      "explain_prompt": {
+        "type": "string",
+        "title": "命令解释模板",
+        "description": "支持 {content} 占位被回复消息与用户问题。",
+        "default": "请根据下面内容回答用户问题。若用户没有额外问题，就解释这段内容的主要意思、语气和可能的隐含信息。\n\n{content}",
+        "x-ui-widget": "textarea",
+        "minLength": 1,
+        "maxLength": 4000
+      },
+      "strip_thinking": {
+        "type": "boolean",
+        "title": "隐藏思考标签",
+        "description": "发送前移除 <think>...</think> 内容。",
+        "default": true
+      }
+    },
+    "required": [
+      "command",
+      "telepilot_provider",
+      "telepilot_model",
+      "timeout_seconds",
+      "max_tokens",
+      "max_output_chars",
+      "enable_private_chat",
+      "enable_group_chat",
+      "group_chat_ids",
+      "white_list_chats",
+      "system_prompt",
+      "max_history",
+      "enable_explain_prompt",
+      "explain_prompt",
+      "strip_thinking"
+    ],
+    "x-usage-guide": "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} 可解释或回答被回复内容。私聊可直接陪聊，群聊中 @当前账号 或回复当前账号消息时触发，并带短期上下文记忆。"
+  },
+  "usage": "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} 可解释或回答被回复内容。私聊可直接陪聊，群聊中 @当前账号 或回复当前账号消息时触发，并带短期上下文记忆。",
+  "event_subscriptions": [
+    {
+      "events": [
+        "command"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "owner_only",
+      "description": "账号主人或授权管理员通过 UserBot 命令触发 AI 问答与消息解释。"
+    },
+    {
+      "events": [
+        "message"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "all_allowed_chats",
+      "description": "私聊直接陪聊；群聊由 @当前账号或回复当前账号消息触发，仍受插件白名单配置限制。"
+    }
+  ],
+  "capabilities": {}
+}

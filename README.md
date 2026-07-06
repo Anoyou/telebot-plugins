@@ -22,6 +22,7 @@ TelePilot 远程插件仓库。
 | [math10](./math10/) | 交互规则启动 | 插件库维护 10 以内算数题，支持交互 Bot 调度 |
 | [chatgpt_image](./chatgpt_image/) | 插件配置 | 插件库维护 ChatGPT2API 图片生成/编辑与 token 池 |
 | [codex_image](./codex_image/) | 插件配置 | 插件库维护 Codex 图片生成 |
+| [AI-Chat](./ai-chat/) | `{prefix}ask` | AI-Chat 聊天与消息解释助手，调用 TelePilot 已配置的 AI Provider |
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
 | [sum](./sum/) | `{prefix}sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
 | [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
