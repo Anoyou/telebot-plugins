@@ -2546,13 +2546,15 @@ class TenHalfInteractionTest(unittest.TestCase):
 
             actions = await plugin._ix_settle(-100123, game, PluginContext())
             rewards = [action for action in actions if action.get("type") == "payout"]
+            settlement_text = next(action["text"] for action in actions if "十点半结算" in action.get("text", ""))
 
-            self.assertEqual([action["text"] for action in rewards], ["+360"])
-            self.assertEqual([action["amount"] for action in rewards], [360])
+            self.assertEqual([action["text"] for action in rewards], ["+270"])
+            self.assertEqual([action["amount"] for action in rewards], [270])
             self.assertEqual(rewards[0]["reply_to_message_id"], 700)
             self.assertEqual(rewards[0]["reply_to_user_id"], 111)
-            self.assertTrue(any("庄家 <b>玩家A</b> 🎉是赢家 获得 <b>360</b>" in action.get("text", "") for action in actions))
-            self.assertTrue(any("玩家B</b>: 2张 · 9点 → ❌ 输 100" in action.get("text", "") for action in actions))
+            self.assertIn("总入池金额: <b>300</b>", settlement_text)
+            self.assertIn("庄家 <b>玩家A</b> 🎉是赢家 获得 <b>270</b>", settlement_text)
+            self.assertIn("玩家B</b>: 2张 · 9点 → ❌ 输 100", settlement_text)
 
         asyncio.run(scenario())
 

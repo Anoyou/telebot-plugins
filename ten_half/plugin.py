@@ -69,7 +69,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.9"
+PLUGIN_VERSION = "0.4.10"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -3183,7 +3183,7 @@ class TenHalfPlugin(Plugin):
 
         player_results: list[dict[str, Any]] = []
         winners: list[dict[str, Any]] = []
-        dealer_reward = 0
+        losing_stake_total = 0
 
         def payout_multiplier(outcome: str) -> float:
             if outcome == "win_5s":
@@ -3202,8 +3202,8 @@ class TenHalfPlugin(Plugin):
             # 赢家拿回本金口径：实际 stake × (本金 1 + 牌型倍率) × 0.9。
             reward = int(eb * (1.0 + win_multiplier) * 0.9) if win_multiplier > 0 else 0
             loss = eb if outcome == "lose" else 0
-            if loss > 0 and g.dealer_id:
-                dealer_reward += int(eb * 2.0 * 0.9)
+            if loss > 0:
+                losing_stake_total += loss
 
             # 显示文案
             outcome_display = self._settlement_outcome_text(
@@ -3236,6 +3236,11 @@ class TenHalfPlugin(Plugin):
                     f"outcome={outcome}, multiplier={win_multiplier}, reward={reward}, "
                     f"loss={loss}, bet={eb}, total_paid={total_paid}, chat_id={cid}")
 
+        dealer_reward = (
+            int(total_paid * 0.9)
+            if g.dealer_id and g.players and losing_stake_total > 0 and not winners
+            else 0
+        )
         if dealer_reward > 0:
             dealer_result = {
                 "user_id": g.dealer_id,
