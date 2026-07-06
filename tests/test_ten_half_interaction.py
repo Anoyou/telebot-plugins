@@ -920,6 +920,8 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(game.join_mode, plugin_module.JOIN_MODE_SILENT_DEBIT)
                 self.assertEqual(game.lobby_players, [])
                 self.assertNotIn(111, game.player_message_ids)
+                self.assertEqual(game.pending_debits[111]["amount"], 100)
+                self.assertEqual(game.pending_debits[111]["name"], "玩家A")
 
                 self.assertEqual(len(actions), 1)
                 debit = actions[0]
@@ -944,6 +946,11 @@ class TenHalfInteractionTest(unittest.TestCase):
             await plugin.on_startup(ctx)
             try:
                 await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join", message_id=900),
+                )
                 debit_notice = payment_payload()
                 debit_notice["payment"] = {"direction": "debit"}
                 actions = await plugin.on_interaction(ctx, "start_ten_half", debit_notice)
@@ -951,9 +958,38 @@ class TenHalfInteractionTest(unittest.TestCase):
                 game = plugin._games[-100123]
                 self.assertEqual(game.lobby_players, [(111, "玩家A")])
                 self.assertNotIn(111, game.player_message_ids)
+                self.assertNotIn(111, game.pending_debits)
 
                 join_notice = next(action for action in actions if action.get("type") == "send_message" and action.get("send_via") == "interaction_bot")
                 self.assertIn("入场金额: 自动扣款 100", join_notice["text"])
+                session_action = next(action for action in actions if action.get("type") == "start_session")
+                self.assertEqual(session_action["paid_user_ids"], [111])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_notice_corrects_wrong_platform_payer_from_pending(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await plugin.on_interaction(ctx, "start_ten_half", keyword_payload())
+                await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join", message_id=900),
+                )
+                debit_notice = payment_payload(payer_id=999, payer_name="玩家A")
+                debit_notice["payment"] = {"direction": "debit", "payer_user_id": 999, "payer_name": "玩家A"}
+
+                actions = await plugin.on_interaction(ctx, "start_ten_half", debit_notice)
+
+                game = plugin._games[-100123]
+                self.assertEqual(game.lobby_players, [(111, "玩家A")])
+                self.assertEqual(game.paid_stakes, {111: 100})
+                self.assertNotIn(999, game.paid_stakes)
                 session_action = next(action for action in actions if action.get("type") == "start_session")
                 self.assertEqual(session_action["paid_user_ids"], [111])
             finally:

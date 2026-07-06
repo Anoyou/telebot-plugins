@@ -69,7 +69,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.6"
+PLUGIN_VERSION = "0.4.7"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -163,6 +163,10 @@ def _inline_payment_amount(text: str) -> int:
         return 0
     amount = cleaned[1:].strip()
     return int(amount) if amount.isdigit() else 0
+
+
+def _identity_token(raw: Any) -> str:
+    return "".join(str(raw or "").strip().casefold().split())
 
 
 def _normalize_join_mode(raw: Any, default: str = JOIN_MODE_TRANSFER) -> str:
@@ -305,6 +309,7 @@ class TenHalfGame:
     timeout_versions: dict[int, int] = field(default_factory=dict)
     player_message_ids: dict[int, int] = field(default_factory=dict)
     paid_stakes: dict[int, int] = field(default_factory=dict)
+    pending_debits: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     # ── 庄家辅助 ─────────────────────────────────────
     @property
@@ -1029,6 +1034,7 @@ def _lobby_snapshot(g: TenHalfGame) -> dict[str, Any]:
         "lobby_version": g.lobby_version,
         "player_message_ids": {str(uid): mid for uid, mid in g.player_message_ids.items()},
         "paid_stakes": {str(uid): int(amount) for uid, amount in g.paid_stakes.items()},
+        "pending_debits": {str(uid): dict(item) for uid, item in g.pending_debits.items()},
     }
 
 
@@ -1292,6 +1298,19 @@ class TenHalfPlugin(Plugin):
             amount = _pint(value, 0, minimum=0)
             if uid and amount > 0:
                 g.paid_stakes[uid] = amount
+        raw_pending = snapshot.get("pending_debits") if isinstance(snapshot.get("pending_debits"), dict) else {}
+        for key, value in raw_pending.items():
+            if not isinstance(value, dict):
+                continue
+            uid = _pint(key, 0, minimum=0)
+            amount = _pint(value.get("amount"), 0, minimum=0)
+            if uid and amount > 0:
+                g.pending_debits[uid] = {
+                    "name": str(value.get("name") or "玩家").strip() or "玩家",
+                    "amount": amount,
+                    "message_id": _pint(value.get("message_id"), 0, minimum=0),
+                    "requested_at": float(value.get("requested_at") or 0.0),
+                }
         for uid, _name in g.lobby_players:
             g.paid_stakes.setdefault(uid, g.bet)
         return g
@@ -1313,6 +1332,67 @@ class TenHalfPlugin(Plugin):
             or str(payload.get("payout_account_label") or "").strip()
         )
         return label or "本群 userbot"
+
+    @staticmethod
+    def _remember_pending_debit(
+        g: TenHalfGame,
+        user_id: int,
+        name: str,
+        *,
+        amount: int,
+        message_id: int | None = None,
+    ) -> None:
+        uid = int(user_id or 0)
+        if uid <= 0:
+            return
+        g.pending_debits[uid] = {
+            "name": str(name or "玩家").strip() or "玩家",
+            "amount": int(amount or 0),
+            "message_id": int(message_id or 0),
+            "requested_at": time.time(),
+        }
+
+    @staticmethod
+    def _resolve_pending_debit_payer(
+        g: TenHalfGame,
+        *,
+        payer_id: int,
+        payer_name: str,
+        amount: int,
+    ) -> tuple[int, str] | None:
+        joined = {int(uid) for uid, _ in g.lobby_players}
+        for uid in list(g.pending_debits):
+            if uid in joined:
+                g.pending_debits.pop(uid, None)
+
+        candidates: list[tuple[int, dict[str, Any]]] = []
+        for uid, item in g.pending_debits.items():
+            if _pint(item.get("amount"), 0, minimum=0) == int(amount or 0):
+                candidates.append((int(uid), item))
+        if not candidates:
+            return None
+
+        if payer_id and payer_id in g.pending_debits:
+            item = g.pending_debits[payer_id]
+            if _pint(item.get("amount"), 0, minimum=0) == int(amount or 0):
+                return int(payer_id), str(item.get("name") or payer_name or "玩家").strip() or "玩家"
+
+        payer_token = _identity_token(payer_name)
+        if payer_token:
+            name_matches = [
+                (uid, item)
+                for uid, item in candidates
+                if _identity_token(item.get("name")) == payer_token
+            ]
+            if len(name_matches) == 1:
+                uid, item = name_matches[0]
+                return uid, str(item.get("name") or payer_name or "玩家").strip() or "玩家"
+            return None
+
+        if len(candidates) == 1:
+            uid, item = candidates[0]
+            return uid, str(item.get("name") or payer_name or "玩家").strip() or "玩家"
+        return None
 
     async def _main_action(
         self,
@@ -2324,6 +2404,27 @@ class TenHalfPlugin(Plugin):
             if amount != g.bet:
                 return await _skip("amount_mismatch", g)
 
+            if debit_notice and notice_mid:
+                self._schedule_transient_userbot_delete(ctx, cid, message_id=notice_mid)
+
+            if g.join_mode == JOIN_MODE_SILENT_DEBIT:
+                resolved = self._resolve_pending_debit_payer(
+                    g,
+                    payer_id=payer_id,
+                    payer_name=payer_name,
+                    amount=amount,
+                )
+                if resolved is None:
+                    return await _skip("silent_debit_pending_missing", g)
+                if resolved[0] != payer_id and ctx.log:
+                    await ctx.log(
+                        "info",
+                        "[ten_half] silent_debit_payer_corrected: "
+                        f"parsed={payer_id} ({payer_name}), resolved={resolved[0]} ({resolved[1]}), "
+                        f"amount={amount}, chat_id={cid}",
+                    )
+                payer_id, payer_name = resolved
+
             if ctx.log:
                 await ctx.log("info",
                     f"[ten_half] payment_confirmed: payer={payer_id} ({payer_name}), "
@@ -2343,9 +2444,6 @@ class TenHalfPlugin(Plugin):
                         reply_to_message_id=mid,
                     )
                 ]
-            if debit_notice and notice_mid:
-                self._schedule_transient_userbot_delete(ctx, cid, message_id=notice_mid)
-
             if len(g.lobby_players) >= g.max_players:
                 return [
                     _send_action("⚠️ 人数已满。", reply_to_message_id=mid)
@@ -2359,6 +2457,7 @@ class TenHalfPlugin(Plugin):
 
             g.lobby_players.append((payer_id, payer_name))
             g.paid_stakes[payer_id] = g.bet
+            g.pending_debits.pop(payer_id, None)
             if not debit_notice:
                 self._remember_player_message(g, payer_id, mid)
             if len(g.lobby_players) == 1:
@@ -2447,6 +2546,8 @@ class TenHalfPlugin(Plugin):
                     if len(g.lobby_players) >= g.max_players:
                         return [_answer_action(payload, "人数已满。", show_alert=True)]
                     debit_key = _transient_userbot_msg_key(ctx.account_id, g.chat_id, f"debit_{aid}")
+                    self._remember_pending_debit(g, aid, aname, amount=g.bet, message_id=mid)
+                    await self._save_lobby_state(ctx, g)
                     action_payload = _debit_action(g, aid)
                     action_payload["save_message_id_key"] = debit_key
                     action_payload["failure_callback"] = {
