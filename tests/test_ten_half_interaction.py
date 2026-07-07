@@ -968,10 +968,10 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(debit["send_via"], "userbot_reply")
                 self.assertEqual(debit["text"], "-100")
                 self.assertEqual(debit["reply_to_user_id"], 111)
-                self.assertEqual(debit["reply_anchor_missing_text"], "无法扣款，加入失败。")
+                self.assertEqual(debit["reply_anchor_missing_text"], plugin_module.JOIN_DEBIT_ANCHOR_MISSING_TEXT)
                 self.assertTrue(debit["suppress_reply_anchor_missing_notice"])
                 self.assertIn("save_message_id_key", debit)
-                self.assertEqual(debit["failure_callback"]["text"], "无法扣款，加入失败。")
+                self.assertEqual(debit["failure_callback"]["text"], plugin_module.JOIN_DEBIT_ANCHOR_MISSING_TEXT)
                 self.assertEqual(debit["failure_callback"]["error_code"], "reply_anchor_missing")
             finally:
                 await plugin.on_shutdown(ctx)
@@ -1002,9 +1002,44 @@ class TenHalfInteractionTest(unittest.TestCase):
                 self.assertEqual(second, [{
                     "type": "answer_callback",
                     "callback_query_id": "cb-silent-join-2",
-                    "text": "扣款处理中，请稍等。",
+                    "text": "扣款处理中，请稍等。若刚才提示扣款失败，可手动发言一次后再次尝试扣款加入。",
                     "show_alert": True,
                 }])
+            finally:
+                await plugin.on_shutdown(ctx)
+
+        asyncio.run(scenario())
+
+    def test_silent_debit_anchor_missing_retry_window_can_retry_join_click(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.TenHalfPlugin()
+            ctx = PluginContext(config={"join_mode": "silent_debit", "max_players": 5, "lobby_timeout": 60})
+            await plugin.on_startup(ctx)
+            try:
+                await start_lobby(plugin, ctx)
+                first = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join", message_id=900),
+                )
+                game = plugin._games[-100123]
+                first_requested_at = game.pending_debits[111]["requested_at"]
+                game.pending_debits[111]["requested_at"] = (
+                    plugin_module.time.time() - plugin_module.PENDING_DEBIT_RETRY_SECONDS - 1
+                )
+
+                retry = await plugin.on_interaction(
+                    ctx,
+                    "start_ten_half",
+                    callback_payload(user_id=111, name="玩家A", callback_query_id="cb-silent-join-retry", message_id=900),
+                )
+
+                self.assertEqual(first[0]["type"], "send_message")
+                self.assertEqual(retry[0]["type"], "send_message")
+                self.assertEqual(retry[0]["text"], "-100")
+                self.assertEqual(retry[0]["reply_to_user_id"], 111)
+                self.assertEqual(retry[0]["failure_callback"]["text"], plugin_module.JOIN_DEBIT_ANCHOR_MISSING_TEXT)
+                self.assertGreater(game.pending_debits[111]["requested_at"], first_requested_at)
             finally:
                 await plugin.on_shutdown(ctx)
 

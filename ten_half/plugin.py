@@ -69,13 +69,15 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.13"
+PLUGIN_VERSION = "0.4.14"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
 JOIN_MODE_SILENT_DEBIT = "silent_debit"
 DEFAULT_STAKE_OPTIONS = (1000, 10000, 50000, 100000)
 PENDING_DEBIT_TTL_SECONDS = 45
+PENDING_DEBIT_RETRY_SECONDS = 5
+JOIN_DEBIT_ANCHOR_MISSING_TEXT = "无法扣款，加入失败。可手动发言一次后再次尝试扣款加入。"
 
 
 @dataclass
@@ -1457,6 +1459,15 @@ class TenHalfPlugin(Plugin):
                 g.pending_debits.pop(uid, None)
 
     @staticmethod
+    def _pending_debit_retryable(item: dict[str, Any], *, now: float | None = None) -> bool:
+        current = time.time() if now is None else float(now)
+        try:
+            requested_at = float(item.get("requested_at") or 0.0)
+        except (TypeError, ValueError):
+            requested_at = 0.0
+        return not requested_at or current - requested_at >= PENDING_DEBIT_RETRY_SECONDS
+
+    @staticmethod
     def _resolve_pending_debit_payer(
         g: TenHalfGame,
         *,
@@ -2737,16 +2748,26 @@ class TenHalfPlugin(Plugin):
                         return [_answer_action(payload, "人数已满。", show_alert=True)]
                     self._prune_pending_debits(g)
                     if aid in g.pending_debits:
-                        return [_answer_action(payload, "扣款处理中，请稍等。", show_alert=True)]
+                        if not self._pending_debit_retryable(g.pending_debits[aid]):
+                            return [_answer_action(
+                                payload,
+                                "扣款处理中，请稍等。若刚才提示扣款失败，可手动发言一次后再次尝试扣款加入。",
+                                show_alert=True,
+                            )]
+                        g.pending_debits.pop(aid, None)
                     debit_key = _transient_userbot_msg_key(ctx.account_id, g.chat_id, f"debit_{aid}")
                     self._remember_pending_debit(g, aid, aname, amount=g.bet, message_id=mid)
                     await self._save_lobby_state(ctx, g)
-                    action_payload = _debit_action(g, aid)
+                    action_payload = _debit_action(
+                        g,
+                        aid,
+                        reply_anchor_missing_text=JOIN_DEBIT_ANCHOR_MISSING_TEXT,
+                    )
                     action_payload["save_message_id_key"] = debit_key
                     action_payload["failure_callback"] = {
                         "callback_query_id": _ie_callback_id(payload),
                         "error_code": "reply_anchor_missing",
-                        "text": "无法扣款，加入失败。",
+                        "text": JOIN_DEBIT_ANCHOR_MISSING_TEXT,
                         "show_alert": True,
                     }
                     self._schedule_transient_userbot_delete(ctx, g.chat_id, message_key=debit_key)
