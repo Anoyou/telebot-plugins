@@ -69,7 +69,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.12"
+PLUGIN_VERSION = "0.4.13"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -280,6 +280,7 @@ class TenHalfGame:
     turn_timeout: int = 45
     lobby_timeout: int = 60
     settlement_cleanup_delay: int = 60
+    service_fee_percent: int = 10
     idle_start_seconds: int = 15
     game_id: str = field(default_factory=lambda: secrets.token_hex(3).upper())
     # select_bet -> lobby -> playing -> dealer_turn -> finished
@@ -764,13 +765,18 @@ def _rules_button() -> dict[str, str]:
 
 def _rules_text(g: TenHalfGame | None = None) -> str:
     mode_note = "无感模式加倍会再扣底注；转账模式不按钮加倍。"
+    service_fee_percent = 10
     if g is not None and g.join_mode == JOIN_MODE_SILENT_DEBIT:
         mode_note = f"加倍会再扣 {g.bet}，补1张即停。"
+    if g is not None:
+        service_fee_percent = max(0, min(100, int(g.service_fee_percent)))
     return "\n".join([
         "规则：A=1，2-10按牌面，J/Q/K=0.5。",
         "目标≤10.5且越大越好；开局每人1张，庄家首牌暗牌。",
         "天生十点半自动停；五小最大；同点庄家胜，双爆闲家输。",
         f"已有2张后可加倍，{mode_note}",
+        "庄家一对一制；闲家赢牌的倍率奖金由庄家出。",
+        f"刷屏费收赢家 {service_fee_percent}%，从赢家倍率奖金里扣。",
     ])
 
 
@@ -997,9 +1003,17 @@ def _delete_action(
     return action
 
 
-def _debit_action(g: TenHalfGame, user_id: int, *, amount: int | None = None) -> dict[str, Any]:
+def _debit_action(
+    g: TenHalfGame,
+    user_id: int,
+    *,
+    amount: int | None = None,
+    reply_to_message_id: int | None = None,
+    reply_anchor_missing_text: str = "无法扣款，加入失败。",
+    suppress_reply_anchor_missing_notice: bool = True,
+) -> dict[str, Any]:
     debit_amount = int(amount if amount is not None else g.bet)
-    return {
+    action: dict[str, Any] = {
         "type": "send_message",
         "send_via": USERBOT_SEND_VIA,
         "chat_id": g.chat_id,
@@ -1007,9 +1021,12 @@ def _debit_action(g: TenHalfGame, user_id: int, *, amount: int | None = None) ->
         "parse_mode": "plain",
         "reply_to_user_id": int(user_id),
         "reply_to_search_limit": 50,
-        "reply_anchor_missing_text": "无法扣款，加入失败。",
-        "suppress_reply_anchor_missing_notice": True,
+        "reply_anchor_missing_text": reply_anchor_missing_text,
+        "suppress_reply_anchor_missing_notice": suppress_reply_anchor_missing_notice,
     }
+    if reply_to_message_id:
+        action["reply_to_message_id"] = int(reply_to_message_id)
+    return action
 
 
 def _answer_action(payload: dict[str, Any], text: str, *, show_alert: bool = False) -> dict[str, Any]:
@@ -1047,6 +1064,7 @@ def _lobby_snapshot(g: TenHalfGame) -> dict[str, Any]:
         "turn_timeout": g.turn_timeout,
         "lobby_timeout": g.lobby_timeout,
         "settlement_cleanup_delay": g.settlement_cleanup_delay,
+        "service_fee_percent": g.service_fee_percent,
         "idle_start_seconds": g.idle_start_seconds,
         "game_id": g.game_id,
         "phase": g.phase,
@@ -1082,7 +1100,15 @@ class TenHalfPlugin(Plugin):
     display_name = "十点半"
     message_channels = {"incoming", "outgoing"}
     owner_only = False
-    command_config_keys = {"timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay", "join_mode", "stake_options"}
+    command_config_keys = {
+        "timeout",
+        "lobby_timeout",
+        "max_players",
+        "settlement_cleanup_delay",
+        "service_fee_percent",
+        "join_mode",
+        "stake_options",
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -1090,6 +1116,7 @@ class TenHalfPlugin(Plugin):
         self._turn_timeout = 45
         self._lobby_timeout = 60
         self._settlement_cleanup_delay = 60
+        self._service_fee_percent = 10
         self._max_players = 5
         self._join_mode = JOIN_MODE_TRANSFER
         self._games: dict[int, TenHalfGame] = {}
@@ -1315,6 +1342,7 @@ class TenHalfPlugin(Plugin):
             turn_timeout=_pint(snapshot.get("turn_timeout"), self._turn_timeout, minimum=5),
             lobby_timeout=_pint(snapshot.get("lobby_timeout"), self._lobby_timeout, minimum=10),
             settlement_cleanup_delay=_pint(snapshot.get("settlement_cleanup_delay"), self._settlement_cleanup_delay, minimum=0),
+            service_fee_percent=min(100, _pint(snapshot.get("service_fee_percent"), self._service_fee_percent, minimum=0)),
             phase=phase,
             started_at=time.monotonic() - elapsed,
             via_interaction=bool(snapshot.get("via_interaction", True)),
@@ -2022,6 +2050,14 @@ class TenHalfPlugin(Plugin):
                 minimum=0,
                 maximum=3600,
             ),
+            "service_fee_percent": _config_int(
+                ctx,
+                payload,
+                "service_fee_percent",
+                self._service_fee_percent,
+                minimum=0,
+                maximum=100,
+            ),
         }
 
     async def _join_notice_actions(
@@ -2055,15 +2091,13 @@ class TenHalfPlugin(Plugin):
 
     def _build_lobby_text(self, g: TenHalfGame, receiver_label: str) -> str:
         lines = [
-            f"🃏 <b>十点半开局 v{PLUGIN_VERSION}！</b>",
+            f"🃏 <b>十点半开局 （v {PLUGIN_VERSION}）！</b>",
             f"💰 底注: <b>{g.bet}</b>",
             f"🎛️ 入局模式: <b>{_join_mode_label(g.join_mode)}</b>",
             "",
         ]
         if g.bet > 0 and g.join_mode == JOIN_MODE_SILENT_DEBIT:
-            lines.append(
-                f"📢 点击下方“【扣款 {g.bet} 并加入】按钮完成扣款即可加入本桌（⚠️会被自动扣款哦）”"
-            )
+            lines.append("📢 点击下方按钮完成自动扣款即可加入本桌")
         elif g.bet > 0:
             lines.append(
                 f"📢 请转账 <b>{g.bet}</b> 给 <b>{_html(receiver_label)}</b> 即可参与本桌牌局～"
@@ -2132,7 +2166,7 @@ class TenHalfPlugin(Plugin):
                 active_names.append(g.dealer_name)
             if active_names:
                 lines.append("⚡ 所有人共用下方按钮，系统按点击者识别自己的手牌；全部停牌/爆牌后统一结算。")
-                lines.append("⚠️ 加倍需已有 2 张牌；无感模式下加倍会再次被扣本局底注，转账模式无法自动代扣所以无法加倍。盈利也是翻倍")
+                lines.append("⚠️ 加倍是闲家特权，需已有 2 张牌；加倍需加一倍底注且只能再要一张牌。若赢，会得到双倍奖金。")
                 lines.append("⏳ 等待：" + "、".join(_html_name(name) for name in active_names))
         if g.phase == "dealer_turn" and not g.dealer_is_bot and not g.finished:
             lines.append("👉 所有玩家已行动，庄家请要牌或停牌。")
@@ -2154,6 +2188,7 @@ class TenHalfPlugin(Plugin):
         self._turn_timeout = _pint(cfg.get("timeout"), 45, minimum=5)
         self._lobby_timeout = _pint(cfg.get("lobby_timeout"), 60, minimum=10)
         self._settlement_cleanup_delay = _pint(cfg.get("settlement_cleanup_delay"), 60, minimum=0)
+        self._service_fee_percent = min(100, _pint(cfg.get("service_fee_percent"), 10, minimum=0))
         self._max_players = _pint(cfg.get("max_players"), 5, minimum=2)
         await self._load_join_mode(ctx)
         self.commands = {}
@@ -2403,6 +2438,7 @@ class TenHalfPlugin(Plugin):
                 turn_timeout=limits["turn_timeout"],
                 lobby_timeout=limits["lobby_timeout"],
                 settlement_cleanup_delay=limits["settlement_cleanup_delay"],
+                service_fee_percent=limits["service_fee_percent"],
                 phase="select_bet", join_mode=join_mode, started_at=time.monotonic(),
                 via_interaction=True,
                 host_user_id=host_id,
@@ -3311,9 +3347,11 @@ class TenHalfPlugin(Plugin):
         dn = g.dealer_natural()
         dfs = g.dealer_five_small()
 
-        # 入池金额只用于展示真实已支付 stake；单个玩家派奖按自己的真实 stake 独立计算。
+        # 入池金额展示真实已支付 stake；庄家补扣按倍率奖金毛额算，刷屏费只从赢家奖金里扣。
         dealer_bet = int(g.paid_stakes.get(g.dealer_id) or (g.bet if g.dealer_id else 0))
         total_paid = dealer_bet + sum(int(p.stake or g.paid_stakes.get(p.user_id) or g.bet) for p in g.players)
+        fee_percent = max(0, min(100, int(g.service_fee_percent)))
+        fee_numerator = max(0, 100 - fee_percent)
 
         # ── 结算明细 ──
         lines = [
@@ -3341,9 +3379,11 @@ class TenHalfPlugin(Plugin):
             eb = int(p.stake or g.paid_stakes.get(p.user_id) or g.bet)
             outcome = self._compare(p, dv, db, dn, dfs)
             win_multiplier = payout_multiplier(outcome)
+            gross_win = int(eb * win_multiplier) if win_multiplier > 0 else 0
+            fee_amount = gross_win * fee_percent // 100 if gross_win > 0 else 0
 
-            # 赢家拿回本金口径：实际 stake × (本金 1 + 牌型倍率) × 0.9。
-            reward = int(eb * (1.0 + win_multiplier) * 0.9) if win_multiplier > 0 else 0
+            # 赢家拿回本金；倍率奖金扣刷屏费，庄家补扣按未扣费前的倍率奖金毛额计算。
+            reward = eb + gross_win * fee_numerator // 100 if gross_win > 0 else 0
             loss = eb if outcome == "lose" else 0
             if loss > 0:
                 losing_stake_total += loss
@@ -3368,6 +3408,8 @@ class TenHalfPlugin(Plugin):
                 "reward": reward,
                 "loss": loss,
                 "bet": eb,
+                "gross_win": gross_win,
+                "service_fee": fee_amount,
             }
             player_results.append(pr)
             if reward > 0:
@@ -3377,10 +3419,11 @@ class TenHalfPlugin(Plugin):
                 await ctx.log("info",
                     f"[ten_half] settlement: uid={p.user_id}, name={p.name}, "
                     f"outcome={outcome}, multiplier={win_multiplier}, reward={reward}, "
+                    f"gross_win={gross_win}, service_fee={fee_amount}, "
                     f"loss={loss}, bet={eb}, total_paid={total_paid}, chat_id={cid}")
 
         dealer_reward = (
-            int(total_paid * 0.9)
+            dealer_bet + losing_stake_total * fee_numerator // 100
             if g.dealer_id and g.players and losing_stake_total > 0 and not winners
             else 0
         )
@@ -3393,6 +3436,8 @@ class TenHalfPlugin(Plugin):
                 "reward": dealer_reward,
                 "loss": 0,
                 "bet": dealer_bet,
+                "gross_win": losing_stake_total,
+                "service_fee": losing_stake_total * fee_percent // 100,
             }
             winners.append(dealer_result)
             player_results.append(dealer_result)
@@ -3407,7 +3452,44 @@ class TenHalfPlugin(Plugin):
                     f"amount={dealer_reward}, bet={dealer_bet}, total_paid={total_paid}, chat_id={cid}",
                 )
 
+        non_dealer_reward_total = sum(
+            int(w["reward"])
+            for w in winners
+            if int(w.get("user_id") or 0) != int(g.dealer_id or 0)
+        )
+        dealer_gross_liability = sum(
+            int(w.get("gross_win") or 0)
+            for w in winners
+            if int(w.get("user_id") or 0) != int(g.dealer_id or 0)
+        )
+        dealer_top_up = (
+            max(0, dealer_gross_liability - dealer_bet)
+            if int(g.dealer_id or 0) > 0 and dealer_gross_liability > 0
+            else 0
+        )
+        if dealer_top_up > 0:
+            lines.extend([
+                "",
+                f"💳 庄家 <b>{_html_name(g.dealer_name)}</b> 补扣 <b>{dealer_top_up}</b>",
+            ])
+            if ctx and ctx.log:
+                await ctx.log(
+                    "info",
+                    f"[ten_half] dealer_top_up: uid={g.dealer_id}, name={g.dealer_name}, "
+                    f"amount={dealer_top_up}, dealer_bet={dealer_bet}, "
+                    f"dealer_gross_liability={dealer_gross_liability}, "
+                    f"winner_rewards={non_dealer_reward_total}, total_paid={total_paid}, chat_id={cid}",
+                )
+        elif dealer_gross_liability > dealer_bet and ctx and ctx.log:
+            await ctx.log(
+                "warn",
+                f"[ten_half] dealer_top_up_skipped: no_dealer_id, "
+                f"dealer_gross_liability={dealer_gross_liability}, "
+                f"dealer_bet={dealer_bet}, total_paid={total_paid}, chat_id={cid}",
+            )
+
         actions: list[dict[str, Any]] = []
+        reward_message_keys: list[str] = []
 
         settlement_message_key = (
             _settlement_msg_key(ctx.account_id, cid, g.game_id)
@@ -3424,8 +3506,27 @@ class TenHalfPlugin(Plugin):
         else:
             actions.append(_send_action("\n".join(lines)))
 
+        if dealer_top_up > 0 and int(g.dealer_id or 0) > 0:
+            dealer_top_up_key = (
+                _transient_userbot_msg_key(ctx.account_id, cid, f"dealer_topup_{g.dealer_id}")
+                if ctx is not None
+                else ""
+            )
+            top_up_action = _debit_action(
+                g,
+                int(g.dealer_id),
+                amount=dealer_top_up,
+                reply_to_message_id=self._player_reply_message(g, int(g.dealer_id)),
+                reply_anchor_missing_text="无法自动补扣庄家，请人工处理。",
+                suppress_reply_anchor_missing_notice=False,
+            )
+            if dealer_top_up_key:
+                top_up_action["save_message_id_key"] = dealer_top_up_key
+                reward_message_keys.append(dealer_top_up_key)
+                self._schedule_transient_userbot_delete(ctx, cid, message_key=dealer_top_up_key)
+            actions.append(top_up_action)
+
         # ── 向每位赢家发放奖励（payout 始终由 userbot 执行） ──
-        reward_message_keys: list[str] = []
         for w in winners:
             winner_user_id = int(w["user_id"])
             reply_to = self._player_reply_message(g, winner_user_id)
@@ -3466,6 +3567,9 @@ class TenHalfPlugin(Plugin):
                     "winner_count": len(winners),
                     "players": player_results,
                     "payout_mode": "auto",
+                    "dealer_top_up": dealer_top_up,
+                    "dealer_gross_liability": dealer_gross_liability,
+                    "service_fee_percent": fee_percent,
                 },
                 "settlement": {
                     "mode": "auto",
@@ -3474,6 +3578,9 @@ class TenHalfPlugin(Plugin):
                     "winner_name": primary["name"],
                     "payout_account_label": "管理员",
                     "status": "payout_requested",
+                    "dealer_top_up": dealer_top_up,
+                    "dealer_gross_liability": dealer_gross_liability,
+                    "service_fee_percent": fee_percent,
                 },
             })
         else:

@@ -8,7 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '在交互中心配置关键词后，由交互 Bot 先让触发者选择本局底注额度，再进入对应额度的开局大厅。当前规则为每人起手 1 张，庄家首牌暗牌，保留天生十点半；按钮里可点击“规则”快速查看。转账模式下普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局，已有 2 张牌后加倍会再次扣除底注并补 1 张停牌。账号 userbot 可发送“10d模式”切换入局模式，也可在等待大厅发送“入局”免转账加入。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
+    "x-usage-guide": '在交互中心配置关键词后，由交互 Bot 先让触发者选择本局底注额度，再进入对应额度的开局大厅。当前规则为每人起手 1 张，庄家首牌暗牌，保留天生十点半；按钮里可点击“规则”快速查看。转账模式下普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局，已有 2 张牌后加倍会再次扣除底注并补 1 张停牌。账号 userbot 可发送“10d模式”切换入局模式，也可在等待大厅发送“入局”免转账加入。庄家制结算下，闲家倍率奖金由庄家出，若倍率奖金毛额超过庄家已入局金额，会先向庄家补扣差额；刷屏费从赢家倍率奖金里抽取。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。',
     "additionalProperties": False,
     "properties": {
         "timeout": {
@@ -40,6 +40,14 @@ CONFIG_SCHEMA = {
             "minimum": 0,
             "maximum": 3600,
         },
+        "service_fee_percent": {
+            "type": "integer",
+            "title": "刷屏费比例（%）",
+            "description": "从赢家倍率奖金里抽取的比例；补扣庄家时先按未扣刷屏费的倍率奖金毛额计算。",
+            "default": 10,
+            "minimum": 0,
+            "maximum": 100,
+        },
         "join_mode": {
             "type": "string",
             "title": "入局模式",
@@ -67,7 +75,7 @@ CONFIG_SCHEMA = {
 
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = '十点半只通过交互 Bot 关键词/规则开局；大厅、按钮、后台刷新、超时开局和结算公告固定由 interaction_bot 发送。当前规则为每人起手 1 张，庄家首牌暗牌，保留天生十点半；“规则”按钮会弹窗展示精简规则。转账模式下普通玩家精确转账底注给账号 userbot 后，由平台 payment_confirmed 作为资金证据入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局，已有 2 张牌后加倍会再次扣除底注并补 1 张停牌。账号 userbot 可发送“10d模式”切换模式，也可在等待大厅发送“入局”免转账加入。结算发奖返回 `payout`，始终由 userbot 执行。'
+USAGE = '十点半只通过交互 Bot 关键词/规则开局；大厅、按钮、后台刷新、超时开局和结算公告固定由 interaction_bot 发送。当前规则为每人起手 1 张，庄家首牌暗牌，保留天生十点半；“规则”按钮会弹窗展示精简规则。转账模式下普通玩家精确转账底注给账号 userbot 后，由平台 payment_confirmed 作为资金证据入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局，已有 2 张牌后加倍会再次扣除底注并补 1 张停牌。账号 userbot 可发送“10d模式”切换模式，也可在等待大厅发送“入局”免转账加入。庄家制结算下，闲家倍率奖金由庄家出，若倍率奖金毛额超过庄家已入局金额，会先向庄家补扣差额；刷屏费从赢家倍率奖金里抽取。结算发奖返回 `payout`，始终由 userbot 执行。'
 EVENT_SUBSCRIPTIONS = [{'events': ['message', 'callback_query', 'session_close'],
   'entry_key': 'start_ten_half',
   'source': ['interaction_bot'],
@@ -89,7 +97,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.4.12",
+    version="0.4.13",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -152,7 +160,13 @@ MANIFEST = Manifest(
                                                                'description': '结算完成后延迟清理本局主消息、结算公告、发奖回复和零散加入提示。填 0 表示不自动清理。',
                                                                'default': 60,
                                                                'minimum': 0,
-                                                               'maximum': 3600}}},
+                                                               'maximum': 3600},
+                                  'service_fee_percent': {'type': 'integer',
+                                                          'title': '刷屏费比例（%）',
+                                                          'description': '从赢家倍率奖金里抽取的比例；补扣庄家时先按未扣刷屏费的倍率奖金毛额计算。',
+                                                          'default': 10,
+                                                          'minimum': 0,
+                                                          'maximum': 100}}},
   'settlement': {'mode': 'announce_only'},
   'dispatch_modes': ['public_keyword'],
   'message_channels': {'public_keyword': 'interaction_bot'},
