@@ -19,15 +19,23 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.3"
+PLUGIN_VERSION = "0.1.4"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
 DEFAULT_BLOCKED_BARE_OUTPUTS = "re\nai\nfd"
 DEFAULT_COMMAND_REFUSAL = "我不能代你发送可能触发 TelePilot 或其他 Bot 的可执行指令。"
 DEFAULT_MODEL_TEST_PROMPT = "请只回复两个字：收到"
+DEFAULT_MODEL_TEST_CLIENT_IDENTITY = "TelePilot AI-Chat"
 DEFAULT_MODEL_TEST_RESULT = "尚未测试。"
-MODEL_TEST_SYSTEM_PROMPT = "你是一个简洁的中文助手。请按用户要求用最短内容回复。"
+MODEL_TEST_SYSTEM_PROMPT = (
+    "你是一个简洁的中文助手。当前请求是一次真实的 LLM 客户端连通性测试。"
+    "请像正常聊天一样回答用户，不要只返回 ping/pong。"
+)
+HTTP_USER_AGENT_NOTE = (
+    "HTTP UA：由 TelePilot AI facade / LLM client 控制；AI-Chat 插件当前不能自定义。"
+    "OpenAI 兼容请求未显式设置 User-Agent，通常使用 httpx 默认 UA。"
+)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
 PAYMENT_LIKE_RE = re.compile(r"^\+\s*\d+(?:\.\d+)?$")
 REQUIRED_PREFIX_PATTERNS = (
@@ -93,6 +101,10 @@ def _cfg(ctx: PluginContext) -> dict[str, Any]:
         "model_test_prompt": (
             str(raw.get("model_test_prompt") or DEFAULT_MODEL_TEST_PROMPT).strip()
             or DEFAULT_MODEL_TEST_PROMPT
+        ),
+        "model_test_client_identity": (
+            str(raw.get("model_test_client_identity") or DEFAULT_MODEL_TEST_CLIENT_IDENTITY).strip()
+            or DEFAULT_MODEL_TEST_CLIENT_IDENTITY
         ),
         "model_test_result": str(raw.get("model_test_result") or DEFAULT_MODEL_TEST_RESULT),
         "timeout_seconds": _int(raw.get("timeout_seconds"), 60, 10, 600),
@@ -356,6 +368,13 @@ def _plain_preview(text: str, limit: int = 360) -> str:
     if len(preview) > limit:
         preview = preview[:limit].rstrip() + "..."
     return preview or "（空）"
+
+
+def _truncate_block(text: str, limit: int = 1200) -> str:
+    value = str(text or "").strip()
+    if len(value) > limit:
+        value = value[:limit].rstrip() + "\n[内容已截断]"
+    return value or "（空）"
 
 
 def _utc_timestamp() -> str:
@@ -631,7 +650,7 @@ class AIChatPlugin(Plugin):
                 ctx,
                 test_cfg,
                 MODEL_TEST_SYSTEM_PROMPT,
-                test_prompt,
+                self._build_model_test_prompt(test_prompt, cfg["model_test_client_identity"]),
                 provider_tag="chat",
                 source="plugin:ai-chat:test",
             )
@@ -684,22 +703,29 @@ class AIChatPlugin(Plugin):
 
         current_config = dict(payload.get("config") or {})
         ctx.config = {**(getattr(ctx, "config", None) or {}), **current_config}
+        action_input = dict(payload.get("input") or {})
         cfg = _cfg(ctx)
-        test_prompt = cfg["model_test_prompt"]
+        test_prompt = str(action_input.get("test_message") or cfg["model_test_prompt"]).strip()
+        if not test_prompt:
+            test_prompt = DEFAULT_MODEL_TEST_PROMPT
+        client_identity = str(
+            action_input.get("client_identity") or cfg["model_test_client_identity"]
+        ).strip() or DEFAULT_MODEL_TEST_CLIENT_IDENTITY
         started = time.perf_counter()
         provider = cfg["telepilot_provider"] or "自动路由"
         model = cfg["telepilot_model"] or "默认模型"
         try:
             test_cfg = dict(cfg)
             test_cfg["max_tokens"] = min(cfg["max_tokens"], 64)
-            answer = await self._call_ai(
+            answer, raw_answer, result = await self._complete_ai(
                 ctx,
                 test_cfg,
                 MODEL_TEST_SYSTEM_PROMPT,
-                test_prompt,
+                self._build_model_test_prompt(test_prompt, client_identity),
                 provider_tag="chat",
                 source="plugin:ai-chat:config-test",
             )
+            model = str(getattr(result, "model", None) or model)
         except Exception as exc:  # noqa: BLE001
             latency_ms = int((time.perf_counter() - started) * 1000)
             error_text = _classify_ai_error(exc)
@@ -709,6 +735,7 @@ class AIChatPlugin(Plugin):
                 model=model,
                 latency_ms=latency_ms,
                 test_prompt=test_prompt,
+                client_identity=client_identity,
                 error=error_text,
             )
             await _log(
@@ -726,12 +753,38 @@ class AIChatPlugin(Plugin):
             }
 
         latency_ms = int((time.perf_counter() - started) * 1000)
+        if not answer:
+            result_text = self._model_test_result_text(
+                ok=False,
+                provider=provider,
+                model=model,
+                latency_ms=latency_ms,
+                test_prompt=test_prompt,
+                client_identity=client_identity,
+                empty_response=True,
+                response=raw_answer,
+            )
+            await _log(
+                ctx,
+                "warning",
+                "AI-Chat 配置页模型测试返回为空",
+                provider=provider,
+                model=model,
+                latency_ms=latency_ms,
+            )
+            return {
+                "message": "AI-Chat 模型请求已完成但没有可展示文本，结果已记录。",
+                "config_patch": {"model_test_result": result_text},
+                "result": {"ok": False, "empty_response": True, "latency_ms": latency_ms},
+            }
+
         result_text = self._model_test_result_text(
             ok=True,
             provider=provider,
             model=model,
             latency_ms=latency_ms,
             test_prompt=test_prompt,
+            client_identity=client_identity,
             response=answer,
         )
         await _log(
@@ -829,6 +882,17 @@ class AIChatPlugin(Plugin):
         except Exception:
             return f"{DEFAULT_EXPLAIN_PROMPT}\n\n{content}"
 
+    def _build_model_test_prompt(self, test_prompt: str, client_identity: str) -> str:
+        return "\n".join(
+            [
+                "以下是一次真实的 AI 客户端聊天请求，请按普通聊天方式回复。",
+                f"客户端标识（对话元信息，不是 HTTP User-Agent）：{client_identity}",
+                "",
+                "用户消息：",
+                test_prompt,
+            ]
+        ).strip()
+
     def _model_test_result_text(
         self,
         *,
@@ -837,24 +901,63 @@ class AIChatPlugin(Plugin):
         model: str,
         latency_ms: int,
         test_prompt: str,
+        client_identity: str,
         response: str = "",
         error: str = "",
+        empty_response: bool = False,
     ) -> str:
         lines = [
-            f"状态：{'可用' if ok else '不可用'}",
+            f"状态：{self._model_test_status_text(ok=ok, empty_response=empty_response)}",
             f"时间：{_utc_timestamp()}",
             f"Provider：{provider}",
             f"Model：{model}",
             f"耗时：{latency_ms}ms",
+            f"客户端标识：{_plain_preview(client_identity, 160)}",
             f"测试语：{_plain_preview(test_prompt, 160)}",
+            HTTP_USER_AGENT_NOTE,
         ]
         if ok:
-            lines.append(f"返回预览：{_plain_preview(response, 360)}")
+            lines.extend(
+                [
+                    "",
+                    "模型实时返回：",
+                    _truncate_block(response, 1200),
+                    "",
+                    "结果解读：模型返回了非空文本，说明 Provider 鉴权、模型路由、请求体和返回解析这条链路本次可用。",
+                ]
+            )
+        elif empty_response:
+            lines.extend(
+                [
+                    "",
+                    "模型实时返回：",
+                    _truncate_block(response, 1200)
+                    if response
+                    else "（TelePilot 收到的可展示文本为空）",
+                    "",
+                    "结果解读：上游请求已完成，但没有拿到可展示文本；这不等同于 Provider 不可用。"
+                    "常见原因是测试语触发空回复、仅返回被隐藏的 <think> 内容，或上游返回结构里没有可解析文本。",
+                ]
+            )
         else:
-            lines.append(f"错误：{_plain_preview(error, 500)}")
+            lines.extend(
+                [
+                    "",
+                    f"错误：{_plain_preview(error, 500)}",
+                    "",
+                    "结果解读：本次没有拿到可用模型文本。请优先检查 Provider 鉴权、额度/限流、模型名、base_url 与上游服务状态。",
+                ]
+            )
         return "\n".join(lines)
 
-    async def _call_ai(
+    def _model_test_status_text(self, *, ok: bool, empty_response: bool) -> str:
+        if ok:
+            return "可用"
+        if empty_response:
+            return "返回为空"
+        return "不可用"
+
+    async def _complete_ai(
         self,
         ctx: PluginContext,
         cfg: dict[str, Any],
@@ -863,7 +966,7 @@ class AIChatPlugin(Plugin):
         *,
         provider_tag: str,
         source: str,
-    ) -> str:
+    ) -> tuple[str, str, Any]:
         ai = getattr(ctx, "ai", None)
         complete = getattr(ai, "complete", None) if ai is not None else None
         if complete is None:
@@ -878,9 +981,30 @@ class AIChatPlugin(Plugin):
             timeout_seconds=cfg["timeout_seconds"],
             source=source,
         )
-        text = str(getattr(result, "text", result) or "").strip()
+        raw_text = str(getattr(result, "text", result) or "").strip()
+        text = raw_text
         if cfg["strip_thinking"]:
             text = THINK_RE.sub("", text).strip()
+        return text, raw_text, result
+
+    async def _call_ai(
+        self,
+        ctx: PluginContext,
+        cfg: dict[str, Any],
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        provider_tag: str,
+        source: str,
+    ) -> str:
+        text, _raw_text, _result = await self._complete_ai(
+            ctx,
+            cfg,
+            system_prompt,
+            user_prompt,
+            provider_tag=provider_tag,
+            source=source,
+        )
         if not text:
             raise RuntimeError("TelePilot AI 返回内容为空")
         return text

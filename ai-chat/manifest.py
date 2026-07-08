@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.3"
+PLUGIN_VERSION = "0.1.4"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -67,10 +67,17 @@ CONFIG_SCHEMA = {
             "minLength": 1,
             "maxLength": 1000,
         },
+        "model_test_client_identity": {
+            "type": "string",
+            "title": "模型测试客户端标识",
+            "description": "随测试消息作为对话元信息发给模型；不是 HTTP User-Agent。真实 HTTP UA 由 TelePilot LLM 客户端控制。",
+            "default": "TelePilot AI-Chat",
+            "maxLength": 120,
+        },
         "model_test_result": {
             "type": "string",
             "title": "模型测试结果",
-            "description": "由配置页“测试当前模型”自动更新，用于查看最近一次测活状态、耗时、Provider、模型和返回/错误预览。",
+            "description": "由配置页“测试当前模型”自动更新，用于查看最近一次真实聊天式测试、模型实时返回和结果解读。",
             "default": "尚未测试。",
             "x-ui-widget": "textarea",
             "maxLength": 4000,
@@ -185,6 +192,7 @@ CONFIG_SCHEMA = {
         "telepilot_provider",
         "telepilot_model",
         "model_test_prompt",
+        "model_test_client_identity",
         "model_test_result",
         "timeout_seconds",
         "max_tokens",
@@ -208,9 +216,30 @@ CONFIG_ACTIONS = [
     {
         "key": "test_model_availability",
         "title": "测试当前模型",
-        "description": "使用当前表单中的 Provider、模型覆盖和模型测试语发起一次真实 AI 调用，并自动保存最近一次测活结果。",
+        "description": "模拟一次真实聊天访问当前模型，展示模型实时返回并附上结果解读。客户端标识会作为对话元信息发送，不会改写 HTTP User-Agent。",
         "placement": "field:model_test_result",
         "submit_label": "开始测试",
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "test_message": {
+                    "type": "string",
+                    "title": "模拟用户消息",
+                    "description": "留空时使用配置里的模型测试语。",
+                    "default": "",
+                    "x-ui-widget": "textarea",
+                    "maxLength": 1000,
+                },
+                "client_identity": {
+                    "type": "string",
+                    "title": "客户端标识",
+                    "description": "作为对话元信息发给模型；不是 HTTP User-Agent。建议使用真实身份，例如 TelePilot AI-Chat。",
+                    "default": "TelePilot AI-Chat",
+                    "maxLength": 120,
+                },
+            },
+        },
     }
 ]
 

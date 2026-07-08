@@ -164,6 +164,8 @@ class AIChatTest(unittest.TestCase):
             plugin_meta["config_actions"][0]["key"],
             "test_model_availability",
         )
+        self.assertIn("input_schema", plugin_meta["config_actions"][0])
+        self.assertIn("model_test_client_identity", plugin_meta["config_schema"]["properties"])
         self.assertIn("model_test_result", plugin_meta["config_schema"]["properties"])
         self.assertIn("ai_text", plugin_meta["permissions"])
 
@@ -282,7 +284,8 @@ class AIChatTest(unittest.TestCase):
             self.assertEqual(len(ctx.ai.calls), 1)
             call = ctx.ai.calls[0]
             self.assertEqual(call["source"], "plugin:ai-chat:test")
-            self.assertEqual(call["user_prompt"], "正常回复一句短中文。")
+            self.assertIn("客户端标识（对话元信息，不是 HTTP User-Agent）：TelePilot AI-Chat", call["user_prompt"])
+            self.assertIn("用户消息：\n正常回复一句短中文。", call["user_prompt"])
             self.assertEqual(call["max_tokens"], 64)
 
         asyncio.run(scenario())
@@ -306,7 +309,7 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("AI-Chat 模型可用", event.edits[-1])
             self.assertIn("> /create_my_redpacket 测试", event.edits[-1])
             self.assertFalse(event.edits[-1].startswith("/create_my_redpacket"))
-            self.assertEqual(ctx.ai.calls[0]["user_prompt"], "请回复一个普通短句")
+            self.assertIn("用户消息：\n请回复一个普通短句", ctx.ai.calls[0]["user_prompt"])
 
         asyncio.run(scenario())
 
@@ -363,11 +366,50 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("状态：可用", patch_text)
             self.assertIn("Provider：4", patch_text)
             self.assertIn("Model：deepseek-v4-flash-free", patch_text)
+            self.assertIn("客户端标识：TelePilot AI-Chat", patch_text)
             self.assertIn("测试语：正常回复一句短中文。", patch_text)
-            self.assertIn("返回预览：收到", patch_text)
+            self.assertIn("模型实时返回：\n收到", patch_text)
+            self.assertIn("结果解读：模型返回了非空文本", patch_text)
+            self.assertIn("HTTP UA：由 TelePilot AI facade", patch_text)
             self.assertEqual(result["result"]["ok"], True)
             self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:config-test")
             self.assertEqual(ctx.ai.calls[0]["max_tokens"], 64)
+            self.assertIn("客户端标识（对话元信息，不是 HTTP User-Agent）：TelePilot AI-Chat", ctx.ai.calls[0]["user_prompt"])
+
+        asyncio.run(scenario())
+
+    def test_config_action_records_empty_response_without_marking_provider_unavailable(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_config_action_empty_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext()
+            ctx.ai = FakeAI("")
+            plugin = plugin_module.AIChatPlugin()
+
+            result = await plugin.on_config_action(
+                ctx,
+                "test_model_availability",
+                {
+                    "config": {
+                        "model_test_prompt": "你怎么又不行啦？",
+                    },
+                    "input": {
+                        "client_identity": "TelePilot AI-Chat",
+                    },
+                },
+            )
+
+            self.assertIsNotNone(result)
+            assert result is not None
+            patch_text = result["config_patch"]["model_test_result"]
+            self.assertIn("状态：返回为空", patch_text)
+            self.assertIn("这不等同于 Provider 不可用", patch_text)
+            self.assertIn("没有可展示文本", result["message"])
+            self.assertEqual(result["result"]["ok"], False)
+            self.assertEqual(result["result"]["empty_response"], True)
 
         asyncio.run(scenario())
 
@@ -393,6 +435,7 @@ class AIChatTest(unittest.TestCase):
             patch_text = result["config_patch"]["model_test_result"]
             self.assertIn("状态：不可用", patch_text)
             self.assertIn("AI 请求过于频繁", patch_text)
+            self.assertIn("结果解读：本次没有拿到可用模型文本", patch_text)
             self.assertEqual(result["result"]["ok"], False)
             self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:config-test")
 
