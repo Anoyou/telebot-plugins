@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.5"
+PLUGIN_VERSION = "0.1.6"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -61,7 +61,7 @@ CONFIG_SCHEMA = {
         "model_test_prompt": {
             "type": "string",
             "title": "模型测试语",
-            "description": "用于 {prefix}ask test 的真实对话测试；可改成普通短句，避免部分 Provider 拒绝 ping、health-check 等测活字样。",
+            "description": "用于 {prefix}ask test 和配置页按钮的真实对话测试；会走与日常聊天一致的人设提示词、消息包装和最大输出 Token。",
             "default": "请只回复两个字：收到",
             "x-ui-widget": "textarea",
             "minLength": 1,
@@ -70,7 +70,7 @@ CONFIG_SCHEMA = {
         "model_test_client_identity": {
             "type": "string",
             "title": "模型测试客户端标识",
-            "description": "随测试消息作为对话元信息发给模型；不是 HTTP User-Agent。真实 HTTP UA 由 TelePilot LLM 客户端控制。",
+            "description": "只记录在测试结果里，方便区分客户端来源；不会发送给模型，也不是 HTTP User-Agent。真实 HTTP UA 由 TelePilot LLM 客户端控制。",
             "default": "TelePilot AI-Chat",
             "maxLength": 120,
         },
@@ -216,7 +216,7 @@ CONFIG_ACTIONS = [
     {
         "key": "test_model_availability",
         "title": "测试当前模型",
-        "description": "模拟一次真实聊天访问当前模型，展示模型实时返回并附上结果解读。客户端标识会作为对话元信息发送，不会改写 HTTP User-Agent。",
+        "description": "按日常聊天路径访问当前模型，展示模型实时返回并附上结果解读。客户端标识只记录到结果里，不发送给模型，也不会改写 HTTP User-Agent。",
         "placement": "field:model_test_result",
         "submit_label": "开始测试",
         "input_schema": {
@@ -234,7 +234,7 @@ CONFIG_ACTIONS = [
                 "client_identity": {
                     "type": "string",
                     "title": "客户端标识",
-                    "description": "作为对话元信息发给模型；不是 HTTP User-Agent。建议使用真实身份，例如 TelePilot AI-Chat。",
+                    "description": "只记录到测试结果里；不是 HTTP User-Agent，也不会发送给模型。建议使用真实身份，例如 TelePilot AI-Chat。",
                     "default": "TelePilot AI-Chat",
                     "maxLength": 120,
                 },

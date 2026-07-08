@@ -253,7 +253,7 @@ class AIChatTest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_model_test_command_uses_configured_prompt(self) -> None:
+    def test_model_test_command_uses_real_chat_prompt_and_token_budget(self) -> None:
         plugin_module = _load_module(
             "ai_chat_plugin_model_test_under_test",
             ROOT / "ai-chat" / "plugin.py",
@@ -284,9 +284,10 @@ class AIChatTest(unittest.TestCase):
             self.assertEqual(len(ctx.ai.calls), 1)
             call = ctx.ai.calls[0]
             self.assertEqual(call["source"], "plugin:ai-chat:test")
-            self.assertIn("客户端标识（对话元信息，不是 HTTP User-Agent）：TelePilot AI-Chat", call["user_prompt"])
-            self.assertIn("用户消息：\n正常回复一句短中文。", call["user_prompt"])
-            self.assertEqual(call["max_tokens"], 64)
+            self.assertIn("用户刚刚说：\n正常回复一句短中文。", call["user_prompt"])
+            self.assertNotIn("TelePilot AI-Chat", call["user_prompt"])
+            self.assertIn("熟悉的网友", call["system_prompt"])
+            self.assertEqual(call["max_tokens"], 1200)
 
         asyncio.run(scenario())
 
@@ -309,7 +310,7 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("AI-Chat 模型可用", event.edits[-1])
             self.assertIn("> /create_my_redpacket 测试", event.edits[-1])
             self.assertFalse(event.edits[-1].startswith("/create_my_redpacket"))
-            self.assertIn("用户消息：\n请回复一个普通短句", ctx.ai.calls[0]["user_prompt"])
+            self.assertIn("用户刚刚说：\n请回复一个普通短句", ctx.ai.calls[0]["user_prompt"])
 
         asyncio.run(scenario())
 
@@ -384,8 +385,9 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("模型实时返回：\n收到", result["result"]["model_test_result"])
             self.assertTrue(any("模型实时返回：收到" in message for _, message, _ in logs))
             self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:config-test")
-            self.assertEqual(ctx.ai.calls[0]["max_tokens"], 64)
-            self.assertIn("客户端标识（对话元信息，不是 HTTP User-Agent）：TelePilot AI-Chat", ctx.ai.calls[0]["user_prompt"])
+            self.assertEqual(ctx.ai.calls[0]["max_tokens"], 1200)
+            self.assertIn("用户刚刚说：\n正常回复一句短中文。", ctx.ai.calls[0]["user_prompt"])
+            self.assertNotIn("TelePilot AI-Chat", ctx.ai.calls[0]["user_prompt"])
 
         asyncio.run(scenario())
 

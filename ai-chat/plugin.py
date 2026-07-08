@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.5"
+PLUGIN_VERSION = "0.1.6"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
@@ -28,10 +28,6 @@ DEFAULT_COMMAND_REFUSAL = "我不能代你发送可能触发 TelePilot 或其他
 DEFAULT_MODEL_TEST_PROMPT = "请只回复两个字：收到"
 DEFAULT_MODEL_TEST_CLIENT_IDENTITY = "TelePilot AI-Chat"
 DEFAULT_MODEL_TEST_RESULT = "尚未测试。"
-MODEL_TEST_SYSTEM_PROMPT = (
-    "你是一个简洁的中文助手。当前请求是一次真实的 LLM 客户端连通性测试。"
-    "请像正常聊天一样回答用户，不要只返回 ping/pong。"
-)
 HTTP_USER_AGENT_NOTE = (
     "HTTP UA：由 TelePilot AI facade / LLM client 控制；AI-Chat 插件当前不能自定义。"
     "OpenAI 兼容请求未显式设置 User-Agent，通常使用 httpx 默认 UA。"
@@ -644,12 +640,10 @@ class AIChatPlugin(Plugin):
         await _safe_edit(event, "正在测试 AI-Chat 模型，请稍等...")
         started = time.perf_counter()
         try:
-            test_cfg = dict(cfg)
-            test_cfg["max_tokens"] = min(cfg["max_tokens"], 64)
             answer = await self._call_ai(
                 ctx,
-                test_cfg,
-                MODEL_TEST_SYSTEM_PROMPT,
+                cfg,
+                cfg["system_prompt"],
                 self._build_model_test_prompt(test_prompt, cfg["model_test_client_identity"]),
                 provider_tag="chat",
                 source="plugin:ai-chat:test",
@@ -715,12 +709,10 @@ class AIChatPlugin(Plugin):
         provider = cfg["telepilot_provider"] or "自动路由"
         model = cfg["telepilot_model"] or "默认模型"
         try:
-            test_cfg = dict(cfg)
-            test_cfg["max_tokens"] = min(cfg["max_tokens"], 64)
             answer, raw_answer, result = await self._complete_ai(
                 ctx,
-                test_cfg,
-                MODEL_TEST_SYSTEM_PROMPT,
+                cfg,
+                cfg["system_prompt"],
                 self._build_model_test_prompt(test_prompt, client_identity),
                 provider_tag="chat",
                 source="plugin:ai-chat:config-test",
@@ -908,15 +900,7 @@ class AIChatPlugin(Plugin):
             return f"{DEFAULT_EXPLAIN_PROMPT}\n\n{content}"
 
     def _build_model_test_prompt(self, test_prompt: str, client_identity: str) -> str:
-        return "\n".join(
-            [
-                "以下是一次真实的 AI 客户端聊天请求，请按普通聊天方式回复。",
-                f"客户端标识（对话元信息，不是 HTTP User-Agent）：{client_identity}",
-                "",
-                "用户消息：",
-                test_prompt,
-            ]
-        ).strip()
+        return self._build_chat_prompt(test_prompt, [])
 
     def _model_test_result_text(
         self,
