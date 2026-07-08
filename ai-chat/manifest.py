@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.2"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -36,6 +36,7 @@ CONFIG_SCHEMA = {
                 "{prefix}ask 你的问题\n"
                 "回复一条消息后发送 {prefix}ask，解释或回答被回复内容\n"
                 "{prefix}ask providers 查看平台 AI Provider\n"
+                "{prefix}ask test [测试语] 测试当前 AI Provider 与模型\n"
                 "{prefix}ask reset 清空当前会话记忆\n\n"
                 "说明：本插件通过 TelePilot 的 AI Provider 调用模型，不在插件内保存 API Key。"
             ),
@@ -55,6 +56,15 @@ CONFIG_SCHEMA = {
             "x-ui-widget": "llm-model-select",
             "x-ui-provider-field": "telepilot_provider",
             "x-ui-model-modality": "text",
+        },
+        "model_test_prompt": {
+            "type": "string",
+            "title": "模型测试语",
+            "description": "用于 {prefix}ask test 的真实对话测试；可改成普通短句，避免部分 Provider 拒绝 ping、health-check 等测活字样。",
+            "default": "请只回复两个字：收到",
+            "x-ui-widget": "textarea",
+            "minLength": 1,
+            "maxLength": 1000,
         },
         "timeout_seconds": {
             "type": "integer",
@@ -165,6 +175,7 @@ CONFIG_SCHEMA = {
         "command",
         "telepilot_provider",
         "telepilot_model",
+        "model_test_prompt",
         "timeout_seconds",
         "max_tokens",
         "max_output_chars",

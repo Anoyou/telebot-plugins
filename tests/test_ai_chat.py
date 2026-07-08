@@ -127,14 +127,17 @@ class FakeEvent:
 
 
 class FakeAI:
-    def __init__(self, text: str = "模型回答") -> None:
+    def __init__(self, text: str = "模型回答", exc: Exception | None = None) -> None:
         self.calls: list[dict] = []
         self.text = text
+        self.exc = exc
 
     async def complete(self, system_prompt, user_prompt, **kwargs):
         self.calls.append(
             {"system_prompt": system_prompt, "user_prompt": user_prompt, **kwargs}
         )
+        if self.exc is not None:
+            raise self.exc
         return types.SimpleNamespace(text=self.text)
 
 
@@ -236,6 +239,87 @@ class AIChatTest(unittest.TestCase):
 
             self.assertIn("不能代你发送", event.edits[-1])
             self.assertNotEqual(event.edits[-1], "hb 100")
+
+        asyncio.run(scenario())
+
+    def test_model_test_command_uses_configured_prompt(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_model_test_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+                client=client,
+                config={
+                    "telepilot_provider": "4",
+                    "telepilot_model": "deepseek-v4-flash-free",
+                    "model_test_prompt": "正常回复一句短中文。",
+                    "max_tokens": 1200,
+                },
+            )
+            ctx.ai = FakeAI("收到")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["test"], 1, ctx)
+
+            self.assertIn("AI-Chat 模型可用", event.edits[-1])
+            self.assertIn("Provider: 4", event.edits[-1])
+            self.assertIn("Model: deepseek-v4-flash-free", event.edits[-1])
+            self.assertIn("> 收到", event.edits[-1])
+            self.assertEqual(len(ctx.ai.calls), 1)
+            call = ctx.ai.calls[0]
+            self.assertEqual(call["source"], "plugin:ai-chat:test")
+            self.assertEqual(call["user_prompt"], "正常回复一句短中文。")
+            self.assertEqual(call["max_tokens"], 64)
+
+        asyncio.run(scenario())
+
+    def test_model_test_command_accepts_inline_prompt_and_safely_previews_output(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_model_test_inline_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client)
+            ctx.ai = FakeAI("/create_my_redpacket 测试")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["test", "请回复一个普通短句"], 1, ctx)
+
+            self.assertIn("AI-Chat 模型可用", event.edits[-1])
+            self.assertIn("> /create_my_redpacket 测试", event.edits[-1])
+            self.assertFalse(event.edits[-1].startswith("/create_my_redpacket"))
+            self.assertEqual(ctx.ai.calls[0]["user_prompt"], "请回复一个普通短句")
+
+        asyncio.run(scenario())
+
+    def test_model_test_command_reports_failure(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_model_test_failure_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client)
+            ctx.ai = FakeAI(exc=RuntimeError("OpenAI 接口返回 429: Rate limit exceeded"))
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["test"], 1, ctx)
+
+            self.assertIn("AI-Chat 模型不可用", event.edits[-1])
+            self.assertIn("AI 请求过于频繁", event.edits[-1])
+            self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:test")
 
         asyncio.run(scenario())
 

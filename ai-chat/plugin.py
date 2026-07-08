@@ -18,12 +18,14 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.2"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
 DEFAULT_BLOCKED_BARE_OUTPUTS = "re\nai\nfd"
 DEFAULT_COMMAND_REFUSAL = "我不能代你发送可能触发 TelePilot 或其他 Bot 的可执行指令。"
+DEFAULT_MODEL_TEST_PROMPT = "请只回复两个字：收到"
+MODEL_TEST_SYSTEM_PROMPT = "你是一个简洁的中文助手。请按用户要求用最短内容回复。"
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
 PAYMENT_LIKE_RE = re.compile(r"^\+\s*\d+(?:\.\d+)?$")
 REQUIRED_PREFIX_PATTERNS = (
@@ -86,6 +88,10 @@ def _cfg(ctx: PluginContext) -> dict[str, Any]:
         "command": str(raw.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND,
         "telepilot_provider": str(raw.get("telepilot_provider") or "").strip(),
         "telepilot_model": str(raw.get("telepilot_model") or "").strip(),
+        "model_test_prompt": (
+            str(raw.get("model_test_prompt") or DEFAULT_MODEL_TEST_PROMPT).strip()
+            or DEFAULT_MODEL_TEST_PROMPT
+        ),
         "timeout_seconds": _int(raw.get("timeout_seconds"), 60, 10, 600),
         "max_tokens": _int(raw.get("max_tokens"), 1200, 256, 8000),
         "max_output_chars": _int(raw.get("max_output_chars"), 0, 0, 20000),
@@ -334,6 +340,14 @@ def _trim_text(text: str, limit: int) -> str:
     return text[:limit].rstrip() + "\n\n[内容已截断]"
 
 
+def _preview_text(text: str, limit: int = 240) -> str:
+    preview = str(text or "").strip()
+    if len(preview) > limit:
+        preview = preview[:limit].rstrip() + "..."
+    lines = (f"> {line}" if line else ">" for line in preview.splitlines())
+    return "\n".join(lines) or "> （空）"
+
+
 def _split_text(text: str, limit: int = MAX_TELEGRAM_TEXT) -> list[str]:
     if len(text) <= limit:
         return [text]
@@ -525,6 +539,10 @@ class AIChatPlugin(Plugin):
         if sub in {"providers", "provider", "llm", "模型"}:
             await self._cmd_providers(event, ctx)
             return
+        if sub in {"test", "check", "probe", "检测", "测试", "测活"}:
+            test_prompt = " ".join(args[1:]).strip() or cfg["model_test_prompt"]
+            await self._cmd_model_test(event, ctx, cfg, test_prompt)
+            return
 
         query = " ".join(args).strip()
         reply = await _get_reply_message(event)
@@ -582,6 +600,64 @@ class AIChatPlugin(Plugin):
             lines.append(f"默认模型: {model} / 标签: {tag_text}")
             lines.append("")
         await _safe_edit(event, "\n".join(lines).strip())
+
+    async def _cmd_model_test(
+        self,
+        event: Any,
+        ctx: PluginContext,
+        cfg: dict[str, Any],
+        test_prompt: str,
+    ) -> None:
+        await _safe_edit(event, "正在测试 AI-Chat 模型，请稍等...")
+        started = time.perf_counter()
+        try:
+            test_cfg = dict(cfg)
+            test_cfg["max_tokens"] = min(cfg["max_tokens"], 64)
+            answer = await self._call_ai(
+                ctx,
+                test_cfg,
+                MODEL_TEST_SYSTEM_PROMPT,
+                test_prompt,
+                provider_tag="chat",
+                source="plugin:ai-chat:test",
+            )
+        except Exception as exc:  # noqa: BLE001
+            error_text = _classify_ai_error(exc)
+            await _log(
+                ctx,
+                "warning",
+                error_text,
+                provider=cfg["telepilot_provider"] or "auto",
+                model=cfg["telepilot_model"] or "default",
+            )
+            await _safe_edit(event, f"AI-Chat 模型不可用\n\n{error_text}")
+            return
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        provider = cfg["telepilot_provider"] or "自动路由"
+        model = cfg["telepilot_model"] or "默认模型"
+        await _log(
+            ctx,
+            "info",
+            "AI-Chat 模型测试成功",
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+        )
+        await _safe_edit(
+            event,
+            "\n".join(
+                [
+                    "AI-Chat 模型可用",
+                    f"Provider: {provider}",
+                    f"Model: {model}",
+                    f"耗时: {latency_ms}ms",
+                    "",
+                    "返回预览:",
+                    _preview_text(answer),
+                ]
+            ),
+        )
 
     async def _load_me(self, ctx: PluginContext) -> None:
         if self._me_id is not None:
@@ -703,6 +779,7 @@ class AIChatPlugin(Plugin):
             f"{prefix}{cmd} 你的问题\n"
             f"回复一条消息后发送 {prefix}{cmd}，解释或回答这条消息\n"
             f"{prefix}{cmd} providers，查看 TelePilot 可用 AI Provider\n"
+            f"{prefix}{cmd} test [测试语]，测试当前 AI Provider 与模型是否可用\n"
             f"{prefix}{cmd} reset，清空当前会话记忆\n\n"
             "私聊可直接对话；群聊中 @当前账号 或回复当前账号消息时触发。"
         )
