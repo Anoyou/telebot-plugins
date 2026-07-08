@@ -2,7 +2,7 @@
 
 经典十点半纸牌游戏：支持多人对战、加倍、五小等规则。
 A=1, 2-10=面值, J/Q/K=0.5点。目标 10.5 点。
-五小(5张不爆)最高，天生十点半(前两张=10.5)保留。
+五小(5张不爆)最高；同点庄家胜。
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.14"
+PLUGIN_VERSION = "0.4.15"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -77,6 +77,7 @@ JOIN_MODE_SILENT_DEBIT = "silent_debit"
 DEFAULT_STAKE_OPTIONS = (1000, 10000, 50000, 100000)
 PENDING_DEBIT_TTL_SECONDS = 45
 PENDING_DEBIT_RETRY_SECONDS = 5
+ACTION_DEBOUNCE_SECONDS = 1.2
 JOIN_DEBIT_ANCHOR_MISSING_TEXT = "无法扣款，加入失败。可手动发言一次后再次尝试扣款加入。"
 
 
@@ -248,8 +249,8 @@ class PlayerHand:
 
     @property
     def is_natural(self) -> bool:
-        """前两张恰好 10.5 点 → 天生十点半。"""
-        return len(self.cards) == 2 and abs(self.value - 10.5) < 1e-9
+        """开局一张牌版不再设置“天生十点半”特殊牌型。"""
+        return False
 
     @property
     def is_five_small(self) -> bool:
@@ -261,7 +262,6 @@ class PlayerHand:
         return (
             self.busted
             or self.stood
-            or self.is_natural
             or self.is_five_small
             or self.value > 10.5 + 1e-9
         )
@@ -320,6 +320,7 @@ class TenHalfGame:
     paid_stakes: dict[int, int] = field(default_factory=dict)
     pending_debits: dict[int, dict[str, Any]] = field(default_factory=dict)
     stake_options: list[int] = field(default_factory=list)
+    recent_action_clicks: dict[str, float] = field(default_factory=dict)
 
     # ── 庄家辅助 ─────────────────────────────────────
     @property
@@ -330,7 +331,7 @@ class TenHalfGame:
         return sum(c.value for c in self.dealer_cards)
 
     def dealer_natural(self) -> bool:
-        return len(self.dealer_cards) == 2 and abs(self.dealer_val() - 10.5) < 1e-9
+        return False
 
     def dealer_five_small(self) -> bool:
         return len(self.dealer_cards) >= 5 and self.dealer_val() <= 10.5 + 1e-9
@@ -342,7 +343,6 @@ class TenHalfGame:
         return (
             self.dealer_busted()
             or self.dealer_stood
-            or self.dealer_natural()
             or self.dealer_five_small()
         )
 
@@ -775,7 +775,7 @@ def _rules_text(g: TenHalfGame | None = None) -> str:
     return "\n".join([
         "规则：A=1，2-10按牌面，J/Q/K=0.5。",
         "目标≤10.5且越大越好；开局每人1张，庄家首牌暗牌。",
-        "天生十点半自动停；五小最大；同点庄家胜，双爆闲家输。",
+        "五小最大；同点庄家胜，双爆闲家输。",
         f"已有2张后可加倍，{mode_note}",
         "庄家一对一制；闲家赢牌的倍率奖金由庄家出。",
         f"刷屏费收赢家 {service_fee_percent}%，从赢家倍率奖金里扣。",
@@ -826,17 +826,22 @@ def _bump_target_action_version(g: TenHalfGame, uid: int) -> None:
     g.action_version = max(g.action_version + 1, g.action_versions[uid])
 
 
-def _kb_unified_action_row() -> list[dict[str, str]]:
+def _board_action_version(g: TenHalfGame) -> int:
+    return max(1, int(g.action_version or 0))
+
+
+def _kb_unified_action_row(g: TenHalfGame) -> list[dict[str, str]]:
+    version = _board_action_version(g)
     return [
         {"text": "👀 看我的牌", "callback_data": "th:view:0"},
-        {"text": "🃏 要牌", "callback_data": "th:hit:0"},
-        {"text": "🛑 停牌", "callback_data": "th:stand:0"},
-        {"text": "💰 加倍", "callback_data": "th:double:0"},
+        {"text": "🃏 要牌", "callback_data": f"th:hit:0:{version}"},
+        {"text": "🛑 停牌", "callback_data": f"th:stand:0:{version}"},
+        {"text": "💰 加倍", "callback_data": f"th:double:0:{version}"},
     ]
 
 
 def _kb_parallel_actions(g: TenHalfGame) -> dict[str, Any] | None:
-    return {"inline_keyboard": [_kb_unified_action_row(), [_rules_button()]]} if _active_action_targets(g) else None
+    return {"inline_keyboard": [_kb_unified_action_row(g), [_rules_button()]]} if _active_action_targets(g) else None
 
 
 def _active_action_targets(g: TenHalfGame) -> list[int]:
@@ -844,6 +849,22 @@ def _active_action_targets(g: TenHalfGame) -> list[int]:
     if g.dealer_id > 0 and not g.dealer_done():
         ids.append(g.dealer_id)
     return ids
+
+
+def _consume_action_click(g: TenHalfGame, uid: int, action: str, *, now: float | None = None) -> bool:
+    if action not in {"hit", "stand", "double"}:
+        return True
+    current = time.monotonic() if now is None else float(now)
+    stale_before = current - max(ACTION_DEBOUNCE_SECONDS * 4, 5.0)
+    for key, ts in list(g.recent_action_clicks.items()):
+        if ts < stale_before:
+            g.recent_action_clicks.pop(key, None)
+    key = f"{int(uid)}:{action}"
+    last = float(g.recent_action_clicks.get(key) or 0.0)
+    if last and current - last < ACTION_DEBOUNCE_SECONDS:
+        return False
+    g.recent_action_clicks[key] = current
+    return True
 
 
 def _html(s: Any) -> str:
@@ -898,9 +919,7 @@ def _player_status(p: PlayerHand, current_uid: int | None = None) -> str:
         tags.append("行动中")
     if p.doubled:
         tags.append("已加倍")
-    if p.is_natural:
-        tags.append("十点半")
-    elif p.is_five_small:
+    if p.is_five_small:
         tags.append("五小")
     elif p.busted:
         tags.append("爆牌")
@@ -921,8 +940,6 @@ def _dealer_public_brief(g: TenHalfGame, *, reveal: bool = False) -> str:
             tags.append("爆牌")
         elif g.dealer_five_small():
             tags.append("五小")
-        elif g.dealer_natural():
-            tags.append("十点半")
         elif g.dealer_stood:
             tags.append("已停牌")
         elif g.phase == "playing" and g.dealer_id > 0:
@@ -1558,10 +1575,11 @@ class TenHalfPlugin(Plugin):
         mid = saved_mid or g.join_notice_msg_id
         if not mid:
             return []
-        g.join_notice_msg_id = mid
-        self._remember_interaction_message(g, mid)
+        g.join_notice_msg_id = None
+        g.known_interaction_message_ids.discard(int(mid))
         g.join_notice_version += 1
-        return [_delete_action(mid)]
+        await self._delete_saved_message_id(ctx, key)
+        return [_delete_action(mid, chat_id=g.chat_id)]
 
     def _schedule_join_notice_cleanup(
         self,
@@ -1715,7 +1733,7 @@ class TenHalfPlugin(Plugin):
             return
         delivered = await self._emit_background_actions(
             ctx,
-            [_delete_action(mid, chat_id=cid, send_via=USERBOT_SEND_VIA)],
+            [_delete_action(mid, chat_id=cid, send_via=INTERACTION_SEND_VIA)],
         )
         if delivered and message_key:
             await self._delete_saved_message_id(ctx, message_key)
@@ -1836,7 +1854,7 @@ class TenHalfPlugin(Plugin):
             for mid in sorted(interaction_message_ids)
         ]
         actions.extend(
-            _delete_action(mid, chat_id=cid, send_via=USERBOT_SEND_VIA)
+            _delete_action(mid, chat_id=cid, send_via=INTERACTION_SEND_VIA)
             for mid in sorted(userbot_message_ids)
         )
         if not actions:
@@ -1892,12 +1910,12 @@ class TenHalfPlugin(Plugin):
     def _normalize_player_state(p: PlayerHand) -> None:
         if p.value > 10.5 + 1e-9:
             p.busted = True
-        elif p.is_natural or p.is_five_small:
+        elif p.is_five_small:
             p.stood = True
 
     @staticmethod
     def _normalize_dealer_state(g: TenHalfGame) -> None:
-        if g.dealer_natural() or g.dealer_five_small():
+        if g.dealer_five_small():
             g.dealer_stood = True
 
     def _normalize_parallel_state(self, g: TenHalfGame) -> None:
@@ -2095,8 +2113,8 @@ class TenHalfPlugin(Plugin):
         )
         g.join_notice_msg_id = None
         if previous_mid:
-            self._remember_interaction_message(g, previous_mid)
-            actions.append(_delete_action(previous_mid))
+            g.known_interaction_message_ids.discard(int(previous_mid))
+            actions.append(_delete_action(previous_mid, chat_id=g.chat_id))
         self._schedule_join_notice_cleanup(g.chat_id, g, ctx, notice_version)
         return actions
 
@@ -2226,7 +2244,7 @@ class TenHalfPlugin(Plugin):
     ) -> None:
         await event.reply(
             "十点半现在只通过交互 Bot 关键词/规则开局；账号 userbot 只负责收付款和发奖。"
-            " 发送「10d模式」可切换转账/无感扣款入局；已有等待大厅时，账号 userbot 可发送「入局」直接加入。",
+            " 账号本人可在群内发送「10d模式」切换转账/无感扣款入局；已有等待大厅时发送「入局」可直接加入，普通消息由交互 Bot 通道处理。",
             parse_mode="html",
         )
 
@@ -2325,9 +2343,8 @@ class TenHalfPlugin(Plugin):
     ) -> str:
         """比较玩家与庄家，返回结果标识。
 
-        返回值: win_nat | win_5s | win | lose
+        返回值: win_5s | win | lose
         """
-        pn = p.is_natural
         pfs = p.is_five_small
 
         if p.busted or p.value > 10.5 + 1e-9:
@@ -2337,8 +2354,6 @@ class TenHalfPlugin(Plugin):
             # 庄家爆牌：没爆的玩家赢
             if pfs:
                 return "win_5s"
-            if pn:
-                return "win_nat"
             return "win"
 
         # ── 五小最高；五小互比时点数小者胜，同点庄家胜 ──
@@ -2347,14 +2362,6 @@ class TenHalfPlugin(Plugin):
         if pfs:
             return "win_5s"
         if dealer_five_small:
-            return "lose"
-
-        # ── 天生十点半保留；同为天生时庄家胜 ──
-        if pn and dealer_natural:
-            return "lose"
-        if pn:
-            return "win_nat"
-        if dealer_natural:
             return "lose"
 
         # ── 普通比较；同点庄家胜 ──
@@ -2377,9 +2384,7 @@ class TenHalfPlugin(Plugin):
         if reward > 0:
             amount = f"<b>{reward}</b>" if html_mode else str(reward)
             prefix = ""
-            if outcome == "win_nat":
-                prefix = "✨ 天生十点半！"
-            elif outcome == "win_5s":
+            if outcome == "win_5s":
                 prefix = "🌟 五小！"
             return f"{prefix}🎉是赢家 获得 {amount}"
         if outcome == "push":
@@ -2431,14 +2436,16 @@ class TenHalfPlugin(Plugin):
 
         async with self._lock(cid):
             existing = self._games.get(cid)
-            if existing and not existing.finished and existing.phase == "select_bet":
-                self._games.pop(cid, None)
-                await self._delete_lobby_state(ctx, existing)
-                existing = None
             if existing and not existing.finished:
+                phase_label = {
+                    "select_bet": "正在选择底注",
+                    "lobby": "正在等待入局",
+                    "playing": "正在进行",
+                    "dealer_turn": "正在庄家回合",
+                }.get(existing.phase, "正在进行")
                 return [
                     _send_action(
-                        "⚠️ 当前已有进行中的十点半游戏。",
+                        f"⚠️ 当前已有十点半牌桌（{phase_label}），请等本局结束后再开新局。",
                         reply_to_message_id=_ie_mid(payload),
                     )
                 ]
@@ -2583,9 +2590,6 @@ class TenHalfPlugin(Plugin):
             if amount != g.bet:
                 return await _skip("amount_mismatch", g)
 
-            if debit_notice and notice_mid:
-                self._schedule_transient_userbot_delete(ctx, cid, message_id=notice_mid)
-
             if g.join_mode == JOIN_MODE_SILENT_DEBIT:
                 resolved = self._resolve_pending_debit_payer(
                     g,
@@ -2603,6 +2607,9 @@ class TenHalfPlugin(Plugin):
                         f"amount={amount}, chat_id={cid}",
                     )
                 payer_id, payer_name = resolved
+
+            if notice_mid:
+                self._schedule_transient_userbot_delete(ctx, cid, message_id=notice_mid)
 
             if ctx.log:
                 await ctx.log("info",
@@ -2706,7 +2713,10 @@ class TenHalfPlugin(Plugin):
             if not g or g.finished:
                 restored = await self._restore_lobby_state(ctx, payload, cid)
                 if restored is None:
-                    return [{"type": "no_session"}]
+                    return [
+                        _answer_action(payload, "本局已结束，请等待下一局。"),
+                        {"type": "no_session"},
+                    ]
                 self._games[cid] = restored
                 g = restored
             callback_message_id = _ie_message_mid(payload)
@@ -2941,7 +2951,7 @@ class TenHalfPlugin(Plugin):
                 target_uid = parsed_uid
 
         if cb_version is not None:
-            current_version = _target_action_version(g, target_uid)
+            current_version = _target_action_version(g, target_uid) if parsed_uid > 0 else _board_action_version(g)
         else:
             current_version = None
         if cb_version is not None and cb_version != current_version:
@@ -2968,8 +2978,12 @@ class TenHalfPlugin(Plugin):
             if g.dealer_done():
                 return [_answer_action(payload or {}, "庄家本轮已结束。")] if payload else []
             if action == "hit":
+                if not _consume_action_click(g, target_uid, action):
+                    return [_answer_action(payload or {}, "操作太快了，请看最新牌桌。")] if payload else []
                 return await self._ix_dealer_hit(g.chat_id, g, ctx, payload)
             if action == "stand":
+                if not _consume_action_click(g, target_uid, action):
+                    return [_answer_action(payload or {}, "操作太快了，请看最新牌桌。")] if payload else []
                 return await self._ix_dealer_stand(g.chat_id, g, ctx, payload)
             return [_answer_action(payload or {}, "庄家不能加倍。")] if payload else []
 
@@ -2981,10 +2995,16 @@ class TenHalfPlugin(Plugin):
         if cur.is_done:
             return [_answer_action(payload or {}, "你本轮已经结束。")] if payload else []
         if action == "hit":
+            if not _consume_action_click(g, target_uid, action):
+                return [_answer_action(payload or {}, "操作太快了，请看最新牌桌。")] if payload else []
             return await self._ix_hit(g.chat_id, g, ctx, payload, player=cur)
         elif action == "stand":
+            if not _consume_action_click(g, target_uid, action):
+                return [_answer_action(payload or {}, "操作太快了，请看最新牌桌。")] if payload else []
             return await self._ix_stand(g.chat_id, g, ctx, payload, player=cur)
         elif action == "double":
+            if not _consume_action_click(g, target_uid, action):
+                return [_answer_action(payload or {}, "操作太快了，请看最新牌桌。")] if payload else []
             return await self._ix_double(g.chat_id, g, ctx, payload, player=cur)
         return []
 
@@ -2992,14 +3012,17 @@ class TenHalfPlugin(Plugin):
     async def _ix_message(
         self, ctx: PluginContext, payload: dict[str, Any], cid: int,
     ) -> list[dict[str, Any]]:
+        if _is_userbot_message(payload):
+            return []
         text = _ie_text(payload)
         if not text:
             return []
         mid = _ie_mid(payload)
         aid, aname = _ie_actor(payload)
+        is_owner = _is_payload_userbot_actor(payload, aid)
 
         requested_join_mode = _join_mode_from_command_text(text, self._join_mode)
-        if requested_join_mode is not None and _is_userbot_self(payload, aid):
+        if requested_join_mode is not None and is_owner:
             previous_mode = self._join_mode
             await self._save_join_mode(ctx, requested_join_mode)
             active_game = self._games.get(cid)
@@ -3019,7 +3042,6 @@ class TenHalfPlugin(Plugin):
                     f"十点半入局模式已切换为 <b>{_join_mode_label(requested_join_mode)}</b>{suffix}",
                     reply_to_message_id=mid,
                     save_message_id_key=result_key,
-                    send_via=USERBOT_SEND_VIA,
                 )
             ]
 
@@ -3030,14 +3052,14 @@ class TenHalfPlugin(Plugin):
 
             # ── 大厅 ──
             if g.phase == "lobby":
-                if text == "入局" and _is_userbot_self(payload, aid):
+                if text == "入局" and is_owner:
                     if mid:
                         self._schedule_transient_userbot_delete(ctx, cid, message_id=mid)
                     result = await self._ix_join(ctx, payload, g, aid, aname, paid_exempt=True)
                     if ctx.log:
                         await ctx.log("info",
                             f"[ten_half] player_joined: uid={aid}, name={aname}, "
-                            f"via=userbot_entry, chat_id={cid}")
+                            f"via=owner_entry, chat_id={cid}")
                     return result
                 if text in ("加入", "join", "入局"):
                     return []
@@ -3222,9 +3244,6 @@ class TenHalfPlugin(Plugin):
         elif p.is_five_small:
             p.stood = True
             g.status_note = f"{_display_name(p.name)} 五小，自动停牌。"
-        elif p.is_natural:
-            p.stood = True
-            g.status_note = f"{_display_name(p.name)} 十点半，自动停牌。"
         else:
             g.status_note = f"{_display_name(p.name)} 已要牌，当前 {_cards_brief(p.cards)}。"
 
@@ -3390,8 +3409,6 @@ class TenHalfPlugin(Plugin):
         def payout_multiplier(outcome: str) -> float:
             if outcome == "win_5s":
                 return 3.0
-            if outcome == "win_nat":
-                return 2.0
             if outcome == "win":
                 return 1.0
             return 0.0
@@ -3519,13 +3536,12 @@ class TenHalfPlugin(Plugin):
         )
 
         # ── 结算公告固定由交互 Bot 发送 ──
-        if ctx is not None:
-            actions.append(_send_action(
-                "\n".join(lines),
-                save_message_id_key=settlement_message_key,
-            ))
-        else:
-            actions.append(_send_action("\n".join(lines)))
+        settlement_action = _send_action(
+            "\n".join(lines),
+            save_message_id_key=settlement_message_key if ctx is not None else None,
+        )
+        settlement_action["chat_id"] = cid
+        actions.append(settlement_action)
 
         if dealer_top_up > 0 and int(g.dealer_id or 0) > 0:
             dealer_top_up_key = (
