@@ -342,7 +342,12 @@ class AIChatTest(unittest.TestCase):
         )
 
         async def scenario() -> None:
-            ctx = sys.modules["app.worker.plugins.base"].PluginContext()
+            logs = []
+
+            async def log(level, message, **detail):
+                logs.append((level, message, detail))
+
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(log=log)
             ctx.ai = FakeAI("收到")
             plugin = plugin_module.AIChatPlugin()
 
@@ -371,7 +376,13 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("模型实时返回：\n收到", patch_text)
             self.assertIn("结果解读：模型返回了非空文本", patch_text)
             self.assertIn("HTTP UA：由 TelePilot AI facade", patch_text)
+            self.assertIn("模型返回：收到", result["message"])
             self.assertEqual(result["result"]["ok"], True)
+            self.assertEqual(result["result"]["provider"], "4")
+            self.assertEqual(result["result"]["model"], "deepseek-v4-flash-free")
+            self.assertEqual(result["result"]["response_preview"], "收到")
+            self.assertIn("模型实时返回：\n收到", result["result"]["model_test_result"])
+            self.assertTrue(any("模型实时返回：收到" in message for _, message, _ in logs))
             self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:config-test")
             self.assertEqual(ctx.ai.calls[0]["max_tokens"], 64)
             self.assertIn("客户端标识（对话元信息，不是 HTTP User-Agent）：TelePilot AI-Chat", ctx.ai.calls[0]["user_prompt"])
@@ -385,7 +396,12 @@ class AIChatTest(unittest.TestCase):
         )
 
         async def scenario() -> None:
-            ctx = sys.modules["app.worker.plugins.base"].PluginContext()
+            logs = []
+
+            async def log(level, message, **detail):
+                logs.append((level, message, detail))
+
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(log=log)
             ctx.ai = FakeAI("")
             plugin = plugin_module.AIChatPlugin()
 
@@ -410,6 +426,9 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("没有可展示文本", result["message"])
             self.assertEqual(result["result"]["ok"], False)
             self.assertEqual(result["result"]["empty_response"], True)
+            self.assertEqual(result["result"]["response_preview"], "（空）")
+            self.assertIn("模型测试返回为空", logs[-1][1])
+            self.assertIn("模型原始返回：", logs[-1][1])
 
         asyncio.run(scenario())
 
@@ -420,7 +439,12 @@ class AIChatTest(unittest.TestCase):
         )
 
         async def scenario() -> None:
-            ctx = sys.modules["app.worker.plugins.base"].PluginContext()
+            logs = []
+
+            async def log(level, message, **detail):
+                logs.append((level, message, detail))
+
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(log=log)
             ctx.ai = FakeAI(exc=RuntimeError("OpenAI 接口返回 429: Rate limit exceeded"))
             plugin = plugin_module.AIChatPlugin()
 
@@ -436,7 +460,10 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("状态：不可用", patch_text)
             self.assertIn("AI 请求过于频繁", patch_text)
             self.assertIn("结果解读：本次没有拿到可用模型文本", patch_text)
+            self.assertIn("AI-Chat 模型不可用：AI 请求过于频繁", result["message"])
             self.assertEqual(result["result"]["ok"], False)
+            self.assertIn("AI 请求过于频繁", result["result"]["error"])
+            self.assertIn("模型测试失败：AI 请求过于频繁", logs[-1][1])
             self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:config-test")
 
         asyncio.run(scenario())

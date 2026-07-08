@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.4"
+PLUGIN_VERSION = "0.1.5"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
@@ -729,6 +729,7 @@ class AIChatPlugin(Plugin):
         except Exception as exc:  # noqa: BLE001
             latency_ms = int((time.perf_counter() - started) * 1000)
             error_text = _classify_ai_error(exc)
+            error_preview = _plain_preview(error_text, 500)
             result_text = self._model_test_result_text(
                 ok=False,
                 provider=provider,
@@ -741,19 +742,27 @@ class AIChatPlugin(Plugin):
             await _log(
                 ctx,
                 "warning",
-                "AI-Chat 配置页模型测试失败",
+                f"AI-Chat 配置页模型测试失败：{error_preview}",
                 provider=provider,
                 model=model,
                 latency_ms=latency_ms,
             )
             return {
-                "message": "AI-Chat 模型不可用，结果已记录。",
+                "message": f"AI-Chat 模型不可用：{_plain_preview(error_text, 180)}",
                 "config_patch": {"model_test_result": result_text},
-                "result": {"ok": False, "latency_ms": latency_ms},
+                "result": {
+                    "ok": False,
+                    "latency_ms": latency_ms,
+                    "provider": provider,
+                    "model": model,
+                    "error": error_preview,
+                    "model_test_result": result_text,
+                },
             }
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         if not answer:
+            raw_preview = _plain_preview(raw_answer, 800)
             result_text = self._model_test_result_text(
                 ok=False,
                 provider=provider,
@@ -767,17 +776,26 @@ class AIChatPlugin(Plugin):
             await _log(
                 ctx,
                 "warning",
-                "AI-Chat 配置页模型测试返回为空",
+                f"AI-Chat 配置页模型测试返回为空；模型原始返回：{raw_preview}",
                 provider=provider,
                 model=model,
                 latency_ms=latency_ms,
             )
             return {
-                "message": "AI-Chat 模型请求已完成但没有可展示文本，结果已记录。",
+                "message": f"AI-Chat 模型请求已完成但没有可展示文本；模型原始返回：{_plain_preview(raw_answer, 180)}",
                 "config_patch": {"model_test_result": result_text},
-                "result": {"ok": False, "empty_response": True, "latency_ms": latency_ms},
+                "result": {
+                    "ok": False,
+                    "empty_response": True,
+                    "latency_ms": latency_ms,
+                    "provider": provider,
+                    "model": model,
+                    "response_preview": raw_preview,
+                    "model_test_result": result_text,
+                },
             }
 
+        response_preview = _plain_preview(answer, 800)
         result_text = self._model_test_result_text(
             ok=True,
             provider=provider,
@@ -790,15 +808,22 @@ class AIChatPlugin(Plugin):
         await _log(
             ctx,
             "info",
-            "AI-Chat 配置页模型测试成功",
+            f"AI-Chat 配置页模型测试成功；模型实时返回：{response_preview}",
             provider=provider,
             model=model,
             latency_ms=latency_ms,
         )
         return {
-            "message": "AI-Chat 模型可用，结果已自动保存。",
+            "message": f"AI-Chat 模型可用，模型返回：{_plain_preview(answer, 240)}",
             "config_patch": {"model_test_result": result_text},
-            "result": {"ok": True, "latency_ms": latency_ms},
+            "result": {
+                "ok": True,
+                "latency_ms": latency_ms,
+                "provider": provider,
+                "model": model,
+                "response_preview": response_preview,
+                "model_test_result": result_text,
+            },
         }
 
     async def _load_me(self, ctx: PluginContext) -> None:
