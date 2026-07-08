@@ -156,6 +156,15 @@ class AIChatTest(unittest.TestCase):
         self.assertEqual(manifest_module.MANIFEST.version, plugin_meta["version"])
         self.assertEqual(plugin_meta["config_schema"]["properties"]["command"]["default"], "ask")
         self.assertEqual(manifest_module.CONFIG_SCHEMA["properties"]["command"]["default"], "ask")
+        self.assertEqual(
+            manifest_module.MANIFEST.config_actions,
+            plugin_meta["config_actions"],
+        )
+        self.assertEqual(
+            plugin_meta["config_actions"][0]["key"],
+            "test_model_availability",
+        )
+        self.assertIn("model_test_result", plugin_meta["config_schema"]["properties"])
         self.assertIn("ai_text", plugin_meta["permissions"])
 
     def test_package_loads_with_hyphenated_key_like_installed_loader(self) -> None:
@@ -320,6 +329,72 @@ class AIChatTest(unittest.TestCase):
             self.assertIn("AI-Chat 模型不可用", event.edits[-1])
             self.assertIn("AI 请求过于频繁", event.edits[-1])
             self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:test")
+
+        asyncio.run(scenario())
+
+    def test_config_action_tests_model_and_patches_result(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_config_action_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext()
+            ctx.ai = FakeAI("收到")
+            plugin = plugin_module.AIChatPlugin()
+
+            result = await plugin.on_config_action(
+                ctx,
+                "test_model_availability",
+                {
+                    "config": {
+                        "telepilot_provider": "4",
+                        "telepilot_model": "deepseek-v4-flash-free",
+                        "model_test_prompt": "正常回复一句短中文。",
+                        "max_tokens": 1200,
+                    },
+                    "input": {},
+                },
+            )
+
+            self.assertIsNotNone(result)
+            assert result is not None
+            patch_text = result["config_patch"]["model_test_result"]
+            self.assertIn("状态：可用", patch_text)
+            self.assertIn("Provider：4", patch_text)
+            self.assertIn("Model：deepseek-v4-flash-free", patch_text)
+            self.assertIn("测试语：正常回复一句短中文。", patch_text)
+            self.assertIn("返回预览：收到", patch_text)
+            self.assertEqual(result["result"]["ok"], True)
+            self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:config-test")
+            self.assertEqual(ctx.ai.calls[0]["max_tokens"], 64)
+
+        asyncio.run(scenario())
+
+    def test_config_action_records_unavailable_model_result(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_config_action_failure_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext()
+            ctx.ai = FakeAI(exc=RuntimeError("OpenAI 接口返回 429: Rate limit exceeded"))
+            plugin = plugin_module.AIChatPlugin()
+
+            result = await plugin.on_config_action(
+                ctx,
+                "test_model_availability",
+                {"config": {}, "input": {}},
+            )
+
+            self.assertIsNotNone(result)
+            assert result is not None
+            patch_text = result["config_patch"]["model_test_result"]
+            self.assertIn("状态：不可用", patch_text)
+            self.assertIn("AI 请求过于频繁", patch_text)
+            self.assertEqual(result["result"]["ok"], False)
+            self.assertEqual(ctx.ai.calls[0]["source"], "plugin:ai-chat:config-test")
 
         asyncio.run(scenario())
 

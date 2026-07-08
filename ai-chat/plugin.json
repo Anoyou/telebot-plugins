@@ -3,7 +3,7 @@
   "display_name": "AI-Chat",
   "description": "调用 TelePilot AI Provider 的 AI-Chat 聊天与消息解释助手，支持私聊/群聊触发和短期上下文记忆。",
   "author": "Anoyou",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.33.0",
@@ -23,6 +23,15 @@
     "edit_message",
     "read_chat",
     "ai_text"
+  ],
+  "config_actions": [
+    {
+      "key": "test_model_availability",
+      "title": "测试当前模型",
+      "description": "使用当前表单中的 Provider、模型覆盖和模型测试语发起一次真实 AI 调用，并自动保存最近一次测活结果。",
+      "placement": "field:model_test_result",
+      "submit_label": "开始测试"
+    }
   ],
   "config_schema": {
     "type": "object",
@@ -44,7 +53,7 @@
         "type": "string",
         "title": "使用说明（只读）",
         "readOnly": true,
-        "default": "{prefix}ask 你的问题\n回复一条消息后发送 {prefix}ask，解释或回答被回复内容\n{prefix}ask providers 查看平台 AI Provider\n{prefix}ask test [测试语] 测试当前 AI Provider 与模型\n{prefix}ask reset 清空当前会话记忆\n\n说明：本插件通过 TelePilot 的 AI Provider 调用模型，不在插件内保存 API Key。"
+        "default": "{prefix}ask 你的问题\n回复一条消息后发送 {prefix}ask，解释或回答被回复内容\n{prefix}ask providers 查看平台 AI Provider\n{prefix}ask test [测试语] 测试当前 AI Provider 与模型\n{prefix}ask reset 清空当前会话记忆\n\n配置页可直接点击“测试当前模型”，最近一次结果会自动保存到“模型测试结果”。\n\n说明：本插件通过 TelePilot 的 AI Provider 调用模型，不在插件内保存 API Key。"
       },
       "telepilot_provider": {
         "type": "string",
@@ -70,6 +79,14 @@
         "x-ui-widget": "textarea",
         "minLength": 1,
         "maxLength": 1000
+      },
+      "model_test_result": {
+        "type": "string",
+        "title": "模型测试结果",
+        "description": "由配置页“测试当前模型”自动更新，用于查看最近一次测活状态、耗时、Provider、模型和返回/错误预览。",
+        "default": "尚未测试。",
+        "x-ui-widget": "textarea",
+        "maxLength": 4000
       },
       "timeout_seconds": {
         "type": "integer",
@@ -181,6 +198,7 @@
       "telepilot_provider",
       "telepilot_model",
       "model_test_prompt",
+      "model_test_result",
       "timeout_seconds",
       "max_tokens",
       "max_output_chars",

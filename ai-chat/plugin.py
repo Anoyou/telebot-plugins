@@ -7,6 +7,7 @@ import importlib
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from app.worker.command import current_command_prefix
@@ -18,13 +19,14 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.3"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
 DEFAULT_BLOCKED_BARE_OUTPUTS = "re\nai\nfd"
 DEFAULT_COMMAND_REFUSAL = "我不能代你发送可能触发 TelePilot 或其他 Bot 的可执行指令。"
 DEFAULT_MODEL_TEST_PROMPT = "请只回复两个字：收到"
+DEFAULT_MODEL_TEST_RESULT = "尚未测试。"
 MODEL_TEST_SYSTEM_PROMPT = "你是一个简洁的中文助手。请按用户要求用最短内容回复。"
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
 PAYMENT_LIKE_RE = re.compile(r"^\+\s*\d+(?:\.\d+)?$")
@@ -92,6 +94,7 @@ def _cfg(ctx: PluginContext) -> dict[str, Any]:
             str(raw.get("model_test_prompt") or DEFAULT_MODEL_TEST_PROMPT).strip()
             or DEFAULT_MODEL_TEST_PROMPT
         ),
+        "model_test_result": str(raw.get("model_test_result") or DEFAULT_MODEL_TEST_RESULT),
         "timeout_seconds": _int(raw.get("timeout_seconds"), 60, 10, 600),
         "max_tokens": _int(raw.get("max_tokens"), 1200, 256, 8000),
         "max_output_chars": _int(raw.get("max_output_chars"), 0, 0, 20000),
@@ -346,6 +349,17 @@ def _preview_text(text: str, limit: int = 240) -> str:
         preview = preview[:limit].rstrip() + "..."
     lines = (f"> {line}" if line else ">" for line in preview.splitlines())
     return "\n".join(lines) or "> （空）"
+
+
+def _plain_preview(text: str, limit: int = 360) -> str:
+    preview = re.sub(r"\s+", " ", str(text or "").strip())
+    if len(preview) > limit:
+        preview = preview[:limit].rstrip() + "..."
+    return preview or "（空）"
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
 def _split_text(text: str, limit: int = MAX_TELEGRAM_TEXT) -> list[str]:
@@ -659,6 +673,81 @@ class AIChatPlugin(Plugin):
             ),
         )
 
+    async def on_config_action(
+        self,
+        ctx: PluginContext,
+        action_key: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if action_key != "test_model_availability":
+            return None
+
+        current_config = dict(payload.get("config") or {})
+        ctx.config = {**(getattr(ctx, "config", None) or {}), **current_config}
+        cfg = _cfg(ctx)
+        test_prompt = cfg["model_test_prompt"]
+        started = time.perf_counter()
+        provider = cfg["telepilot_provider"] or "自动路由"
+        model = cfg["telepilot_model"] or "默认模型"
+        try:
+            test_cfg = dict(cfg)
+            test_cfg["max_tokens"] = min(cfg["max_tokens"], 64)
+            answer = await self._call_ai(
+                ctx,
+                test_cfg,
+                MODEL_TEST_SYSTEM_PROMPT,
+                test_prompt,
+                provider_tag="chat",
+                source="plugin:ai-chat:config-test",
+            )
+        except Exception as exc:  # noqa: BLE001
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            error_text = _classify_ai_error(exc)
+            result_text = self._model_test_result_text(
+                ok=False,
+                provider=provider,
+                model=model,
+                latency_ms=latency_ms,
+                test_prompt=test_prompt,
+                error=error_text,
+            )
+            await _log(
+                ctx,
+                "warning",
+                "AI-Chat 配置页模型测试失败",
+                provider=provider,
+                model=model,
+                latency_ms=latency_ms,
+            )
+            return {
+                "message": "AI-Chat 模型不可用，结果已记录。",
+                "config_patch": {"model_test_result": result_text},
+                "result": {"ok": False, "latency_ms": latency_ms},
+            }
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        result_text = self._model_test_result_text(
+            ok=True,
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            test_prompt=test_prompt,
+            response=answer,
+        )
+        await _log(
+            ctx,
+            "info",
+            "AI-Chat 配置页模型测试成功",
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+        )
+        return {
+            "message": "AI-Chat 模型可用，结果已自动保存。",
+            "config_patch": {"model_test_result": result_text},
+            "result": {"ok": True, "latency_ms": latency_ms},
+        }
+
     async def _load_me(self, ctx: PluginContext) -> None:
         if self._me_id is not None:
             return
@@ -739,6 +828,31 @@ class AIChatPlugin(Plugin):
             return template.format(content=content)
         except Exception:
             return f"{DEFAULT_EXPLAIN_PROMPT}\n\n{content}"
+
+    def _model_test_result_text(
+        self,
+        *,
+        ok: bool,
+        provider: str,
+        model: str,
+        latency_ms: int,
+        test_prompt: str,
+        response: str = "",
+        error: str = "",
+    ) -> str:
+        lines = [
+            f"状态：{'可用' if ok else '不可用'}",
+            f"时间：{_utc_timestamp()}",
+            f"Provider：{provider}",
+            f"Model：{model}",
+            f"耗时：{latency_ms}ms",
+            f"测试语：{_plain_preview(test_prompt, 160)}",
+        ]
+        if ok:
+            lines.append(f"返回预览：{_plain_preview(response, 360)}")
+        else:
+            lines.append(f"错误：{_plain_preview(error, 500)}")
+        return "\n".join(lines)
 
     async def _call_ai(
         self,

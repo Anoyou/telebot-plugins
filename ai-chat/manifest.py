@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.3"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -38,6 +38,7 @@ CONFIG_SCHEMA = {
                 "{prefix}ask providers 查看平台 AI Provider\n"
                 "{prefix}ask test [测试语] 测试当前 AI Provider 与模型\n"
                 "{prefix}ask reset 清空当前会话记忆\n\n"
+                "配置页可直接点击“测试当前模型”，最近一次结果会自动保存到“模型测试结果”。\n\n"
                 "说明：本插件通过 TelePilot 的 AI Provider 调用模型，不在插件内保存 API Key。"
             ),
         },
@@ -65,6 +66,14 @@ CONFIG_SCHEMA = {
             "x-ui-widget": "textarea",
             "minLength": 1,
             "maxLength": 1000,
+        },
+        "model_test_result": {
+            "type": "string",
+            "title": "模型测试结果",
+            "description": "由配置页“测试当前模型”自动更新，用于查看最近一次测活状态、耗时、Provider、模型和返回/错误预览。",
+            "default": "尚未测试。",
+            "x-ui-widget": "textarea",
+            "maxLength": 4000,
         },
         "timeout_seconds": {
             "type": "integer",
@@ -176,6 +185,7 @@ CONFIG_SCHEMA = {
         "telepilot_provider",
         "telepilot_model",
         "model_test_prompt",
+        "model_test_result",
         "timeout_seconds",
         "max_tokens",
         "max_output_chars",
@@ -193,6 +203,16 @@ CONFIG_SCHEMA = {
         "strip_thinking",
     ],
 }
+
+CONFIG_ACTIONS = [
+    {
+        "key": "test_model_availability",
+        "title": "测试当前模型",
+        "description": "使用当前表单中的 Provider、模型覆盖和模型测试语发起一次真实 AI 调用，并自动保存最近一次测活结果。",
+        "placement": "field:model_test_result",
+        "submit_label": "开始测试",
+    }
+]
 
 EVENT_SUBSCRIPTIONS = [
     {
@@ -223,10 +243,11 @@ MANIFEST = Manifest(
     category="utility",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
+    config_actions=CONFIG_ACTIONS,
 )
 
 MANIFEST.usage = USAGE
 MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
 MANIFEST.capabilities = CAPABILITIES
 
-__all__ = ["MANIFEST", "CONFIG_SCHEMA", "PLUGIN_VERSION"]
+__all__ = ["MANIFEST", "CONFIG_SCHEMA", "CONFIG_ACTIONS", "PLUGIN_VERSION"]
