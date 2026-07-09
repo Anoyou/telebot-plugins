@@ -100,6 +100,8 @@ def _load_installed_package(name: str, path: Path):
 class FakeClient:
     def __init__(self) -> None:
         self.sent: list[tuple[int, str, dict]] = []
+        self.message_exists = True
+        self.get_messages_calls: list[tuple[int, int | None]] = []
 
     async def get_me(self):
         return types.SimpleNamespace(id=42, username="tester")
@@ -108,11 +110,18 @@ class FakeClient:
         self.sent.append((chat_id, text, kwargs))
         return types.SimpleNamespace(id=len(self.sent))
 
+    async def get_messages(self, chat_id, *, ids=None):
+        self.get_messages_calls.append((chat_id, ids))
+        if not self.message_exists:
+            return None
+        return types.SimpleNamespace(id=ids, raw_text="触发消息", sender_id=100)
+
 
 class FakeEvent:
     chat_id = -100123
 
     def __init__(self, reply_text: str = "") -> None:
+        self.id = 77
         self.edits: list[str] = []
         self._reply_text = reply_text
 
@@ -127,10 +136,11 @@ class FakeEvent:
 
 
 class FakeAI:
-    def __init__(self, text: str = "模型回答", exc: Exception | None = None) -> None:
+    def __init__(self, text: str = "模型回答", exc: Exception | None = None, after_call=None) -> None:
         self.calls: list[dict] = []
         self.text = text
         self.exc = exc
+        self.after_call = after_call
 
     async def complete(self, system_prompt, user_prompt, **kwargs):
         self.calls.append(
@@ -138,7 +148,21 @@ class FakeAI:
         )
         if self.exc is not None:
             raise self.exc
+        if self.after_call is not None:
+            self.after_call()
         return types.SimpleNamespace(text=self.text)
+
+
+class FakeIncomingEvent(FakeEvent):
+    def __init__(self, text: str, *, chat_id: int = 123, media=None) -> None:
+        super().__init__()
+        self.chat_id = chat_id
+        self.raw_text = text
+        self.is_private = True
+        self.media = media
+
+    async def get_sender(self):
+        return types.SimpleNamespace(id=100, bot=False, is_bot=False)
 
 
 class AIChatTest(unittest.TestCase):
@@ -167,6 +191,7 @@ class AIChatTest(unittest.TestCase):
         self.assertIn("input_schema", plugin_meta["config_actions"][0])
         self.assertIn("model_test_client_identity", plugin_meta["config_schema"]["properties"])
         self.assertIn("model_test_result", plugin_meta["config_schema"]["properties"])
+        self.assertIn("payment_guard_reply", plugin_meta["config_schema"]["properties"])
         self.assertIn("ai_text", plugin_meta["permissions"])
 
     def test_package_loads_with_hyphenated_key_like_installed_loader(self) -> None:
@@ -250,6 +275,149 @@ class AIChatTest(unittest.TestCase):
 
             self.assertIn("不能代你发送", event.edits[-1])
             self.assertNotEqual(event.edits[-1], "hb 100")
+
+        asyncio.run(scenario())
+
+    def test_plus_range_payment_like_output_gets_penalty_reply(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_plus_range_guard_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client)
+            ctx.ai = FakeAI("+500000-10000000")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["映射测试"], 1, ctx)
+
+            self.assertEqual(event.edits[-1], "-66666")
+
+        asyncio.run(scenario())
+
+    def test_empty_payment_guard_reply_falls_back_to_safe_refusal(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_empty_payment_guard_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+                client=client,
+                config={"payment_guard_reply": ""},
+            )
+            ctx.ai = FakeAI("+500000-10000000")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["映射测试"], 1, ctx)
+
+            self.assertIn("不能代你发送", event.edits[-1])
+            self.assertNotEqual(event.edits[-1], "+500000-10000000")
+
+        asyncio.run(scenario())
+
+    def test_prefixed_payment_like_output_still_gets_penalty_reply(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_prefixed_payment_guard_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+                client=client,
+                config={
+                    "system_prompt": "你叫阿光。每个回复都必须以“天才：”开头。",
+                },
+            )
+            ctx.ai = FakeAI("天才：+500000-10000000")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeEvent()
+            await plugin.commands["ask"](None, event, ["映射测试"], 1, ctx)
+
+            self.assertEqual(event.edits[-1], "-66666")
+
+        asyncio.run(scenario())
+
+    def test_deleted_trigger_message_skips_ai_chat_reply(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_deleted_trigger_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            logs = []
+            client = FakeClient()
+
+            def delete_after_ai_call():
+                client.message_exists = False
+
+            async def log(level, message, **detail):
+                logs.append((level, message, detail))
+
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client, log=log)
+            ctx.ai = FakeAI("正常回答", after_call=delete_after_ai_call)
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeIncomingEvent("你好")
+            await plugin.on_message(ctx, event)
+
+            self.assertEqual(len(ctx.ai.calls), 1)
+            self.assertEqual(client.sent, [])
+            self.assertGreaterEqual(len(client.get_messages_calls), 2)
+            self.assertTrue(any("触发消息已删除" in message for _, message, _ in logs))
+
+        asyncio.run(scenario())
+
+    def test_media_message_uses_fixed_reply_without_calling_ai(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_media_skip_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client)
+            ctx.ai = FakeAI("-66666 你这套路也太多了吧。")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeIncomingEvent("我想念的静静", media=object())
+            await plugin.on_message(ctx, event)
+
+            self.assertEqual(ctx.ai.calls, [])
+            self.assertEqual(len(client.sent), 1)
+            self.assertEqual(client.sent[0][1], "我现在看不了图片，发文字我再回你。")
+
+        asyncio.run(scenario())
+
+    def test_media_message_with_command_caption_is_ignored(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_media_command_caption_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client)
+            ctx.ai = FakeAI("模型不该被调用")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeIncomingEvent("/create_my_redpacket 测试", media=object())
+            await plugin.on_message(ctx, event)
+
+            self.assertEqual(ctx.ai.calls, [])
+            self.assertEqual(client.sent, [])
 
         asyncio.run(scenario())
 

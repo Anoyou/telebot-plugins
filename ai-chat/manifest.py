@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.6"
+PLUGIN_VERSION = "0.1.8"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -110,6 +110,14 @@ CONFIG_SCHEMA = {
             "description": "开启后，AI 回复若像 Telegram/TelePilot 指令、转账数字或已配置命令，会改为安全提示，避免被其他 Bot 或 TelePilot 继续执行。",
             "default": True,
         },
+        "payment_guard_reply": {
+            "type": "string",
+            "title": "加款诱导反制回复",
+            "description": "AI 最终回复若像 +数字 或 +数字-数字 的加款诱导，会替换成此内容；留空则改用普通安全提示。此项不会自动套安全回复前缀。",
+            "default": "-66666",
+            "maxLength": 120,
+            "pattern": "^(?!\\s*\\+).*$",
+        },
         "safe_reply_prefix": {
             "type": "string",
             "title": "安全回复前缀（可选）",
@@ -198,6 +206,7 @@ CONFIG_SCHEMA = {
         "max_tokens",
         "max_output_chars",
         "protect_command_outputs",
+        "payment_guard_reply",
         "safe_reply_prefix",
         "blocked_bare_outputs",
         "enable_private_chat",

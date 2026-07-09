@@ -3,7 +3,7 @@
   "display_name": "AI-Chat",
   "description": "调用 TelePilot AI Provider 的 AI-Chat 聊天与消息解释助手，支持私聊/群聊触发和短期上下文记忆。",
   "author": "Anoyou",
-  "version": "0.1.6",
+  "version": "0.1.8",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.33.0",
@@ -144,6 +144,14 @@
         "description": "开启后，AI 回复若像 Telegram/TelePilot 指令、转账数字或已配置命令，会改为安全提示，避免被其他 Bot 或 TelePilot 继续执行。",
         "default": true
       },
+      "payment_guard_reply": {
+        "type": "string",
+        "title": "加款诱导反制回复",
+        "description": "AI 最终回复若像 +数字 或 +数字-数字 的加款诱导，会替换成此内容；留空则改用普通安全提示。此项不会自动套安全回复前缀。",
+        "default": "-66666",
+        "maxLength": 120,
+        "pattern": "^(?!\\s*\\+).*$"
+      },
       "safe_reply_prefix": {
         "type": "string",
         "title": "安全回复前缀（可选）",
@@ -232,6 +240,7 @@
       "max_tokens",
       "max_output_chars",
       "protect_command_outputs",
+      "payment_guard_reply",
       "safe_reply_prefix",
       "blocked_bare_outputs",
       "enable_private_chat",

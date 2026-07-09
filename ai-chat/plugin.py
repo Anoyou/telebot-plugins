@@ -19,12 +19,14 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.6"
+PLUGIN_VERSION = "0.1.8"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
 DEFAULT_BLOCKED_BARE_OUTPUTS = "re\nai\nfd"
 DEFAULT_COMMAND_REFUSAL = "我不能代你发送可能触发 TelePilot 或其他 Bot 的可执行指令。"
+DEFAULT_PAYMENT_GUARD_REPLY = "-66666"
+DEFAULT_MEDIA_UNSUPPORTED_REPLY = "我现在看不了图片，发文字我再回你。"
 DEFAULT_MODEL_TEST_PROMPT = "请只回复两个字：收到"
 DEFAULT_MODEL_TEST_CLIENT_IDENTITY = "TelePilot AI-Chat"
 DEFAULT_MODEL_TEST_RESULT = "尚未测试。"
@@ -33,7 +35,7 @@ HTTP_USER_AGENT_NOTE = (
     "OpenAI 兼容请求未显式设置 User-Agent，通常使用 httpx 默认 UA。"
 )
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
-PAYMENT_LIKE_RE = re.compile(r"^\+\s*\d+(?:\.\d+)?$")
+PAYMENT_LIKE_RE = re.compile(r"^\+\s*\d+(?:\.\d+)?(?:\s*[-–—~～至到]\s*\d+(?:\.\d+)?)?$")
 REQUIRED_PREFIX_PATTERNS = (
     re.compile(r"回复都必须以[“\"']([^”\"']{1,32})[”\"']开头"),
     re.compile(r"每(?:个|次)回复.*?以[“\"']([^”\"']{1,32})[”\"']开头"),
@@ -90,6 +92,12 @@ def _int(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 def _cfg(ctx: PluginContext) -> dict[str, Any]:
     raw = dict(getattr(ctx, "config", None) or {})
+    payment_guard_reply = raw.get("payment_guard_reply", DEFAULT_PAYMENT_GUARD_REPLY)
+    if payment_guard_reply is None:
+        payment_guard_reply = ""
+    payment_guard_reply = str(payment_guard_reply).strip()
+    if payment_guard_reply.lstrip().startswith("+"):
+        payment_guard_reply = DEFAULT_PAYMENT_GUARD_REPLY
     return {
         "command": str(raw.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND,
         "telepilot_provider": str(raw.get("telepilot_provider") or "").strip(),
@@ -107,6 +115,7 @@ def _cfg(ctx: PluginContext) -> dict[str, Any]:
         "max_tokens": _int(raw.get("max_tokens"), 1200, 256, 8000),
         "max_output_chars": _int(raw.get("max_output_chars"), 0, 0, 20000),
         "protect_command_outputs": _bool(raw.get("protect_command_outputs"), True),
+        "payment_guard_reply": payment_guard_reply,
         "safe_reply_prefix": str(raw.get("safe_reply_prefix") or ""),
         "blocked_bare_outputs": str(raw.get("blocked_bare_outputs") or DEFAULT_BLOCKED_BARE_OUTPUTS),
         "enable_private_chat": _bool(raw.get("enable_private_chat"), True),
@@ -151,6 +160,14 @@ def _event_text(event: Any) -> str:
     ).strip()
 
 
+def _event_has_media(event: Any) -> bool:
+    msg = getattr(event, "message", event)
+    for attr in ("media", "photo", "document", "video", "audio", "voice", "sticker", "gif"):
+        if getattr(event, attr, None) is not None or getattr(msg, attr, None) is not None:
+            return True
+    return False
+
+
 def _message_text(message: Any) -> str:
     if message is None:
         return ""
@@ -178,6 +195,18 @@ def _message_id(message: Any) -> int | None:
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _is_message_missing(message: Any) -> bool:
+    if message is None:
+        return True
+    return message.__class__.__name__ == "MessageEmpty" or bool(getattr(message, "empty", False))
+
+
+def _first_message(raw: Any) -> Any:
+    if isinstance(raw, (list, tuple)):
+        return raw[0] if raw else None
+    return raw
 
 
 def _sender_id(message: Any) -> int | None:
@@ -307,17 +336,31 @@ def _looks_like_executable_output(line: str, command_words: set[str]) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
-    if PAYMENT_LIKE_RE.match(stripped):
+    if _looks_like_payment_output(stripped):
         return True
     if stripped.startswith(_command_prefixes()):
         return True
     return _starts_with_command_word(stripped, command_words)
 
 
+def _looks_like_payment_output(line: str) -> bool:
+    return bool(PAYMENT_LIKE_RE.match(str(line or "").strip()))
+
+
 def _first_executable_output_line(text: str, command_words: set[str]) -> str:
     for line in text.splitlines():
         if _looks_like_executable_output(line, command_words):
             return line.strip()
+    return ""
+
+
+def _first_prefixed_payment_output_line(text: str, prefix: str) -> str:
+    if not prefix:
+        return ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix) and _looks_like_payment_output(stripped[len(prefix):].strip()):
+            return stripped
     return ""
 
 
@@ -332,12 +375,24 @@ def _guard_ai_output(ctx: PluginContext, cfg: dict[str, Any], text: str) -> str:
         return _ensure_reply_prefix(output, prefix)
     command_words = _available_command_words(cfg)
     blocked_line = _first_executable_output_line(output, command_words)
+    if not blocked_line:
+        blocked_line = _first_prefixed_payment_output_line(output, prefix)
     output = _ensure_reply_prefix(output, prefix)
     blocked_line = blocked_line or _first_executable_output_line(output, command_words)
+    blocked_line = blocked_line or _first_prefixed_payment_output_line(output, prefix)
     if blocked_line:
-        guarded = _ensure_reply_prefix(DEFAULT_COMMAND_REFUSAL, prefix)
+        is_payment_like = _looks_like_payment_output(blocked_line)
+        if not is_payment_like and prefix and blocked_line.startswith(prefix):
+            is_payment_like = _looks_like_payment_output(blocked_line[len(prefix):].strip())
+        payment_guard_reply = str(cfg.get("payment_guard_reply") or "").strip()
+        if is_payment_like and payment_guard_reply:
+            guarded = payment_guard_reply
+            reason = "payment_like_output"
+        else:
+            guarded = _ensure_reply_prefix(DEFAULT_COMMAND_REFUSAL, prefix)
+            reason = "command_like_output"
         log_detail = {
-            "reason": "command_like_output",
+            "reason": reason,
             "line_preview": blocked_line[:80],
         }
         asyncio.create_task(_log(ctx, "warning", "已拦截 AI-Chat 可执行指令形态输出", **log_detail))
@@ -423,6 +478,39 @@ async def _send_text(ctx: PluginContext, event: Any, text: str, *, reply_to: int
     await client.send_message(chat_id, text, **kwargs)
 
 
+async def _trigger_message_available(ctx: PluginContext, event: Any) -> bool:
+    """Best-effort check that the message which triggered AI-Chat still exists."""
+
+    chat_id = _event_chat_id(event)
+    message_id = _message_id(event)
+    client = getattr(ctx, "client", None)
+    get_messages = getattr(client, "get_messages", None) if client is not None else None
+    if chat_id is None or message_id is None or get_messages is None:
+        return True
+    try:
+        fresh = _first_message(await _maybe_await(get_messages(chat_id, ids=message_id)))
+    except Exception as exc:  # noqa: BLE001
+        await _log(
+            ctx,
+            "warning",
+            "AI-Chat 原消息存在性检查失败，按兼容策略继续回复",
+            chat_id=chat_id,
+            message_id=message_id,
+            error=_plain_preview(str(exc), 160),
+        )
+        return True
+    if _is_message_missing(fresh):
+        await _log(
+            ctx,
+            "info",
+            "AI-Chat 触发消息已删除，跳过回复",
+            chat_id=chat_id,
+            message_id=message_id,
+        )
+        return False
+    return True
+
+
 async def _get_reply_message(event: Any) -> Any:
     getter = getattr(event, "get_reply_message", None)
     if getter is None:
@@ -495,8 +583,11 @@ class AIChatPlugin(Plugin):
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         if _is_outgoing(event):
             return
+        has_media = _event_has_media(event)
         text = _event_text(event)
-        if not text or _looks_like_command(text):
+        if _looks_like_command(text):
+            return
+        if not text and not has_media:
             return
 
         cfg = _cfg(ctx)
@@ -517,6 +608,10 @@ class AIChatPlugin(Plugin):
             return
 
         is_private = _is_private(event, chat_id)
+        if has_media:
+            await self._reply_media_unsupported(ctx, event, cfg, chat_id, is_private, text)
+            return
+
         if is_private:
             if not cfg["enable_private_chat"]:
                 return
@@ -533,6 +628,8 @@ class AIChatPlugin(Plugin):
         key = self._history_key(ctx, chat_id)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
+            if not await _trigger_message_available(ctx, event):
+                return
             await self._prune_history(key)
             history = self._history.get(key, [])
             user_prompt = self._build_chat_prompt(prompt_text, history)
@@ -546,12 +643,40 @@ class AIChatPlugin(Plugin):
             reply = _trim_text(reply, cfg["max_output_chars"])
             if not reply:
                 return
+            if not await _trigger_message_available(ctx, event):
+                return
             self._remember(key, "user", prompt_text, cfg["max_history"])
             self._remember(key, "assistant", reply, cfg["max_history"])
             reply_to = _message_id(event) if not is_private else None
             for chunk in _split_text(reply):
                 await _send_text(ctx, event, chunk, reply_to=reply_to)
                 reply_to = None
+
+    async def _reply_media_unsupported(
+        self,
+        ctx: PluginContext,
+        event: Any,
+        cfg: dict[str, Any],
+        chat_id: int | None,
+        is_private: bool,
+        text: str,
+    ) -> None:
+        if chat_id is None:
+            return
+        if is_private:
+            if not cfg["enable_private_chat"]:
+                return
+            reply_to = None
+        else:
+            if not cfg["enable_group_chat"] or not _chat_allowed(chat_id, cfg["group_chat_ids"]):
+                return
+            prompt_text = await self._group_prompt_text(event, text)
+            if not prompt_text:
+                return
+            reply_to = _message_id(event)
+        if not await _trigger_message_available(ctx, event):
+            return
+        await _send_text(ctx, event, DEFAULT_MEDIA_UNSUPPORTED_REPLY, reply_to=reply_to)
 
     async def _cmd_ai(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
         cfg = _cfg(ctx)
