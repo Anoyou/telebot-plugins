@@ -1,4 +1,9 @@
 # 更新日志
+## 1.1.28 (2026-07-10)
+- 修复交互 Bot 开局和答题仍依赖插件进程内存的问题：开局写入平台 session，后续答题从 `payload.session.data` 恢复局面。
+- 猜错时返回 `update_session` 保存用户答题冷却，避免进程重载或会话续投递后同一用户限制丢失。
+- 补齐 `callback_query`、`session_expired`、`update_session` 和 `valid_seconds` 交互契约声明，保留原图 `edit_caption` 和自动 `payout` 发奖链路。
+
 ## 1.1.27 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 读取改用标准事件信封 `event_from_interaction_payload(payload)` 作为主路径（事件类型、聊天、消息文本/ID、发起人 ID），旧平铺 payload helper 全部保留为 fallback，标准字段取不到时自动回退。
 - 事件类型路由仍保持旧平铺优先、信封兜底，keyword/付款开局与答题分发语义不变；九宫格题图、答对 `edit_caption`、`payout` 发奖与每回合全量状态重发流程完全保留，玩法与文案零改动。

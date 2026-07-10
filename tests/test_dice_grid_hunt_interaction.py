@@ -73,20 +73,34 @@ def start_payload(*, prize: int = 100) -> dict:
     }
 
 
-def answer_payload(*, text: str, user_id: int = 222, name: str = "uhaveanswer", reply_to_message_id: int | None = None) -> dict:
+def answer_payload(
+    *,
+    text: str,
+    user_id: int = 222,
+    name: str = "uhaveanswer",
+    reply_to_message_id: int | None = None,
+    session_data: dict | None = None,
+) -> dict:
     payload = {
         "source": {"type": "message", "chat_id": -100123, "message_id": 100, "text": text},
         "actor": {"user_id": user_id, "display_name": name},
         "sender_user_id": user_id,
         "sender_name": name,
         "message_text": text,
+        "session": {"scope": "chat", "data": session_data or {}},
     }
     if reply_to_message_id is not None:
         payload["reply_to"] = {"message_id": reply_to_message_id}
     return payload
 
 
-def telepilot_message_payload(*, text: str, user_id: int = 222, name: str = "uhaveanswer") -> dict:
+def telepilot_message_payload(
+    *,
+    text: str,
+    user_id: int = 222,
+    name: str = "uhaveanswer",
+    session_data: dict | None = None,
+) -> dict:
     return {
         "raw": {"event_type": "message", "message_id": 100, "text": text},
         "source": {
@@ -109,6 +123,7 @@ def telepilot_message_payload(*, text: str, user_id: int = 222, name: str = "uha
         "player": {"user_id": user_id, "display_name": name},
         "source_actor": {"user_id": user_id, "display_name": name},
         "event_type": "message",
+        "session": {"scope": "chat", "data": session_data or {}},
     }
 
 
@@ -137,12 +152,14 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(start_actions[0]["send_via"], "interaction_bot")
             self.assertEqual(start_actions[0]["send_via_options"], ["interaction_bot", "userbot_reply"])
             self.assertEqual(start_actions[0]["save_message_id_key"], "dice_grid_hunt:1:-100123:round")
-            self.assertIn("九宫格竞猜v1.1.27 开始", start_actions[0]["caption"])
+            self.assertIn("九宫格竞猜v1.1.28 开始", start_actions[0]["caption"])
+            self.assertEqual(start_actions[1]["type"], "update_session")
+            state = dict(start_actions[1]["data"])
 
             answer_actions = await plugin.on_interaction(
                 ctx,
                 "start_dice_grid_hunt",
-                answer_payload(text="2", reply_to_message_id=777),
+                answer_payload(text="2", reply_to_message_id=777, session_data=state),
             )
 
             self.assertEqual(answer_actions[0]["type"], "edit_caption")
@@ -166,6 +183,36 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_wrong_answer_updates_session_state(self) -> None:
+        async def scenario() -> None:
+            plugin = plugin_module.DiceGridHuntPlugin()
+            ctx = PluginContext(account_id=1, feature_key="dice_grid_hunt")
+            plugin_module._render_grid_png = lambda _rd: b"png-bytes"
+            plugin._new_round = lambda prize, timeout=None: plugin_module.RoundState(
+                rolls=[[1, 1, 1, 1, 1, 1]] * 9,
+                sums=[6] * 9,
+                answer_index=2,
+                target_sum=22,
+                prize=prize,
+                started_at=time.monotonic() - 3.0,
+                timeout=timeout or 90,
+                last_guess_at={},
+            )
+
+            start_actions = await plugin.on_interaction(ctx, "start_dice_grid_hunt", start_payload(prize=1000))
+            state = dict(start_actions[1]["data"])
+            wrong_actions = await plugin.on_interaction(
+                ctx,
+                "start_dice_grid_hunt",
+                answer_payload(text="1", user_id=222, session_data=state),
+            )
+
+            self.assertEqual(wrong_actions[0]["type"], "update_session")
+            self.assertEqual(wrong_actions[0]["data"]["answer_index"], 2)
+            self.assertIn("222", wrong_actions[0]["data"]["last_guess_at"])
+
+        asyncio.run(scenario())
+
     def test_correct_answer_accepts_current_telepilot_payload_shape(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.DiceGridHuntPlugin()
@@ -182,11 +229,12 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
                 last_guess_at={},
             )
 
-            await plugin.on_interaction(ctx, "start_dice_grid_hunt", start_payload(prize=2333))
+            start_actions = await plugin.on_interaction(ctx, "start_dice_grid_hunt", start_payload(prize=2333))
+            state = dict(start_actions[1]["data"])
             answer_actions = await plugin.on_interaction(
                 ctx,
                 "start_dice_grid_hunt",
-                telepilot_message_payload(text="9", user_id=1682400007, name="uhaveanswer"),
+                telepilot_message_payload(text="9", user_id=1682400007, name="uhaveanswer", session_data=state),
             )
 
             self.assertEqual(answer_actions[0]["type"], "edit_caption")
@@ -215,11 +263,12 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
                 last_guess_at={},
             )
 
-            await plugin.on_interaction(ctx, "start_dice_grid_hunt", start_payload(prize=1000))
+            start_actions = await plugin.on_interaction(ctx, "start_dice_grid_hunt", start_payload(prize=1000))
+            state = dict(start_actions[1]["data"])
             answer_actions = await plugin.on_interaction(
                 ctx,
                 "start_dice_grid_hunt",
-                answer_payload(text="2"),
+                answer_payload(text="2", session_data=state),
             )
 
             self.assertEqual(answer_actions[0]["type"], "edit_caption")
@@ -248,7 +297,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
         text = plugin._render_round_text(rd, include_guide=True)
 
-        self.assertIn("<b>九宫格竞猜v1.1.27 开始</b>", text)
+        self.assertIn("<b>九宫格竞猜v1.1.28 开始</b>", text)
         self.assertIn("竞猜目标：找出点数和为 21", text)
 
 
