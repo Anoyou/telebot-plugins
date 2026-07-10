@@ -22,6 +22,11 @@ from typing import Any
 
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
+
+try:  # pragma: no cover - older TelePilot compatibility
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover
+    event_from_interaction_payload = None  # type: ignore[assignment]
 from .manifest import (
     LEGACY_IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT,
     LEGACY_INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT,
@@ -31,7 +36,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.26"
+PLUGIN_VERSION = "1.1.27"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -746,19 +751,38 @@ class DiceGridHuntPlugin(Plugin):
             f"用时：{elapsed:.1f}s"
         )
 
+    def _tp_event(self, payload: dict[str, Any]) -> Any:
+        """标准事件信封读取主路径；旧环境或解析失败时返回 None，回退旧平铺 helper。"""
+        if event_from_interaction_payload is None:
+            return None
+        try:
+            return event_from_interaction_payload(payload)
+        except Exception:
+            return None
+
     def _interaction_event_type(self, payload: dict[str, Any]) -> str:
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-        return str(
+        legacy = str(
             source.get("type")
             or trigger.get("type")
             or event.get("type")
             or payload.get("event_type")
             or ""
         ).strip()
+        if legacy:
+            return legacy
+        tp_event = self._tp_event(payload)
+        return str(getattr(tp_event, "type", "") or "").strip() if tp_event is not None else ""
 
     def _interaction_message_text(self, payload: dict[str, Any]) -> str:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            message = getattr(tp_event, "message", None)
+            std_text = str(getattr(message, "text", "") or "").strip() if message is not None else ""
+            if std_text:
+                return std_text
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
@@ -774,6 +798,13 @@ class DiceGridHuntPlugin(Plugin):
         ).strip()
 
     def _interaction_actor_user_id(self, payload: dict[str, Any]) -> int:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            for holder_name in ("actor", "sender", "player"):
+                holder = getattr(tp_event, holder_name, None)
+                std_uid = self._positive_int(getattr(holder, "user_id", None), 0, minimum=0) if holder is not None else 0
+                if std_uid:
+                    return std_uid
         sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
         actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
         player = payload.get("player") if isinstance(payload.get("player"), dict) else {}
@@ -835,11 +866,23 @@ class DiceGridHuntPlugin(Plugin):
         return int(match.group(1)) if match else None
 
     def _payload_chat_id(self, payload: dict[str, Any]) -> int:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            message = getattr(tp_event, "message", None)
+            std_chat = self._int_value(getattr(message, "chat_id", None)) if message is not None else None
+            if std_chat:
+                return std_chat
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         return self._int_value(payload.get("chat_id") or source.get("chat_id") or event.get("chat_id")) or 0
 
     def _payload_message_id(self, payload: dict[str, Any]) -> int | None:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            message = getattr(tp_event, "message", None)
+            std_mid = self._positive_int(getattr(message, "message_id", None), 0, minimum=0) if message is not None else 0
+            if std_mid:
+                return std_mid
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         value = payload.get("message_id") or source.get("message_id") or payload.get("source_message_id") or event.get("message_id")

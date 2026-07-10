@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -204,29 +205,39 @@ class DiceBattlePlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_dice_battle":
             return None
-        event_type = _interaction_event_type(payload)
-        chat_id = _interaction_chat_id(payload)
+        # 主路径：标准事件信封；旧平铺 payload 仅作 fallback。
+        event = event_from_interaction_payload(payload)
+        event_type = event.type or _interaction_event_type(payload)
+        chat_id = event.message.chat_id or _interaction_chat_id(payload)
         if not chat_id:
             return [{"type": "send_message", "text": "❌ 骰子对战需要在群聊里使用。"}]
         if event_type in {"payment_confirmed", "keyword"}:
-            return await self._interaction_start(ctx, payload, chat_id)
+            return await self._interaction_start(ctx, payload, chat_id, event)
         if event_type == "message":
-            return await self._interaction_accept(payload, chat_id)
+            return await self._interaction_accept(payload, chat_id, event)
         if event_type == "session_close":
             async with self._get_lock(chat_id):
                 self._battles.pop(chat_id, None)
             return [{"type": "end_session"}]
         return []
 
-    async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
-        challenger_id, challenger_name = _interaction_actor(payload)
-        bet = _positive_int(payload.get("prize") or payload.get("bet") or _interaction_amount(payload), 0, minimum=0)
+    async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int, event: Any = None) -> list[dict[str, Any]]:
+        # 主路径：标准事件的 actor/payment；取不到时回退旧平铺 helper。
+        challenger_id, challenger_name = 0, "玩家"
+        if event is not None and event.actor and event.actor.user_id:
+            challenger_id = int(event.actor.user_id)
+            challenger_name = str(event.actor.display_name or "玩家").strip() or "玩家"
+        if not challenger_id:
+            challenger_id, challenger_name = _interaction_actor(payload)
+        payment_amount = event.payment.amount if event is not None and event.payment else None
+        bet = _positive_int(payload.get("prize") or payload.get("bet") or payment_amount or _interaction_amount(payload), 0, minimum=0)
         dice_count = _positive_int(payload.get("dice_count"), 2, minimum=1)
         dice_count = min(dice_count, 6)
         timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
+        message_id = (event.message.message_id if event is not None else None) or _interaction_message_id(payload)
         async with self._get_lock(chat_id):
             if chat_id in self._battles and self._battles[chat_id].phase == "waiting":
-                return [{"type": "send_message", "text": "🎲 当前聊天已有等待中的骰子对战。", "reply_to_message_id": _interaction_message_id(payload)}]
+                return [{"type": "send_message", "text": "🎲 当前聊天已有等待中的骰子对战。", "reply_to_message_id": message_id}]
             battle = DiceBattle(
                 challenger_id=challenger_id,
                 challenger_name=challenger_name,
@@ -248,21 +259,32 @@ class DiceBattlePlugin(Plugin):
                     f"每人 {dice_count} 颗骰子，邀请有效期 {timeout} 秒。"
                 ),
                 "parse_mode": "html",
-                "reply_to_message_id": _interaction_message_id(payload),
+                "reply_to_message_id": message_id,
             }
         ]
 
-    async def _interaction_accept(self, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
-        text = _interaction_message_text(payload).lower()
+    async def _interaction_accept(self, payload: dict[str, Any], chat_id: int, event: Any = None) -> list[dict[str, Any]]:
+        # 主路径：标准事件的 message.text / actor；取不到时回退旧平铺 helper。
+        text = ""
+        if event is not None and event.message.text:
+            text = str(event.message.text).strip().lower()
+        if not text:
+            text = _interaction_message_text(payload).lower()
         if text not in {"accept", "接受", "应战"}:
             return []
-        actor_id, actor_name = _interaction_actor(payload)
+        message_id = (event.message.message_id if event is not None else None) or _interaction_message_id(payload)
+        actor_id, actor_name = 0, "玩家"
+        if event is not None and event.actor and event.actor.user_id:
+            actor_id = int(event.actor.user_id)
+            actor_name = str(event.actor.display_name or "玩家").strip() or "玩家"
+        if not actor_id:
+            actor_id, actor_name = _interaction_actor(payload)
         async with self._get_lock(chat_id):
             battle = self._battles.get(chat_id)
             if not battle or battle.phase != "waiting":
                 return [{"type": "no_session"}]
             if actor_id == battle.challenger_id:
-                return [{"type": "send_message", "text": "不能跟自己对战啦。", "reply_to_message_id": _interaction_message_id(payload)}]
+                return [{"type": "send_message", "text": "不能跟自己对战啦。", "reply_to_message_id": message_id}]
             battle.opponent_id = actor_id
             battle.opponent_name = actor_name
             battle.challenger_roll = _roll_dice(battle.dice_count)
@@ -295,7 +317,7 @@ class DiceBattlePlugin(Plugin):
                     f"{result}{bet_text}"
                 ),
                 "parse_mode": "html",
-                "reply_to_message_id": _interaction_message_id(payload),
+                "reply_to_message_id": message_id,
             }
         ]
         if battle.bet > 0 and winner_id:
@@ -307,7 +329,7 @@ class DiceBattlePlugin(Plugin):
                         "amount": battle.bet,
                         "text": f"+{battle.bet}",
                         "parse_mode": "plain",
-                        "reply_to_message_id": _interaction_message_id(payload),
+                        "reply_to_message_id": message_id,
                     },
                     {
                         "type": "result",

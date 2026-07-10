@@ -17,6 +17,7 @@ def _load_plugin_module():
     worker_module = types.ModuleType("app.worker")
     plugins_module = types.ModuleType("app.worker.plugins")
     base_module = types.ModuleType("app.worker.plugins.base")
+    plugin_events_module = types.ModuleType("app.worker.plugins.events")
     telethon_module = types.ModuleType("telethon")
     events_module = types.ModuleType("telethon.events")
 
@@ -42,16 +43,40 @@ def _load_plugin_module():
             return str(name)
         return str(fallback_id) if fallback_id not in (None, "") else default
 
+    def event_from_interaction_payload(payload):
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        return types.SimpleNamespace(
+            type=source.get("type") or event.get("type") or payload.get("event_type") or "",
+            message=types.SimpleNamespace(
+                chat_id=message.get("chat_id") or source.get("chat_id") or event.get("chat_id") or payload.get("chat_id"),
+                message_id=message.get("message_id") or source.get("message_id") or event.get("message_id") or payload.get("message_id"),
+                text=message.get("text") or source.get("text") or event.get("text") or payload.get("text") or "",
+            ),
+            sender=types.SimpleNamespace(
+                user_id=actor.get("user_id") or payload.get("sender_user_id"),
+                display_name=actor.get("display_name") or payload.get("sender_name") or "玩家",
+            ),
+            callback=types.SimpleNamespace(
+                id=source.get("callback_query_id") or event.get("callback_query_id") or payload.get("callback_query_id"),
+                data=source.get("callback_data") or event.get("callback_data") or payload.get("callback_data") or "",
+            ),
+        )
+
     base_module.Plugin = Plugin
     base_module.PluginContext = PluginContext
     base_module.register = register
     base_module.public_entity_display_name = public_entity_display_name
+    plugin_events_module.event_from_interaction_payload = event_from_interaction_payload
     telethon_module.events = events_module
 
     sys.modules.setdefault("app", app_module)
     sys.modules.setdefault("app.worker", worker_module)
     sys.modules.setdefault("app.worker.plugins", plugins_module)
     sys.modules["app.worker.plugins.base"] = base_module
+    sys.modules["app.worker.plugins.events"] = plugin_events_module
     sys.modules.setdefault("telethon", telethon_module)
     sys.modules.setdefault("telethon.events", events_module)
 

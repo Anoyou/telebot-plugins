@@ -48,6 +48,22 @@ except ImportError:  # pragma: no cover - older TelePilot compatibility
         return str(fallback_id) if fallback_id not in (None, "") else default
 
 
+try:  # 最新开发指南：优先读标准事件信封
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover - older TelePilot compatibility
+    event_from_interaction_payload = None  # type: ignore[assignment]
+
+
+def _tp_event(payload: dict[str, Any]) -> Any:
+    """标准事件信封主路径；取不到时（旧 runtime/测试桩）返回 None 回退旧平铺 helper。"""
+    if event_from_interaction_payload is None or not isinstance(payload, dict):
+        return None
+    try:
+        return event_from_interaction_payload(payload)
+    except Exception:  # pragma: no cover - 信封解析异常时安全回退旧路径
+        return None
+
+
 def _receiver_label_from_entity(entity: Any, *, fallback: str = "") -> str:
     username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
     if username:
@@ -2403,8 +2419,23 @@ class TenHalfPlugin(Plugin):
         if entry_key != "start_ten_half":
             return None
 
+        # 主路径：标准事件信封（event_from_interaction_payload）。
+        # 旧平铺 helper（_ie_type/_ie_chat）保留为 fallback：新 runtime 缺字段、
+        # 旧 runtime 或测试桩没有 events 模块时继续可用，行为保持不变。
+        event = _tp_event(payload)
         etype = _ie_type(payload)
+        if event is not None:
+            std_type = str(getattr(event, "type", "") or "").strip()
+            # 仅当标准信封给出更具体的类型时才采用；泛化默认 "message" 交给旧 helper，
+            # 避免 keyword/payment_confirmed 等本插件特有分派被信封默认值覆盖。
+            if std_type and std_type != "message" and std_type != etype:
+                etype = std_type
+
         cid = _ie_chat(payload)
+        if event is not None:
+            std_cid = getattr(getattr(event, "message", None), "chat_id", None)
+            if std_cid and not cid:
+                cid = int(std_cid)
         if not cid:
             return [_send_action("❌ 十点半需要在群聊里使用。")]
 

@@ -1,4 +1,9 @@
 # 更新日志
+## 1.1.27 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 读取改用标准事件信封 `event_from_interaction_payload(payload)` 作为主路径（事件类型、聊天、消息文本/ID、发起人 ID），旧平铺 payload helper 全部保留为 fallback，标准字段取不到时自动回退。
+- 事件类型路由仍保持旧平铺优先、信封兜底，keyword/付款开局与答题分发语义不变；九宫格题图、答对 `edit_caption`、`payout` 发奖与每回合全量状态重发流程完全保留，玩法与文案零改动。
+- 同步 `plugin.json` 与 `manifest.py` 版本号。
+
 ## 1.1.26 (2026-07-06)
 - 修复交互 Bot 会话答题时未读取 TelePilot 当前标准 payload 的 `message.text`，导致答对后返回空动作、无法触发 `edit_caption` 的问题。
 - 答对后的 caption 编辑统一依赖开局题图保存键定位原图片，避免玩家回复其他消息时误把 `reply_to_message_id` 当作图片消息 ID。
@@ -45,7 +50,7 @@
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
 
 ## 1.1.16 (2026-06-28)
-- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 `bbot_notice`。
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
 - 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
 
 

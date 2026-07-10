@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.4.3 (2026-07-10)
+- 按最新插件开发指南对齐：`_handle_interaction` 主路径改用标准事件信封 `event_from_interaction_payload(payload)` 读取事件类型、聊天 ID、消息文本与按钮回调，旧平铺 payload helper 保留为兜底。
+- 同步 `plugin.json` 与 `manifest.py` 版本号并递增至 1.4.3。
+- 保持原有快问快答积分淘汰玩法、题库管理、报名/抢答规则、结算发奖与文案不变。
+
 ## 1.4.2 (2026-07-04)
 - 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
 - 自动发奖改为 `payout` action，并保留后台清理所需的显式跨通道删除。

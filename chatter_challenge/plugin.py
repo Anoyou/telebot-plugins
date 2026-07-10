@@ -10,6 +10,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 try:
@@ -147,6 +148,7 @@ class ChatterChallengePlugin(Plugin):
         sender_name = public_entity_display_name(sender, default="玩家")
 
         arg_str = " ".join(args).strip()
+        prefix = current_command_prefix(fallback=",")
 
         # 结束挑战
         if arg_str in ("结束", "end", "stop", "结算"):
@@ -179,8 +181,8 @@ class ChatterChallengePlugin(Plugin):
             desc = self._describe_rule(rule)
             await event.reply(
                 f"✅ 已添加规则：{desc}\n\n"
-                f"当前共 {len(ch.rules)} 条规则。输入 ,{self._command} 规则 查看全部\n"
-                f"输入 ,{self._command} 结束 结束挑战并结算",
+                f"当前共 {len(ch.rules)} 条规则。输入 {prefix}{self._command} 规则 查看全部\n"
+                f"输入 {prefix}{self._command} 结束 结束挑战并结算",
                 parse_mode="html",
             )
             return
@@ -189,14 +191,14 @@ class ChatterChallengePlugin(Plugin):
         await event.reply(
             f"<b>🗣 话痨挑战</b>\n\n"
             f"<b>添加规则：</b>\n"
-            f"  ,{self._command} 5字 — 每条消息最多5字\n"
-            f"  ,{self._command} 至少3字 — 每条消息至少3字\n"
-            f"  ,{self._command} 不许说的 — 禁止说「的」\n"
-            f"  ,{self._command} 禁止表情 — 不许发表情\n\n"
+            f"  {prefix}{self._command} 5字 — 每条消息最多5字\n"
+            f"  {prefix}{self._command} 至少3字 — 每条消息至少3字\n"
+            f"  {prefix}{self._command} 不许说的 — 禁止说「的」\n"
+            f"  {prefix}{self._command} 禁止表情 — 不许发表情\n\n"
             f"<b>其他命令：</b>\n"
-            f"  ,{self._command} 规则 — 查看当前规则\n"
-            f"  ,{self._command} 排行 — 查看分数排行\n"
-            f"  ,{self._command} 结束 — 结束并结算",
+            f"  {prefix}{self._command} 规则 — 查看当前规则\n"
+            f"  {prefix}{self._command} 排行 — 查看分数排行\n"
+            f"  {prefix}{self._command} 结束 — 结束并结算",
             parse_mode="html",
         )
 
@@ -267,15 +269,16 @@ class ChatterChallengePlugin(Plugin):
 
     # ── 查看状态 ─────────────────────────────────────
     async def _show_status(self, chat_id: int, event: Any) -> None:
+        prefix = current_command_prefix(fallback=",")
         ch = self._challenges.get(chat_id)
         if not ch or not ch.active:
-            await event.reply("没有进行中的话痨挑战。输入 ,chat 开始~", parse_mode="html")
+            await event.reply(f"没有进行中的话痨挑战。输入 {prefix}{self._command} 开始~", parse_mode="html")
             return
 
         rules_text = "\n".join(f"  • {self._describe_rule(r)}" for r in ch.rules)
         await event.reply(
             f"<b>🗣 当前挑战规则：</b>\n{rules_text}\n\n"
-            f"输入 ,{self._command} 结束 结束并结算",
+            f"输入 {prefix}{self._command} 结束 结束并结算",
             parse_mode="html",
         )
 

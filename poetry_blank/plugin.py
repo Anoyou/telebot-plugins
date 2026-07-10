@@ -13,6 +13,7 @@ from typing import Any
 
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -410,14 +411,16 @@ class PoetryBlankPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_poetry_blank":
             return None
-        event_type = _interaction_event_type(payload)
-        chat_id = _interaction_chat_id(payload)
+        # 主路径：标准事件信封；旧平铺 payload 仅作 fallback。
+        event = event_from_interaction_payload(payload)
+        event_type = event.type or _interaction_event_type(payload)
+        chat_id = event.message.chat_id or _interaction_chat_id(payload)
         if not chat_id:
             return [{"type": "send_message", "text": "❌ 诗词填空需要在群聊里使用。"}]
         if event_type in {"payment_confirmed", "keyword"}:
-            return await self._interaction_start(ctx, payload, chat_id)
+            return await self._interaction_start(ctx, payload, chat_id, event)
         if event_type == "message":
-            return await self._interaction_answer(payload, chat_id)
+            return await self._interaction_answer(payload, chat_id, event=event)
         if event_type == "session_close":
             async with self._get_lock(chat_id):
                 self._rounds.pop(chat_id, None)
@@ -429,18 +432,22 @@ class PoetryBlankPlugin(Plugin):
         ctx: PluginContext,
         payload: dict[str, Any],
         chat_id: int,
+        event: Any = None,
     ) -> list[dict[str, Any]]:
-        prize = _positive_int(payload.get("prize") or _interaction_amount(payload), 0, minimum=1)
+        # 主路径：标准事件的 message_id / payment 金额；取不到时回退旧平铺 helper。
+        message_id = (event.message.message_id if event is not None else None) or _interaction_message_id(payload)
+        payment_amount = event.payment.amount if event is not None and event.payment else None
+        prize = _positive_int(payload.get("prize") or payment_amount or _interaction_amount(payload), 0, minimum=1)
         if prize <= 0:
             return [
-                {"type": "send_message", "text": f"请指定奖励金额。例：{{prefix}}{self._command} 100", "reply_to_message_id": _interaction_message_id(payload)},
+                {"type": "send_message", "text": f"请指定奖励金额。例：{{prefix}}{self._command} 100", "reply_to_message_id": message_id},
                 {"type": "end_session"},
             ]
         timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
         async with self._get_lock(chat_id):
             rd = self._rounds.get(chat_id)
             if rd and not rd.finished:
-                return [{"type": "send_message", "text": "📝 当前聊天已有进行中的诗词填空。", "reply_to_message_id": _interaction_message_id(payload)}]
+                return [{"type": "send_message", "text": "📝 当前聊天已有进行中的诗词填空。", "reply_to_message_id": message_id}]
             line, author, title, blanked, answer = self._pick_poem(chat_id)
             rd = RoundState(
                 full_line=line,
@@ -466,14 +473,22 @@ class PoetryBlankPlugin(Plugin):
                     f"限时 {timeout} 秒，直接发答案抢答。"
                 ),
                 "parse_mode": "html",
-                "reply_to_message_id": _interaction_message_id(payload),
+                "reply_to_message_id": message_id,
             }
         ]
 
-    async def _interaction_answer(self, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
-        text = _interaction_message_text(payload)
+    async def _interaction_answer(
+        self,
+        payload: dict[str, Any],
+        chat_id: int,
+        event: Any = None,
+    ) -> list[dict[str, Any]]:
+        # 主路径：标准事件文本；取不到时回退旧平铺 helper。
+        text = ((event.message.text or "").strip() if event is not None else "") or _interaction_message_text(payload)
         if not text:
             return []
+        # 回复锚点消息 id：优先标准事件，再回退旧平铺。
+        reply_message_id = (event.message.message_id if event is not None else None) or _interaction_message_id(payload)
         async with self._get_lock(chat_id):
             rd = self._rounds.get(chat_id)
             if not rd or rd.finished:
@@ -481,7 +496,15 @@ class PoetryBlankPlugin(Plugin):
             if not self._check_answer(text, rd):
                 return []
             rd.finished = True
+            # 主路径：标准事件 actor；取不到时回退旧平铺 helper。
             actor_id, actor_name = _interaction_actor(payload)
+            if event is not None and event.actor is not None:
+                event_actor_id = event.actor.user_id
+                if event_actor_id:
+                    actor_id = int(event_actor_id)
+                event_actor_name = (event.actor.display_name or "").strip()
+                if event_actor_name:
+                    actor_name = event_actor_name
             self._rounds.pop(chat_id, None)
         return [
             {
@@ -490,7 +513,7 @@ class PoetryBlankPlugin(Plugin):
                 "amount": rd.prize,
                 "text": f"+{rd.prize}",
                 "parse_mode": "plain",
-                "reply_to_message_id": _interaction_message_id(payload),
+                "reply_to_message_id": reply_message_id,
             },
             {
                 "type": "send_message",

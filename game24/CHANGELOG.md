@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.9 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封（`event_from_interaction_payload`）读取事件类型、聊天/消息 ID、答题文本和赢家 actor，旧平铺 payload helper 保留为兜底。
+- 元数据同步：补充 `min_telepilot_version="0.33.0"`（plugin.json 与 manifest 一致），递增 patch 版本到 1.1.9。
+- 保持原有 24 点游戏规则、命令行为、文案语义与超时逻辑不变。
+
 ## 1.1.8 (2026-07-06)
 - 答对后编辑原题面时不再重复追加奖金行，保留开局题面里的奖金展示；发奖仍保持 `payout` action 链路。
 

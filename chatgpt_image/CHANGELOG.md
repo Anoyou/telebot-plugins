@@ -1,5 +1,9 @@
 # 更新日志
 
+## 0.1.3 (2026-07-10)
+- 按最新插件开发指南对齐元数据：`plugin.json` 与 `manifest.py` 补充 `min_telepilot_version="0.33.0"` 并同步版本号。
+- 未改动命令、Token 池、图片生成/编辑逻辑与文案。
+
 ## 0.1.2 (2026-06-30)
 - 按最新远程插件规范移除对 `app.db.*` 与 `app.services.*` 内部模块的直接 import。
 - Token 池命令改为只更新本次运行时配置，并在命令返回中提示需要到插件配置页同步保存，避免插件跨层持久化 `account_feature.config`。

@@ -13,6 +13,7 @@ from typing import Any
 from telethon import events
 
 from app.worker.plugins.base import Plugin, PluginContext, public_entity_display_name, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 # ─────────────────────────────────────────────────────
 # 常量
@@ -345,8 +346,12 @@ class DeadRevolverPlugin(Plugin):
     # ── 交互 Bot 入口 ──────────────────────────
     async def on_interaction(self, ctx: PluginContext, entry_key: str, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
         if entry_key != "join_paid_game": return None
-        event_type = _extract_event_type(payload)
-        chat_id = _extract_chat_id(payload)
+        # 主路径：标准事件信封。旧平铺 payload helper 作为字段兜底保留。
+        event = event_from_interaction_payload(payload)
+        event_type = event.type or _extract_event_type(payload)
+        chat_id = event.message.chat_id
+        if chat_id is None:
+            chat_id = _extract_chat_id(payload)
         if chat_id is None: return []
         if event_type == "keyword":
             return await self._ibot_keyword(ctx, payload, chat_id)

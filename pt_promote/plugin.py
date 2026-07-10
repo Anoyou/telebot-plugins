@@ -38,6 +38,7 @@ from typing import Any
 from urllib.parse import urljoin
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 # 促销类型映射
 PROMO_TYPES = {
@@ -529,7 +530,14 @@ def _int_value(value: Any) -> int | None:
 
 def _interaction_args_from_payload(payload: dict[str, Any]) -> list[str]:
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-    raw_text = str(
+    # 新主路径：标准信封 message.text；旧平铺字段作 fallback。
+    tp_text = ""
+    try:
+        tpe = event_from_interaction_payload(payload)
+        tp_text = str(getattr(getattr(tpe, "message", None), "text", "") or "").strip()
+    except Exception:
+        tp_text = ""
+    raw_text = tp_text or str(
         payload.get("message_text")
         or payload.get("text")
         or event.get("text")
@@ -557,6 +565,14 @@ def _interaction_args_from_payload(payload: dict[str, Any]) -> list[str]:
 
 
 def _payload_message_id(payload: dict[str, Any]) -> int | None:
+    # 新主路径：标准信封 message.message_id；旧平铺字段作 fallback。
+    try:
+        tpe = event_from_interaction_payload(payload)
+        mid = getattr(getattr(tpe, "message", None), "message_id", None)
+        if mid:
+            return _int_value(mid)
+    except Exception:
+        pass
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     return _int_value(payload.get("message_id") or event.get("message_id"))
 
@@ -621,7 +637,15 @@ class PTPromotePlugin(Plugin):
         if entry_key != "promote_torrent":
             return None
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        # 旧平铺路径优先判定；缺失时用信封 source.type（行为保留）。
         event_type = str(payload.get("event_type") or event.get("type") or "")
+        if not event_type:
+            source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+            if source.get("type"):
+                try:
+                    event_type = str(getattr(event_from_interaction_payload(payload), "type", "") or "")
+                except Exception:
+                    event_type = ""
         if event_type not in {"keyword", "message"}:
             return []
 

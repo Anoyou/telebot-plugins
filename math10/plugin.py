@@ -15,7 +15,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 MATH10_GAME_PREFIX = "account_bot:math10:"
 MATH10_CLAIM_PREFIX = "account_bot:math10_claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.0.8"
+PLUGIN_VERSION = "1.0.9"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30
@@ -255,6 +255,7 @@ class Math10Plugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key not in {"start_math_game", "start_math10"}:
             return None
+        # 主路径：标准事件信封（event_from_interaction_payload）；旧平铺 payload 仅作兜底。
         framework_event = event_from_interaction_payload(payload)
         event = _event_dict(payload)
         event_type = framework_event.type or _interaction_event_type(payload, event)
@@ -262,9 +263,9 @@ class Math10Plugin(Plugin):
         if chat_id is None:
             return []
         if event_type in {"payment_confirmed", "keyword"}:
-            return await self._handle_start(ctx, payload, event, chat_id)
+            return await self._handle_start(ctx, payload, event, chat_id, framework_event)
         if event_type == "message":
-            return await self._handle_answer(ctx, payload, event, chat_id)
+            return await self._handle_answer(ctx, payload, event, chat_id, framework_event)
         if event_type == "session_close":
             return await self._handle_close(ctx, chat_id)
         return []
@@ -275,6 +276,7 @@ class Math10Plugin(Plugin):
         payload: dict[str, Any],
         event: dict[str, Any],
         chat_id: int,
+        framework_event: Any = None,
     ) -> list[dict[str, Any]]:
         active = await self._load_state(ctx, ctx.account_id, chat_id)
         if active is not None and active.active:
@@ -293,7 +295,10 @@ class Math10Plugin(Plugin):
             created_at=time.time(),
             ttl_seconds=ttl,
             source_update_id=_interaction_update_id(payload, event),
-            source_message_id=_interaction_message_id(payload, event),
+            source_message_id=(
+                (framework_event.message.message_id if framework_event is not None else None)
+                or _interaction_message_id(payload, event)
+            ),
         )
         await self._save_state(ctx, state)
         await _log(
@@ -319,12 +324,17 @@ class Math10Plugin(Plugin):
         payload: dict[str, Any],
         event: dict[str, Any],
         chat_id: int,
+        framework_event: Any = None,
     ) -> list[dict[str, Any]]:
         state = await self._load_state(ctx, ctx.account_id, chat_id)
         if state is None or not state.active:
             return []
 
-        raw_answer = _interaction_message_text(payload, event)
+        # 主路径读标准事件信封文本；取不到再回退旧平铺 payload。
+        raw_answer = (
+            (framework_event.message.text if framework_event is not None else "")
+            or _interaction_message_text(payload, event)
+        ).strip()
         try:
             answer = int(raw_answer)
         except ValueError:
@@ -334,12 +344,22 @@ class Math10Plugin(Plugin):
         if not await self._claim_winner(ctx, state, payload, event):
             return []
 
-        winner = _interaction_actor_name(payload, event)
+        # 主路径读标准事件信封的 actor/message；取不到再回退旧平铺 payload。
+        winner = (
+            (framework_event.actor.display_name if framework_event is not None else None)
+            or _interaction_actor_name(payload, event)
+        )
         actor = _payload_dict(payload, "actor")
-        winner_user_id = _int_payload(actor.get("user_id"))
+        winner_user_id = (
+            (framework_event.actor.user_id if framework_event is not None else None)
+            or _int_payload(actor.get("user_id"))
+        )
         payout_account, payout_mode = _interaction_payout_info(payload)
         winner_display = _short_actor_name(winner)
-        reply_to_message_id = _interaction_message_id(payload, event)
+        reply_to_message_id = (
+            (framework_event.message.message_id if framework_event is not None else None)
+            or _interaction_message_id(payload, event)
+        )
         await _log(
             ctx,
             "info",

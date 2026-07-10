@@ -12,7 +12,8 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="game24",
     display_name="24点游戏",
-    version="1.1.8",
+    version="1.1.9",
+    min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="随机生成 24 点题目，群内竞速答题，第一名获得奖金",
     usage='24 点游戏支持两种调度：管理员可发送命令直接由 userbot 启动；群友也可通过交互中心配置的关键词或付款触发。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行；结算元数据返回 settlement 供 Trace 排查。',

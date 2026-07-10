@@ -49,9 +49,26 @@ def _install_framework_stubs() -> type:
     def event_from_interaction_payload(payload):
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
         event_type = str(event.get("type") or payload.get("event_type") or source.get("type") or "")
-        chat_id = payload.get("chat_id") or source.get("chat_id") or event.get("chat_id")
-        return types.SimpleNamespace(type=event_type, message=types.SimpleNamespace(chat_id=chat_id))
+        chat_id = message.get("chat_id") or payload.get("chat_id") or source.get("chat_id") or event.get("chat_id")
+        message_id = message.get("message_id") or payload.get("message_id") or source.get("message_id") or event.get("message_id")
+        text = message.get("text") or payload.get("message_text") or payload.get("text") or source.get("text") or event.get("text") or ""
+        actor_ns = types.SimpleNamespace(
+            user_id=actor.get("user_id") or payload.get("sender_user_id"),
+            display_name=actor.get("display_name") or payload.get("sender_name") or "玩家",
+        )
+        return types.SimpleNamespace(
+            type=event_type,
+            message=types.SimpleNamespace(chat_id=chat_id, message_id=message_id, text=text),
+            sender=actor_ns,
+            actor=actor_ns,
+            callback=types.SimpleNamespace(
+                id=source.get("callback_query_id") or event.get("callback_query_id") or payload.get("callback_query_id"),
+                data=source.get("callback_data") or event.get("callback_data") or payload.get("callback_data") or "",
+            ),
+        )
 
     command_module.current_command_prefix = current_command_prefix
     base_module.Plugin = Plugin
@@ -153,8 +170,8 @@ class InteractionPayoutContractTests(unittest.TestCase):
             with patch.object(game24_module, "generate_24_puzzle", return_value=[1, 2, 3, 4]):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
-            self.assertIn("v1.0.8", math_actions[0]["text"])
-            self.assertIn("v1.1.8", game_actions[0]["text"])
+            self.assertIn("v1.0.9", math_actions[0]["text"])
+            self.assertIn("v1.1.9", game_actions[0]["text"])
 
         asyncio.run(scenario())
 

@@ -797,10 +797,10 @@ async def _call_codex_image(
                         buffer += raw_chunk
 
                         while "\n\n" in buffer:
-                            raw_event, buffer = buffer.split("\n\n", 1)
+                            sse_event, buffer = buffer.split("\n\n", 1)
                             data_lines = [
                                 line[6:].strip()
-                                for line in raw_event.splitlines()
+                                for line in sse_event.splitlines()
                                 if line.startswith("data: ") and line[6:].strip()
                             ]
 

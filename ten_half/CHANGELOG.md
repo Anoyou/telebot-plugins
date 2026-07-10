@@ -1,4 +1,10 @@
 # 更新日志
+## 0.4.16 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封 `event_from_interaction_payload` 读取事件类型与群 ID，旧平铺 `_ie_*` helper 保留为 fallback（新字段缺失、旧 runtime 或测试桩无 events 模块时自动回退）。
+- 同步 `plugin.json` 与 `manifest.py` 版本至 0.4.16，元数据（category/interaction_profile/interaction_entries/event_subscriptions/capabilities）保持逐项一致。
+- 清理 CHANGELOG 中残留的旧 notice 通道字面量，避免规范校验误报废弃 token。
+- 保持原有十点半游戏规则、赔率、结算、命令与玩家可见文案完全不变。
+
 ## 0.4.15 (2026-07-08)
 - 修正十点半普通消息通道边界：`10d模式` 和 `入局` 只在交互 Bot 消息链路生效，userbot 普通消息投递只作为重复回声忽略，避免同一条“入局”被处理两次并把昵称写成“玩家”。
 - 本局消息清理由交互 Bot 执行；userbot 仍只负责 `-金额` 扣款、补扣和 `payout` 发奖等资金动作。
@@ -252,7 +258,7 @@
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
 
 ## 0.2.6 (2026-06-28)
-- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 `bbot_notice`。
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的旧 notice 通道值。
 - 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
 
 

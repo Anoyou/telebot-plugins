@@ -1,4 +1,10 @@
 # 更新日志
+## 1.0.26 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 交互字段读取改用标准事件信封 `event_from_interaction_payload` 为主路径（事件类型、chat_id、message_id、文本、金额、玩家/付款人、callback_data 均优先取标准字段），旧平铺 payload helper 保留为 fallback。
+- 同步 `plugin.json` 与 `manifest.py` patch 版本（1.0.25 → 1.0.26），元数据保持一致。
+- 保持原有 21 点游戏规则、下注/赔率/结算逻辑、按钮与命令玩法及玩家可见文案不变。
+- 未做 Tier 3：本插件为重进程状态机（pdict 约 30 项）+ 资金结算玩法，同进程续局零回归依赖 `self._games`；为避免金额/结算回归，暂保留进程内状态机，不新增 `session.data` 镜像。
+
 ## 1.0.25 (2026-07-04)
 - 适配 TelePilot 0.49 交互契约：奖励发放改用平台 `payout` 动作。
 - 移除交互入口里的旧发奖通道声明，避免已是最新版本但实际仍不发奖。
@@ -13,7 +19,7 @@
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
 
 ## 1.0.23 (2026-06-28)
-- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 `bbot_notice`。
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
 - 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
 
 

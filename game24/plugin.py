@@ -30,7 +30,7 @@ MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "account_bot:game24:"
 INTERACTION_GAME_CLAIM_PREFIX = "account_bot:game24_claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.1.8"
+PLUGIN_VERSION = "1.1.9"
 
 
 # ─────────────────────────────────────────────────────
@@ -570,6 +570,7 @@ class Game24Plugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key not in {"start_paid_game", "start_game24"}:
             return None
+        # 主路径：标准事件信封（event_from_interaction_payload）；旧平铺 payload 仅作兜底。
         framework_event = event_from_interaction_payload(payload)
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         event_type = framework_event.type or _interaction_event_type(payload, event)
@@ -577,9 +578,9 @@ class Game24Plugin(Plugin):
         if chat_id is None:
             return []
         if event_type in {"payment_confirmed", "keyword"}:
-            return await self._handle_interaction_start(ctx, payload, event, chat_id)
+            return await self._handle_interaction_start(ctx, payload, event, chat_id, framework_event)
         if event_type == "message":
-            return await self._handle_interaction_answer(ctx, payload, event, chat_id)
+            return await self._handle_interaction_answer(ctx, payload, event, chat_id, framework_event)
         if event_type == "session_close":
             return await self._handle_interaction_close(ctx, chat_id)
         return []
@@ -590,6 +591,7 @@ class Game24Plugin(Plugin):
         payload: dict[str, Any],
         event: dict[str, Any],
         chat_id: int,
+        framework_event: Any = None,
     ) -> list[dict[str, Any]]:
         active = await self._load_interaction_state(ctx, ctx.account_id, chat_id)
         if active is not None and active.active:
@@ -607,7 +609,10 @@ class Game24Plugin(Plugin):
             game_id=secrets.token_hex(8),
             created_at=time.time(),
             source_update_id=_interaction_update_id(payload, event),
-            source_message_id=_interaction_message_id(payload, event),
+            source_message_id=(
+                (framework_event.message.message_id if framework_event is not None else None)
+                or _interaction_message_id(payload, event)
+            ),
         )
         await self._save_interaction_state(ctx, state)
         await self._log(
@@ -632,12 +637,17 @@ class Game24Plugin(Plugin):
         payload: dict[str, Any],
         event: dict[str, Any],
         chat_id: int,
+        framework_event: Any = None,
     ) -> list[dict[str, Any]]:
         state = await self._load_interaction_state(ctx, ctx.account_id, chat_id)
         if state is None or not state.active:
             return []
 
-        text = _interaction_message_text(payload, event)
+        # 主路径读标准事件信封文本；取不到再回退旧平铺 payload。
+        text = (
+            (framework_event.message.text if framework_event is not None else "")
+            or _interaction_message_text(payload, event)
+        ).strip()
         result = check_answer_detailed(text, state.numbers)
         if not result.ok:
             await self._log(
@@ -655,12 +665,22 @@ class Game24Plugin(Plugin):
         if not await self._claim_interaction_winner(ctx, state, payload, event):
             return []
 
-        winner = _interaction_actor_name(payload, event)
+        # 主路径读标准事件信封的 actor/message；取不到再回退旧平铺 payload。
+        winner = (
+            (framework_event.actor.display_name if framework_event is not None else None)
+            or _interaction_actor_name(payload, event)
+        )
         actor = _payload_dict(payload, "actor")
-        winner_user_id = _int_payload(actor.get("user_id"))
+        winner_user_id = (
+            (framework_event.actor.user_id if framework_event is not None else None)
+            or _int_payload(actor.get("user_id"))
+        )
         payout_account, payout_mode = _interaction_payout_info(payload)
         winner_display = winner
-        reply_to_message_id = _interaction_message_id(payload, event)
+        reply_to_message_id = (
+            (framework_event.message.message_id if framework_event is not None else None)
+            or _interaction_message_id(payload, event)
+        )
         await self._log(
             ctx,
             "info",

@@ -15,6 +15,12 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 try:
+    # 主路径：标准事件信封（最新开发指南要求，替代旧平铺 payload 主路径）。
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover - older TelePilot compatibility
+    event_from_interaction_payload = None  # type: ignore[assignment]
+
+try:
     from app.worker.plugins.base import public_entity_display_name
 except ImportError:  # pragma: no cover - older TelePilot compatibility
     def public_entity_display_name(entity: Any, *, fallback_id: int | str | None = None, default: str = "玩家") -> str:
@@ -122,6 +128,19 @@ class GameState:
     trigger_message_id: int | None = None  # 玩家触发消息ID，用于奖励 reply_to
 
 
+def _tp_event(payload: dict[str, Any]) -> Any:
+    """主路径：把当前交互 payload 解析为标准事件信封（取不到时返回 None，回退旧路径）。"""
+    if event_from_interaction_payload is None:
+        return None
+    cached = payload.get("tp_event")
+    if cached is not None and not isinstance(cached, dict):
+        return cached
+    try:
+        return event_from_interaction_payload(payload)
+    except Exception:
+        return None
+
+
 def _payload_event(payload: dict[str, Any]) -> dict[str, Any]:
     event = payload.get("event")
     return event if isinstance(event, dict) else {}
@@ -151,13 +170,27 @@ def _positive_int(value: Any, default: int, *, minimum: int = 0) -> int:
 
 
 def _interaction_event_type(payload: dict[str, Any]) -> str:
+    # 主路径：标准事件信封的 type（source.type / event_type）。
+    ev = _tp_event(payload)
+    source = _payload_source(payload)
+    has_std_type = bool(source.get("type") or source.get("channel") or payload.get("event_type"))
+    if ev is not None and has_std_type:
+        etype = str(getattr(ev, "type", "") or "").strip()
+        if etype:
+            return etype
+    # 回退：旧平铺 payload。
     event = _payload_event(payload)
     trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
-    source = _payload_source(payload)
     return str(event.get("type") or trigger.get("event") or trigger.get("type") or source.get("event_type") or payload.get("event_type") or "").strip()
 
 
 def _interaction_chat_id(payload: dict[str, Any]) -> int:
+    ev = _tp_event(payload)
+    if ev is not None:
+        std = getattr(getattr(ev, "message", None), "chat_id", None)
+        if std:
+            return _positive_int(std, 0, minimum=-10**20)
+    # 回退：旧平铺 payload。
     event = _payload_event(payload)
     source = _payload_source(payload)
     session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
@@ -165,6 +198,13 @@ def _interaction_chat_id(payload: dict[str, Any]) -> int:
 
 
 def _interaction_message_id(payload: dict[str, Any]) -> int | None:
+    ev = _tp_event(payload)
+    if ev is not None:
+        msg = getattr(ev, "message", None)
+        std = getattr(msg, "message_id", None) or getattr(msg, "reply_to_message_id", None)
+        if std:
+            return _positive_int(std, 0) or None
+    # 回退：旧平铺 payload。
     event = _payload_event(payload)
     source = _payload_source(payload)
     reply_to = _payload_reply_to(payload)
@@ -173,18 +213,39 @@ def _interaction_message_id(payload: dict[str, Any]) -> int | None:
 
 
 def _interaction_message_text(payload: dict[str, Any]) -> str:
+    ev = _tp_event(payload)
+    if ev is not None:
+        std = getattr(getattr(ev, "message", None), "text", "") or ""
+        if str(std).strip():
+            return str(std).strip()
+    # 回退：旧平铺 payload。
     event = _payload_event(payload)
     source = _payload_source(payload)
     return str(payload.get("message_text") or payload.get("text") or event.get("text") or source.get("text") or "").strip()
 
 
 def _interaction_amount(payload: dict[str, Any]) -> int:
+    ev = _tp_event(payload)
+    if ev is not None:
+        payment = getattr(ev, "payment", None)
+        std = getattr(payment, "amount", None) if payment is not None else None
+        if std:
+            return _positive_int(std, 0, minimum=1)
+    # 回退：旧平铺 payload。
     event = _payload_event(payload)
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
     return _positive_int(payload.get("amount") or data.get("amount"), 0, minimum=1)
 
 
 def _interaction_actor(payload: dict[str, Any]) -> tuple[int, str]:
+    ev = _tp_event(payload)
+    if ev is not None:
+        actor_ref = getattr(ev, "actor", None)
+        std_id = getattr(actor_ref, "user_id", None) if actor_ref is not None else None
+        if std_id:
+            std_name = str(getattr(actor_ref, "display_name", "") or getattr(actor_ref, "username", "") or "").strip()
+            return _positive_int(std_id, 0, minimum=0), std_name or "玩家"
+    # 回退：旧平铺 payload。
     actor = _payload_actor(payload)
     event = _payload_event(payload)
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
@@ -194,9 +255,19 @@ def _interaction_actor(payload: dict[str, Any]) -> tuple[int, str]:
 
 
 def _interaction_start_player(payload: dict[str, Any]) -> tuple[int, str]:
-    event = _payload_event(payload)
-    data = event.get("data") if isinstance(event.get("data"), dict) else {}
     if _interaction_event_type(payload) == "payment_confirmed":
+        # 主路径：标准信封 payment.payer。
+        ev = _tp_event(payload)
+        if ev is not None:
+            payment = getattr(ev, "payment", None)
+            payer = getattr(payment, "payer", None) if payment is not None else None
+            payer_id = _positive_int(getattr(payer, "user_id", None), 0, minimum=0) if payer is not None else 0
+            if payer_id:
+                payer_name = str(getattr(payer, "display_name", "") or getattr(payer, "username", "") or "").strip()
+                return payer_id, payer_name or "玩家"
+        # 回退：旧平铺 payload。
+        event = _payload_event(payload)
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
         raw_id = payload.get("payer_user_id") or data.get("payer_user_id")
         raw_name = payload.get("payer_name") or data.get("payer_name") or "玩家"
         payer_id = _positive_int(raw_id, 0, minimum=0)
@@ -408,13 +479,21 @@ class BlackjackPlugin(Plugin):
 
     async def _interaction_callback_action(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         """Handle callback_query events from inline keyboard buttons."""
-        event = _payload_event(payload)
-        callback_data = str(
-            payload.get("callback_data")
-            or event.get("callback_data")
-            or event.get("data")
-            or ""
-        ).strip()
+        # 主路径：标准事件信封的 callback.data。
+        callback_data = ""
+        ev = _tp_event(payload)
+        if ev is not None:
+            cb = getattr(ev, "callback", None)
+            callback_data = str(getattr(cb, "data", "") or "").strip() if cb is not None else ""
+        # 回退：旧平铺 payload。
+        if not callback_data:
+            event = _payload_event(payload)
+            callback_data = str(
+                payload.get("callback_data")
+                or event.get("callback_data")
+                or event.get("data")
+                or ""
+            ).strip()
         if not callback_data:
             return []
 

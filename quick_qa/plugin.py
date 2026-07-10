@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 try:
     from app.worker.command import current_command_prefix
@@ -25,7 +26,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.4.1"
+PLUGIN_VERSION = "1.4.3"
 DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 
 CALLBACK_PREFIX = "qqa"
@@ -994,16 +995,19 @@ class QuickQAPlugin(Plugin):
         }
 
     async def _handle_interaction(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        event_type = _event_type(payload)
-        chat_id = _chat_id(payload)
+        # 主路径：标准事件信封。旧平铺 payload helper 作为字段兜底保留。
+        event = event_from_interaction_payload(payload)
+        event_type = event.type or _event_type(payload)
+        chat_id = event.message.chat_id or _chat_id(payload)
         if not chat_id:
             return []
+        callback_data = (event.callback.data if event.callback else None) or _callback_data(payload)
         if event_type == "payment_confirmed":
             return await self._handle_payment(ctx, payload, chat_id)
-        if event_type == "callback_query" or _callback_data(payload):
+        if event_type == "callback_query" or callback_data:
             return await self._handle_callback(ctx, payload, chat_id)
         if event_type in {"message", "keyword", "command"}:
-            text = _message_text(payload)
+            text = (event.message.text or "").strip() or _message_text(payload)
             if self._looks_like_admin_text(text):
                 return []
             if self._should_join_free_game(ctx, payload, text):

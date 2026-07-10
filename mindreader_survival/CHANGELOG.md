@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.9 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 相关 payload 读取（事件类型、chat_id、user_id、message_id、显示名、用户名、文本、付款金额）主路径改用标准事件信封 `event_from_interaction_payload`，旧平铺 payload 字段保留为 fallback。
+- 元数据同步：`plugin.json` 与 `manifest.py` 版本递增并保持一致。
+- 保持原有读心生存赛游戏规则、结算与文案逻辑不变；进程内 `self._sessions` 状态机保留（未做 Tier 3 迁移）。
+
 ## 1.1.8 (2026-07-04)
 - 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
 - 更新使用说明，按最新文档区分普通会话通道与 userbot/payout 资金链路。
@@ -9,7 +14,7 @@
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
 
 ## 1.1.6 (2026-06-28)
-- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 `bbot_notice`。
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
 - 保留 `interaction_bot` 与 `userbot_reply` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
 
 

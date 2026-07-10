@@ -1,4 +1,11 @@
 # 更新日志
+## 1.0.14 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 改用 `event_from_interaction_payload(payload)` 标准事件信封作为读取主路径（`event.type`、`event.message.text/chat_id/message_id`、`event.actor`、`event.payment.amount`），旧平铺 payload helper 保留为 fallback。
+- 修复上一轮部分改动遗留：`_interaction_answer` 现接收 `event` 参数并以标准事件为主路径，回复锚点消息 id 统一走 `event` 优先、旧 helper 兜底。
+- 同步 `plugin.json` 与 `manifest.py` 版本到 1.0.14，元数据（category/interaction_profile/interaction_entries/event_subscriptions/capabilities/usage/min_telepilot_version）保持一致。
+- 保持原有诗词填空游戏规则、题库、挖空逻辑、抢答判定、超时与文案语义不变。
+
+
 ## 1.0.13 (2026-07-04)
 - 适配 TelePilot 0.49 交互契约：奖励发放改用平台 `payout` 动作。
 - 移除交互入口里的旧发奖通道声明，避免已是最新版本但实际仍不发奖。
@@ -16,7 +23,7 @@
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
 
 ## 1.0.10 (2026-06-28)
-- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 `bbot_notice`。
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
 - 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
 
 
