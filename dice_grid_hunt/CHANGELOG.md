@@ -1,4 +1,9 @@
 # 更新日志
+## 1.1.14 (2026-07-10)
+- 修复交互 Bot 路径仍依赖插件进程内存的问题：开局后会把九宫格回合写入平台 session，后续猜错会继续 `update_session` 保存冷却状态。
+- 补齐 `callback_query`、`session_expired`、`update_session` 和 `payout` 交互契约声明，避免平台按旧能力处理。
+- 答对后在自动发奖模式下明确返回 `payout` 动作，并保留发奖账号与结算状态，防止只公告不发奖。
+
 ## 1.1.13 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。
 - 保留原有 UserBot 命令触发，交互 Bot 入口只负责触发和高频互动承接，不改变插件本体配置。
