@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.12 (2026-07-12)
+- 大厅与引导消息 ID 改由 TelePilot `ctx.messages` 受控接口读取和删除，installed 模式下可正确编辑、清理平台保存的原消息。
+
 ## 1.0.11 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封 `event_from_interaction_payload(payload)` 读取事件类型与聊天 ID，旧平铺 payload helper 保留为兜底。
 - 同步 `plugin.json` 与 `manifest.py` 版本号并递增至 1.0.11。

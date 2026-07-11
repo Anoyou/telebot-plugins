@@ -1,4 +1,8 @@
 # 更新日志
+
+## 0.4.17 (2026-07-12)
+- 主消息、结算与奖励消息 ID 改由 TelePilot `ctx.messages` 受控接口读取和删除，installed 模式下可正确复用并清理平台保存的消息。
+
 ## 0.4.16 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封 `event_from_interaction_payload` 读取事件类型与群 ID，旧平铺 `_ie_*` helper 保留为 fallback（新字段缺失、旧 runtime 或测试桩无 events 模块时自动回退）。
 - 同步 `plugin.json` 与 `manifest.py` 版本至 0.4.16，元数据（category/interaction_profile/interaction_entries/event_subscriptions/capabilities）保持逐项一致。

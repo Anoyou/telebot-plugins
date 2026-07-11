@@ -147,6 +147,24 @@ class DeadRevolverRuntimeTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_resolve_lobby_id_uses_messages_facade(self) -> None:
+        class MessageOps:
+            async def read_saved_message_id(self, key: str) -> int | None:
+                self.key = key
+                return 321
+
+        async def run_case() -> None:
+            plugin = plugin_module.DeadRevolverPlugin()
+            ctx = PluginContext()
+            ctx.messages = MessageOps()
+            gs = plugin_module.GameState(game_id="g1", chat_id=100, host_user_id=1, entry_fee=10)
+            gs.interaction_bot = True
+
+            self.assertEqual(await plugin._resolve_lobby_id(ctx, gs), 321)
+            self.assertEqual(ctx.messages.key, plugin_module._interaction_msg_key(1, 100))
+
+        asyncio.run(run_case())
+
     def test_lobby_copy_uses_participation_block(self) -> None:
         plugin = self._plugin_with_receiver()
         gs = plugin_module.GameState(

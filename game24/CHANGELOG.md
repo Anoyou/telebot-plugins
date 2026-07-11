@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.10 (2026-07-12)
+- 答题结算改由 TelePilot `ctx.messages` 受控接口读取平台保存的题面消息 ID，installed 模式下可继续编辑原题面。
+
 ## 1.1.9 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封（`event_from_interaction_payload`）读取事件类型、聊天/消息 ID、答题文本和赢家 actor，旧平铺 payload helper 保留为兜底。
 - 元数据同步：补充 `min_telepilot_version="0.33.0"`（plugin.json 与 manifest 一致），递增 patch 版本到 1.1.9。

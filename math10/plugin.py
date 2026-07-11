@@ -15,7 +15,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 MATH10_GAME_PREFIX = "game:"
 MATH10_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.0.9"
+PLUGIN_VERSION = "1.0.10"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30
@@ -477,12 +477,20 @@ class Math10Plugin(Plugin):
         return True
 
     async def _read_question_message_id(self, ctx: PluginContext, state: Math10GameState) -> int | None:
+        save_key = _question_message_key(state)
+        messages = getattr(ctx, "messages", None)
+        reader = getattr(messages, "read_saved_message_id", None)
+        if callable(reader):
+            try:
+                message_id = await reader(save_key)
+                if message_id is not None:
+                    return _int_payload(message_id)
+            except Exception:
+                pass
         if ctx.redis is None:
             return None
-        save_key = _question_message_key(state)
         try:
-            # 平台 save_message_id 落在 tp:msgid:{aid}:{key}；builtin 裸 Redis 可直读。
-            # facade 命名空间下再尝试相对 key（兼容测试/自写）。
+            # builtin/旧平台回退；installed 插件主路径走 ctx.messages。
             raw = await ctx.redis.get(f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(state.account_id)}:{save_key}")
             if raw is None:
                 raw = await ctx.redis.get(save_key)

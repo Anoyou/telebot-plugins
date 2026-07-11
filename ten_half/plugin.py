@@ -86,7 +86,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.15"
+PLUGIN_VERSION = "0.4.17"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -1251,6 +1251,15 @@ class TenHalfPlugin(Plugin):
 
     @staticmethod
     async def _read_saved_message_id(ctx: PluginContext, key: str) -> int | None:
+        messages = getattr(ctx, "messages", None)
+        reader = getattr(messages, "read_saved_message_id", None)
+        if callable(reader):
+            try:
+                message_id = await reader(key)
+                if message_id is not None:
+                    return _pint(message_id, 0) or None
+            except Exception:
+                pass
         redis = getattr(ctx, "redis", None)
         if redis is None:
             return None
@@ -1269,6 +1278,13 @@ class TenHalfPlugin(Plugin):
 
     @staticmethod
     async def _delete_saved_message_id(ctx: PluginContext, key: str) -> None:
+        messages = getattr(ctx, "messages", None)
+        delete_saved = getattr(messages, "delete_saved_message_id", None)
+        if callable(delete_saved):
+            try:
+                await delete_saved(key)
+            except Exception:
+                pass
         redis = getattr(ctx, "redis", None)
         if redis is None:
             return

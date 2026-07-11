@@ -275,9 +275,18 @@ class FakeCommandEvent:
 class FakeMessages:
     def __init__(self) -> None:
         self.applied: list[dict] = []
+        self.saved: dict[str, int] = {}
+        self.deleted_saved: list[str] = []
 
     async def apply(self, actions, *, entry_key=None):
         self.applied.append({"entry_key": entry_key, "actions": list(actions)})
+
+    async def read_saved_message_id(self, key: str) -> int | None:
+        return self.saved.get(key)
+
+    async def delete_saved_message_id(self, key: str) -> bool:
+        self.deleted_saved.append(key)
+        return self.saved.pop(key, None) is not None
 
 
 class FakeRedis:
@@ -482,12 +491,15 @@ class TenHalfInteractionTest(unittest.TestCase):
     def test_saved_message_id_reads_platform_namespaced_key(self) -> None:
         async def scenario() -> None:
             redis = FakeRedis()
-            ctx = PluginContext(account_id=1, redis=redis)
+            messages = FakeMessages()
+            ctx = PluginContext(account_id=1, redis=redis, messages=messages)
             key = plugin_module._main_msg_key(1, -100123)
-            redis.store[f"tp:msgid:1:{key}"] = "900"
+            messages.saved[key] = 900
 
             plugin = plugin_module.TenHalfPlugin()
             self.assertEqual(await plugin._read_saved_message_id(ctx, key), 900)
+            await plugin._delete_saved_message_id(ctx, key)
+            self.assertEqual(messages.deleted_saved, [key])
 
         asyncio.run(scenario())
 

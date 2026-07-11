@@ -55,6 +55,40 @@ def _guidance_msg_key(account_id: int, chat_id: int) -> str:
     return f"{REDIS_GUIDANCE_KEY_PREFIX}{chat_id}"
 
 
+async def _read_saved_message_id(ctx: PluginContext, key: str) -> int | None:
+    messages = getattr(ctx, "messages", None)
+    reader = getattr(messages, "read_saved_message_id", None)
+    if callable(reader):
+        try:
+            message_id = await reader(key)
+            if message_id is not None:
+                return _int_payload(message_id)
+        except Exception:
+            pass
+    if ctx.redis is None:
+        return None
+    try:
+        raw = await ctx.redis.get(key)
+    except Exception:
+        return None
+    return _int_payload(raw)
+
+
+async def _delete_saved_message_id(ctx: PluginContext, key: str) -> None:
+    messages = getattr(ctx, "messages", None)
+    delete_saved = getattr(messages, "delete_saved_message_id", None)
+    if callable(delete_saved):
+        try:
+            await delete_saved(key)
+        except Exception:
+            pass
+    if ctx.redis is not None:
+        try:
+            await ctx.redis.delete(key)
+        except Exception:
+            pass
+
+
 def _int_or_zero(val: Any) -> int:
     try: return int(val)
     except (TypeError, ValueError): return 0
@@ -434,12 +468,12 @@ class DeadRevolverPlugin(Plugin):
             {"type": "send_message", "text": f"{html.escape(display_name)} 已报名死亡左轮！当前 {len(gs.players)} 名玩家。"},
         ]
         lobby_action: dict[str, Any] = {"type": "send_message", "text": lobby}
-        if ctx.redis:
-            raw = await ctx.redis.get(msg_key)
-            if raw: lobby_action["edit_message_id"] = _int_or_zero(raw)
-            else: lobby_action.update(pin=True, save_message_id_key=msg_key)
+        saved_message_id = await _read_saved_message_id(ctx, msg_key)
+        if saved_message_id is not None:
+            lobby_action["edit_message_id"] = saved_message_id
         else:
             lobby_action["pin"] = True
+            lobby_action["save_message_id_key"] = msg_key
         actions.append(lobby_action)
         return actions
 
@@ -487,7 +521,7 @@ class DeadRevolverPlugin(Plugin):
         gs = self._games.pop(chat_id, None)
         if gs and gs.timeout_task and not gs.timeout_task.done(): gs.timeout_task.cancel()
         self._locks.pop(chat_id, None)
-        if ctx.redis: await ctx.redis.delete(_interaction_msg_key(ctx.account_id, chat_id))
+        await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, chat_id))
         await self._log("info", f"死亡左轮交互 Bot 会话已清理：聊天 {chat_id}。", chat_id=chat_id)
 
     # ── 命令 handler ────────────────────────────
@@ -844,8 +878,8 @@ class DeadRevolverPlugin(Plugin):
                 try: await ctx.client.delete_messages(gs.chat_id, gs.game_message_id)
                 except Exception: pass
 
-        if gs.interaction_bot and ctx.redis:
-            await ctx.redis.delete(_interaction_msg_key(ctx.account_id, gs.chat_id))
+        if gs.interaction_bot:
+            await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
         self._games.pop(gs.chat_id, None); self._locks.pop(gs.chat_id, None)
 
     async def _cancel_game(self, ctx: PluginContext, gs: GameState, reason: str) -> None:
@@ -887,8 +921,8 @@ class DeadRevolverPlugin(Plugin):
                     else: await ctx.client.send_message(gs.chat_id, f"+{p.paid}")
                 except Exception: pass
 
-        if gs.interaction_bot and ctx.redis:
-            await ctx.redis.delete(_interaction_msg_key(ctx.account_id, gs.chat_id))
+        if gs.interaction_bot:
+            await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
         self._games.pop(gs.chat_id, None); self._locks.pop(gs.chat_id, None)
 
     # ── 交互 Bot 工具 ───────────────────────────
@@ -1012,10 +1046,7 @@ class DeadRevolverPlugin(Plugin):
 
     async def _resolve_lobby_id(self, ctx: PluginContext, gs: GameState) -> int | None:
         if gs.game_message_id: return gs.game_message_id
-        if ctx.redis:
-            raw = await ctx.redis.get(_interaction_msg_key(ctx.account_id, gs.chat_id))
-            return _int_or_zero(raw) if raw else None
-        return None
+        return await _read_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
 
     async def _send_bot_msg(self, ctx: PluginContext, gs: GameState, txt: str,
                             reply_to: int | None = None, reply_markup: dict | None = None) -> int | None:
@@ -1039,17 +1070,17 @@ class DeadRevolverPlugin(Plugin):
 
     async def _delete_guidance_message(self, ctx: PluginContext, gs: GameState) -> None:
         msg_id = gs.guidance_msg_id
-        if msg_id is None and ctx.redis:
-            raw = await ctx.redis.get(_guidance_msg_key(ctx.account_id, gs.chat_id))
-            msg_id = _int_payload(raw)
+        if msg_id is None:
+            msg_id = await _read_saved_message_id(
+                ctx,
+                _guidance_msg_key(ctx.account_id, gs.chat_id),
+            )
         if msg_id is None:
             return
         await self._delete_platform_message(ctx, gs, msg_id)
         if gs.guidance_msg_id == msg_id:
             gs.guidance_msg_id = None
-        if ctx.redis:
-            try: await ctx.redis.delete(_guidance_msg_key(ctx.account_id, gs.chat_id))
-            except Exception: pass
+        await _delete_saved_message_id(ctx, _guidance_msg_key(ctx.account_id, gs.chat_id))
         gs.tracked_msg_ids = [mid for mid in gs.tracked_msg_ids if mid != msg_id]
 
     async def _cleanup_messages(self, ctx: PluginContext, gs: GameState, lobby_id: int | None) -> None:
@@ -1062,9 +1093,7 @@ class DeadRevolverPlugin(Plugin):
         guidance_id = gs.guidance_msg_id
         if guidance_id and guidance_id not in seen:
             await self._delete_platform_message(ctx, gs, guidance_id)
-        if ctx.redis:
-            try: await ctx.redis.delete(_guidance_msg_key(ctx.account_id, gs.chat_id))
-            except Exception: pass
+        await _delete_saved_message_id(ctx, _guidance_msg_key(ctx.account_id, gs.chat_id))
         gs.tracked_msg_ids = []
         gs.guidance_msg_id = None
 
@@ -1074,9 +1103,7 @@ class DeadRevolverPlugin(Plugin):
         msg_id = gs.game_message_id
         if gs.interaction_bot and msg_id is None:
             msg_key = _interaction_msg_key(ctx.account_id, gs.chat_id)
-            if ctx.redis:
-                raw = await ctx.redis.get(msg_key)
-                if raw: msg_id = _int_or_zero(raw)
+            msg_id = await _read_saved_message_id(ctx, msg_key)
         if msg_id is None: return
         if gs.interaction_bot:
             await self._edit_bot_msg(ctx, gs, msg_id, text)

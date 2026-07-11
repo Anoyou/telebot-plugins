@@ -127,9 +127,19 @@ class FakeRedis:
 class FakeMessages:
     def __init__(self) -> None:
         self.applied: list[dict[str, object]] = []
+        self.saved: dict[str, int] = {}
+
+    async def send(self, **kwargs):  # noqa: ANN003
+        self.applied.append({"send": dict(kwargs)})
+
+    async def edit(self, **kwargs):  # noqa: ANN003
+        self.applied.append({"edit": dict(kwargs)})
 
     async def apply(self, actions, *, entry_key=None):  # noqa: ANN001
         self.applied.append({"actions": list(actions), "entry_key": entry_key})
+
+    async def read_saved_message_id(self, key: str) -> int | None:
+        return self.saved.get(key)
 
 
 def start_payload(*, prize: int = 666) -> dict:
@@ -158,6 +168,29 @@ def answer_payload(*, text: str, user_id: int = 111, message_id: int = 20, name:
 
 
 class InteractionPayoutContractTests(unittest.TestCase):
+    def test_math10_answer_reads_saved_message_id_from_messages_facade(self) -> None:
+        async def scenario() -> None:
+            plugin = math10_module.Math10Plugin()
+            messages = FakeMessages()
+            ctx = PluginContext(feature_key="math10", redis=FakeRedis(), messages=messages)
+            with patch.object(math10_module, "_new_math_question", return_value=("1 + 1", 2)):
+                await plugin.on_interaction(ctx, "start_math_game", start_payload(prize=666))
+            state = await plugin._load_state(ctx, ctx.account_id, -100123)
+            self.assertIsNotNone(state)
+            key = math10_module._question_message_key(state)
+            messages.saved[key] = 777
+
+            await plugin.on_interaction(
+                ctx,
+                "start_math_game",
+                answer_payload(text="2", user_id=111, message_id=22),
+            )
+
+            edit = next(call["edit"] for call in messages.applied if "edit" in call)
+            self.assertEqual(edit["message_id"], 777)
+
+        asyncio.run(scenario())
+
     def test_start_messages_include_plugin_versions(self) -> None:
         async def scenario() -> None:
             math_plugin = math10_module.Math10Plugin()
@@ -170,8 +203,8 @@ class InteractionPayoutContractTests(unittest.TestCase):
             with patch.object(game24_module, "generate_24_puzzle", return_value=[1, 2, 3, 4]):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
-            self.assertIn("v1.0.9", math_actions[0]["text"])
-            self.assertIn("v1.1.9", game_actions[0]["text"])
+            self.assertIn("v1.0.10", math_actions[0]["text"])
+            self.assertIn("v1.1.10", game_actions[0]["text"])
 
         asyncio.run(scenario())
 

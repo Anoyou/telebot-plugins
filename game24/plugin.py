@@ -30,7 +30,7 @@ MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "game:"
 INTERACTION_GAME_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.1.9"
+PLUGIN_VERSION = "1.1.10"
 
 
 # ─────────────────────────────────────────────────────
@@ -793,12 +793,20 @@ class Game24Plugin(Plugin):
         return True
 
     async def _read_interaction_message_id(self, ctx: PluginContext, state: InteractionGameState) -> int | None:
+        save_key = _interaction_message_key(state)
+        messages = getattr(ctx, "messages", None)
+        reader = getattr(messages, "read_saved_message_id", None)
+        if callable(reader):
+            try:
+                message_id = await reader(save_key)
+                if message_id is not None:
+                    return _int_payload(message_id)
+            except Exception:
+                pass
         if ctx.redis is None:
             return None
-        save_key = _interaction_message_key(state)
         try:
-            # 平台 save_message_id 落在 tp:msgid:{aid}:{key}；builtin 裸 Redis 可直读。
-            # facade 命名空间下再尝试相对 key（兼容测试/自写）。
+            # builtin/旧平台回退；installed 插件主路径走 ctx.messages。
             raw = await ctx.redis.get(f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(state.account_id)}:{save_key}")
             if raw is None:
                 raw = await ctx.redis.get(save_key)
