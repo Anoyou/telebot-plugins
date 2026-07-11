@@ -12,23 +12,20 @@ import time
 from collections.abc import Mapping
 from typing import Any
 
-from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.2.0"
+PLUGIN_VERSION = "1.3.0"
 
-DEFAULT_COMMAND = "随机福利"
+DEFAULT_START_COMMAND = "福利开启"
+DEFAULT_STOP_COMMAND = "福利暂停"
+DEFAULT_STATUS_COMMAND = "福利状态"
 DEFAULT_REPLY_TEMPLATE = "+1-6666"
 DEFAULT_PROBABILITY = 0.05
 DEFAULT_CHAT_COOLDOWN_SECONDS = 30
 DEFAULT_USER_COOLDOWN_SECONDS = 120
 
-COMMAND_ON = {"on", "start", "enable", "开启", "启动", "恢复"}
-COMMAND_OFF = {"off", "stop", "disable", "pause", "暂停", "关闭", "停止"}
-COMMAND_STATUS = {"status", "state", "状态", "查看"}
-COMMAND_HELP = {"help", "帮助", "?"}
 COMMAND_PREFIXES = (",", "/", "!", "！", "，")
 
 
@@ -55,6 +52,11 @@ def _bounded_int(value: Any, *, minimum: int, maximum: int, default: int) -> int
     except (TypeError, ValueError):
         return default
     return max(minimum, min(maximum, number))
+
+
+def _config_command(cfg: Mapping[str, Any], key: str, default: str) -> str:
+    value = str(cfg.get(key) or default).strip()
+    return value or default
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -176,23 +178,16 @@ def _command_name_from_text(text: str) -> str:
     return token.lstrip("".join(COMMAND_PREFIXES))
 
 
-def _command_args(payload: Mapping[str, Any], command: str) -> list[str] | None:
+def _payload_command_name(payload: Mapping[str, Any]) -> str:
     trigger = _as_mapping(payload.get("trigger"))
     trigger_command = str(trigger.get("command") or "").lstrip("".join(COMMAND_PREFIXES))
-    args = trigger.get("args")
-    if trigger_command == command:
-        if isinstance(args, str):
-            return args.split()
-        if isinstance(args, list):
-            return [str(item) for item in args]
+    if trigger_command:
+        return trigger_command
 
     text = _payload_text(payload).strip()
     if not text:
-        return None
-    parts = text.split()
-    if _command_name_from_text(text) != command:
-        return None
-    return parts[1:]
+        return ""
+    return _command_name_from_text(text)
 
 
 def _send_action(
@@ -283,11 +278,13 @@ class RandomBenefitPlugin(Plugin):
     key = PLUGIN_KEY
     display_name = "随机福利"
     owner_only = False
-    command_config_keys = {"command"}
+    command_config_keys = {"start_command", "stop_command", "status_command"}
 
     def __init__(self) -> None:
         super().__init__()
-        self._command = DEFAULT_COMMAND
+        self._start_command = DEFAULT_START_COMMAND
+        self._stop_command = DEFAULT_STOP_COMMAND
+        self._status_command = DEFAULT_STATUS_COMMAND
         self._allowed_chat_ids: set[int] = set()
         self._reply_template = DEFAULT_REPLY_TEMPLATE
         self._probability = DEFAULT_PROBABILITY
@@ -296,7 +293,11 @@ class RandomBenefitPlugin(Plugin):
         self._default_enabled = True
         self._active_fallback: dict[tuple[int, int], bool] = {}
         self._cooldown_fallback: dict[str, float] = {}
-        self.commands = {self._command: self._legacy_command}
+        self.commands = {
+            self._start_command: self._legacy_command,
+            self._stop_command: self._legacy_command,
+            self._status_command: self._legacy_command,
+        }
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._reload_config(ctx)
@@ -304,7 +305,7 @@ class RandomBenefitPlugin(Plugin):
             group_text = f"{len(self._allowed_chat_ids)} 个群" if self._allowed_chat_ids else "未选择群组"
             await ctx.log(
                 "info",
-                f"[random_benefit] v{PLUGIN_VERSION} 已启动，指令：{self._command}，目标：{group_text}",
+                f"[random_benefit] v{PLUGIN_VERSION} 已启动，开启指令：{self._start_command}，暂停指令：{self._stop_command}，目标：{group_text}",
             )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
@@ -372,26 +373,21 @@ class RandomBenefitPlugin(Plugin):
         if chat_id is None:
             return []
 
-        args = _command_args(payload, self._command)
-        if args is None:
-            return []
-        action = args[0].casefold() if args else "status"
+        command = _payload_command_name(payload)
 
-        if action in COMMAND_HELP:
-            return [_send_action(self._help_text(), chat_id=chat_id, reply_to_message_id=message_id)]
-        if action in COMMAND_ON:
+        if command == self._start_command:
             if not self._chat_configured(chat_id):
                 return [_send_action(self._not_configured_text(), chat_id=chat_id, reply_to_message_id=message_id)]
             await self._set_active(ctx, chat_id, True)
             return [_send_action("随机福利已开启。", chat_id=chat_id, reply_to_message_id=message_id)]
-        if action in COMMAND_OFF:
+        if command == self._stop_command:
             if not self._chat_configured(chat_id):
                 return [_send_action(self._not_configured_text(), chat_id=chat_id, reply_to_message_id=message_id)]
             await self._set_active(ctx, chat_id, False)
             return [_send_action("随机福利已暂停。", chat_id=chat_id, reply_to_message_id=message_id)]
-        if action in COMMAND_STATUS:
+        if command == self._status_command:
             return [_send_action(await self._status_text(ctx, chat_id), chat_id=chat_id, reply_to_message_id=message_id)]
-        return [_send_action(self._help_text(), chat_id=chat_id, reply_to_message_id=message_id)]
+        return []
 
     async def _handle_message(self, ctx: PluginContext, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         chat_id = _payload_chat_id(payload)
@@ -432,9 +428,15 @@ class RandomBenefitPlugin(Plugin):
 
     def _reload_config(self, ctx: PluginContext) -> None:
         cfg = getattr(ctx, "config", None) or {}
-        command = str(cfg.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
-        self._command = command
-        self.commands = {self._command: self._legacy_command}
+        legacy_command = str(cfg.get("command") or "").strip()
+        self._start_command = _config_command(cfg, "start_command", legacy_command or DEFAULT_START_COMMAND)
+        self._stop_command = _config_command(cfg, "stop_command", DEFAULT_STOP_COMMAND)
+        self._status_command = _config_command(cfg, "status_command", DEFAULT_STATUS_COMMAND)
+        self.commands = {
+            self._start_command: self._legacy_command,
+            self._stop_command: self._legacy_command,
+            self._status_command: self._legacy_command,
+        }
         self._allowed_chat_ids = _int_set(cfg.get("allowed_chat_ids"))
         self._reply_template = str(cfg.get("reply_template") or DEFAULT_REPLY_TEMPLATE)
         try:
@@ -537,17 +539,6 @@ class RandomBenefitPlugin(Plugin):
         return (
             f"当前群组随机福利：{status}；随机回复概率：{self._probability:g}；"
             f"全群冷却：{self._chat_cooldown_seconds}s；同用户冷却：{self._user_cooldown_seconds}s。"
-        )
-
-    def _help_text(self) -> str:
-        prefix = current_command_prefix(fallback=",")
-        return "\n".join(
-            [
-                "随机福利指令：",
-                f"{prefix}{self._command} on - 开启当前群组",
-                f"{prefix}{self._command} off - 暂停当前群组",
-                f"{prefix}{self._command} status - 查看状态",
-            ]
         )
 
     @staticmethod

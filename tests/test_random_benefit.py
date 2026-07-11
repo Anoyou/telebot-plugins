@@ -71,10 +71,11 @@ def _message_payload(*, text: str = "今天真不错", chat_id: int = -1001, mes
 
 
 def _command_payload(text: str, *, chat_id: int = -1001, message_id: int = 9):
+    command = text.strip().split(maxsplit=1)[0].lstrip(",/!！，")
     return {
         "type": "command",
         "message": {"text": text, "chat_id": chat_id, "message_id": message_id},
-        "trigger": {"command": "福利", "args": text.split()[1:]},
+        "trigger": {"command": command, "args": text.split()[1:]},
     }
 
 
@@ -109,7 +110,9 @@ class FakeDirectEvent:
 class RandomBenefitPluginTest(unittest.TestCase):
     def _ctx(self, **overrides):
         config = {
-            "command": "福利",
+            "start_command": "福利开启",
+            "stop_command": "福利暂停",
+            "status_command": "福利状态",
             "allowed_chat_ids": [-1001],
             "reply_template": "送给 {sender}: +1-6666",
             "trigger_probability": 1,
@@ -122,12 +125,19 @@ class RandomBenefitPluginTest(unittest.TestCase):
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.2.0")
+        self.assertEqual(manifest["version"], "1.3.0")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
+        self.assertEqual(properties["start_command"]["default"], "福利开启")
+        self.assertEqual(properties["stop_command"]["default"], "福利暂停")
+        self.assertEqual(properties["status_command"]["default"], "福利状态")
         self.assertTrue(properties["template_preview"]["readOnly"])
         self.assertEqual(properties["chat_cooldown_seconds"]["default"], 30)
         self.assertEqual(properties["user_cooldown_seconds"]["default"], 120)
+        self.assertEqual(
+            [item["scope"] for item in manifest["event_subscriptions"] if "command" in item["events"]],
+            ["owner_only"],
+        )
         self.assertIn("x-usage-guide", manifest["config_schema"])
         passthrough = manifest["capabilities"]["telegram_direct_passthrough"]
         self.assertTrue(passthrough["enabled"])
@@ -158,14 +168,14 @@ class RandomBenefitPluginTest(unittest.TestCase):
             plugin = plugin_module.RandomBenefitPlugin()
             ctx = self._ctx()
 
-            off_actions = await plugin.on_event(ctx, _command_payload(",福利 off"))
+            off_actions = await plugin.on_event(ctx, _command_payload(",福利暂停"))
             self.assertEqual(off_actions[0]["text"], "随机福利已暂停。")
 
             with patch.object(plugin_module.random, "random", return_value=0):
                 actions = await plugin.on_event(ctx, _message_payload())
             self.assertEqual(actions, [])
 
-            on_actions = await plugin.on_event(ctx, _command_payload(",福利 on"))
+            on_actions = await plugin.on_event(ctx, _command_payload(",福利开启"))
             self.assertEqual(on_actions[0]["text"], "随机福利已开启。")
 
             with patch.object(plugin_module.random, "random", return_value=0):
