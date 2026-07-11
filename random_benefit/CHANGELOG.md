@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.5.0 (2026-07-11)
+- 随机触发前新增“不可派奖对象”过滤：排除当前账号自己的消息，避免尝试给自己转账。
+- 同时排除 Bot 账号消息，避免随机命中无法接收转账的 Bot。
+- Event Bus 路径会识别 `out/outgoing/is_outgoing`、`is_bot/bot`、`owner_user_ids/admin_user_ids/userbot_user_id` 等平台字段；裸直通路径会结合 Telethon `event.outgoing`、`sender.bot` 和 `ctx.client.get_me()` 判断。
+
 ## 1.4.0 (2026-07-11)
 - 将随机回复概率配置改为字符串输入，保留 `0.09` 这类小数写法，避免通用数值输入控件把小数截断成 `0`。
 - 运行时继续按 0 到 1 的小数解析概率，旧配置里保存为数字的值也兼容读取。

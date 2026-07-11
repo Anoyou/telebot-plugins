@@ -16,7 +16,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.4.0"
+PLUGIN_VERSION = "1.5.0"
 
 DEFAULT_START_COMMAND = "福利开启"
 DEFAULT_STOP_COMMAND = "福利暂停"
@@ -146,6 +146,15 @@ def _payload_sender(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     )
 
 
+def _int_from_any(value: Any) -> int | None:
+    try:
+        if value is not None:
+            return int(value)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
 def _payload_sender_id(payload: Mapping[str, Any]) -> int | None:
     sender = _payload_sender(payload)
     for value in (
@@ -154,12 +163,46 @@ def _payload_sender_id(payload: Mapping[str, Any]) -> int | None:
         payload.get("sender_id"),
         payload.get("user_id"),
     ):
-        try:
-            if value is not None:
-                return int(value)
-        except (TypeError, ValueError):
-            continue
+        parsed = _int_from_any(value)
+        if parsed is not None:
+            return parsed
     return None
+
+
+def _int_ids_from_any(value: Any) -> set[int]:
+    ids: set[int] = set()
+    if isinstance(value, Mapping):
+        for key in ("user_id", "id", "tg_user_id", "owner_user_id", "account_owner_user_id", "userbot_user_id"):
+            parsed = _int_from_any(value.get(key))
+            if parsed:
+                ids.add(parsed)
+        for key in ("owner_user_ids", "admin_user_ids", "userbot_user_ids"):
+            ids.update(_int_ids_from_any(value.get(key)))
+        return ids
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            ids.update(_int_ids_from_any(item))
+        return ids
+    parsed = _int_from_any(value)
+    if parsed:
+        ids.add(parsed)
+    return ids
+
+
+def _payload_account_user_ids(payload: Mapping[str, Any]) -> set[int]:
+    ids: set[int] = set()
+    for key in ("owner_user_ids", "admin_user_ids", "userbot_user_ids"):
+        ids.update(_int_ids_from_any(payload.get(key)))
+    for key in ("userbot_user_id", "owner_user_id", "account_owner_user_id", "tg_user_id"):
+        ids.update(_int_ids_from_any(payload.get(key)))
+    for envelope_key in ("account", "source"):
+        envelope = payload.get(envelope_key)
+        if isinstance(envelope, Mapping):
+            for key in ("owner_user_ids", "admin_user_ids", "userbot_user_ids"):
+                ids.update(_int_ids_from_any(envelope.get(key)))
+            for key in ("userbot_user_id", "owner_user_id", "account_owner_user_id", "tg_user_id"):
+                ids.update(_int_ids_from_any(envelope.get(key)))
+    return ids
 
 
 def _payload_sender_name(payload: Mapping[str, Any], sender_id: int | None) -> str:
@@ -173,12 +216,37 @@ def _payload_sender_name(payload: Mapping[str, Any], sender_id: int | None) -> s
 
 def _payload_is_outgoing(payload: Mapping[str, Any]) -> bool:
     message = _payload_message(payload)
-    return bool(message.get("out") or message.get("outgoing") or payload.get("outgoing"))
+    source = _as_mapping(payload.get("source"))
+    return bool(
+        message.get("out")
+        or message.get("outgoing")
+        or message.get("is_outgoing")
+        or payload.get("out")
+        or payload.get("outgoing")
+        or payload.get("is_outgoing")
+        or source.get("outgoing")
+        or source.get("is_outgoing")
+    )
 
 
 def _payload_actor_is_bot(payload: Mapping[str, Any]) -> bool:
-    sender = _payload_sender(payload)
-    return bool(sender.get("is_bot") or sender.get("bot"))
+    for key in ("sender", "actor", "source_actor", "player"):
+        actor = _as_mapping(payload.get(key))
+        actor_type = str(actor.get("type") or actor.get("kind") or "").casefold()
+        if bool(actor.get("is_bot") or actor.get("bot")):
+            return True
+        if actor_type in {"bot", "external_bot", "interaction_bot", "account_bot"}:
+            return True
+    return False
+
+
+def _payload_is_self_actor(payload: Mapping[str, Any], me_id: int | None) -> bool:
+    sender_id = _payload_sender_id(payload)
+    if sender_id is None:
+        return False
+    if me_id is not None and sender_id == me_id:
+        return True
+    return sender_id in _payload_account_user_ids(payload)
 
 
 def _command_name_from_text(text: str) -> str:
@@ -263,6 +331,16 @@ def _event_sender_id(event: Any) -> int | None:
     return None
 
 
+def _event_is_outgoing(event: Any) -> bool:
+    return bool(
+        getattr(event, "out", False)
+        or getattr(event, "outgoing", False)
+        or getattr(event, "is_outgoing", False)
+        or getattr(getattr(event, "message", None), "out", False)
+        or getattr(getattr(event, "message", None), "outgoing", False)
+    )
+
+
 async def _event_sender_name(event: Any, sender_id: int | None) -> str:
     try:
         sender = await event.get_sender()
@@ -303,6 +381,7 @@ class RandomBenefitPlugin(Plugin):
         self._chat_cooldown_seconds = DEFAULT_CHAT_COOLDOWN_SECONDS
         self._user_cooldown_seconds = DEFAULT_USER_COOLDOWN_SECONDS
         self._default_enabled = True
+        self._me_id: int | None = None
         self._active_fallback: dict[tuple[int, int], bool] = {}
         self._cooldown_fallback: dict[str, float] = {}
         self.commands = {
@@ -313,6 +392,7 @@ class RandomBenefitPlugin(Plugin):
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._reload_config(ctx)
+        await self._load_me(ctx)
         if ctx.log:
             group_text = f"{len(self._allowed_chat_ids)} 个群" if self._allowed_chat_ids else "未选择群组"
             await ctx.log(
@@ -321,6 +401,7 @@ class RandomBenefitPlugin(Plugin):
             )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        self._me_id = None
         self._active_fallback.clear()
         self._cooldown_fallback.clear()
 
@@ -336,6 +417,7 @@ class RandomBenefitPlugin(Plugin):
     async def on_direct_message(self, ctx: PluginContext, event: Any) -> None:
         """裸直通入口：收到 live Telethon event 后直接回复，不返回标准 action。"""
         self._reload_config(ctx)
+        await self._load_me(ctx)
         chat_id = _event_chat_id(event)
         if chat_id is None or not self._chat_configured(chat_id):
             return
@@ -343,7 +425,7 @@ class RandomBenefitPlugin(Plugin):
             return
         if self._probability <= 0:
             return
-        if bool(getattr(event, "out", False) or getattr(event, "outgoing", False)):
+        if _event_is_outgoing(event):
             return
 
         text = _event_text(event)
@@ -352,6 +434,8 @@ class RandomBenefitPlugin(Plugin):
         if await _event_actor_is_bot(event):
             return
         sender_id = _event_sender_id(event)
+        if sender_id is not None and self._me_id is not None and sender_id == self._me_id:
+            return
         if await self._in_reply_cooldown(ctx, chat_id, sender_id):
             return
         if random.random() >= self._probability:
@@ -402,6 +486,7 @@ class RandomBenefitPlugin(Plugin):
         return []
 
     async def _handle_message(self, ctx: PluginContext, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+        await self._load_me(ctx)
         chat_id = _payload_chat_id(payload)
         if chat_id is None or not self._chat_configured(chat_id):
             return []
@@ -409,7 +494,11 @@ class RandomBenefitPlugin(Plugin):
             return []
         if self._probability <= 0:
             return []
-        if _payload_is_outgoing(payload) or _payload_actor_is_bot(payload):
+        if (
+            _payload_is_outgoing(payload)
+            or _payload_actor_is_bot(payload)
+            or _payload_is_self_actor(payload, self._me_id)
+        ):
             return []
 
         text = _payload_text(payload)
@@ -470,6 +559,18 @@ class RandomBenefitPlugin(Plugin):
             default=DEFAULT_USER_COOLDOWN_SECONDS,
         )
         self._default_enabled = bool(cfg.get("default_enabled", True))
+
+    async def _load_me(self, ctx: PluginContext) -> None:
+        if self._me_id is not None:
+            return
+        client = getattr(ctx, "client", None)
+        if client is None:
+            return
+        try:
+            me = await client.get_me()
+        except Exception:
+            return
+        self._me_id = _int_from_any(getattr(me, "id", None))
 
     def _chat_configured(self, chat_id: int) -> bool:
         return int(chat_id) in self._allowed_chat_ids

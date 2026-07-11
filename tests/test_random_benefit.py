@@ -24,11 +24,12 @@ def _load_plugin_module():
         pass
 
     class PluginContext:
-        def __init__(self, *, config=None, account_id: int = 1, redis=None) -> None:
+        def __init__(self, *, config=None, account_id: int = 1, redis=None, client=None) -> None:
             self.account_id = account_id
             self.feature_key = "random_benefit"
             self.config = config or {}
             self.redis = redis
+            self.client = client
             self.log = None
 
     def register(cls):
@@ -62,12 +63,24 @@ def _load_plugin_module():
 plugin_module, PluginContext = _load_plugin_module()
 
 
-def _message_payload(*, text: str = "今天真不错", chat_id: int = -1001, message_id: int = 55):
-    return {
+def _message_payload(
+    *,
+    text: str = "今天真不错",
+    chat_id: int = -1001,
+    message_id: int = 55,
+    sender_id: int = 42,
+    sender_is_bot: bool = False,
+    outgoing: bool = False,
+    userbot_user_id: int | None = None,
+):
+    payload = {
         "type": "message",
-        "message": {"text": text, "chat_id": chat_id, "message_id": message_id},
-        "sender": {"user_id": 42, "display_name": "小明"},
+        "message": {"text": text, "chat_id": chat_id, "message_id": message_id, "outgoing": outgoing},
+        "sender": {"user_id": sender_id, "display_name": "小明", "is_bot": sender_is_bot},
     }
+    if userbot_user_id is not None:
+        payload["userbot_user_id"] = userbot_user_id
+    return payload
 
 
 def _command_payload(text: str, *, chat_id: int = -1001, message_id: int = 9):
@@ -111,8 +124,16 @@ class FakeCommandEvent(FakeDirectEvent):
     pass
 
 
+class FakeClient:
+    def __init__(self, *, me_id: int) -> None:
+        self.me_id = me_id
+
+    async def get_me(self):
+        return types.SimpleNamespace(id=self.me_id)
+
+
 class RandomBenefitPluginTest(unittest.TestCase):
-    def _ctx(self, **overrides):
+    def _ctx(self, *, client=None, **overrides):
         config = {
             "start_command": "福利开启",
             "stop_command": "福利暂停",
@@ -123,13 +144,13 @@ class RandomBenefitPluginTest(unittest.TestCase):
             "default_enabled": True,
         }
         config.update(overrides)
-        return PluginContext(config=config)
+        return PluginContext(config=config, client=client)
 
     def test_config_schema_declares_allowed_peer_selector_and_preview(self) -> None:
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.4.0")
+        self.assertEqual(manifest["version"], "1.5.0")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertEqual(properties["start_command"]["default"], "福利开启")
@@ -200,6 +221,30 @@ class RandomBenefitPluginTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_event_bus_ignores_self_and_bot_messages(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx(chat_cooldown_seconds=0, user_cooldown_seconds=0)
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                self_actions = await plugin.on_event(
+                    ctx,
+                    _message_payload(sender_id=42, userbot_user_id=42, message_id=301),
+                )
+                bot_actions = await plugin.on_event(
+                    ctx,
+                    _message_payload(sender_id=77, sender_is_bot=True, message_id=302),
+                )
+                account_bot_payload = _message_payload(sender_id=88, message_id=303)
+                account_bot_payload["source_actor"] = {"user_id": 88, "type": "account_bot"}
+                account_bot_actions = await plugin.on_event(ctx, account_bot_payload)
+
+            self.assertEqual(self_actions, [])
+            self.assertEqual(bot_actions, [])
+            self.assertEqual(account_bot_actions, [])
+
+        asyncio.run(run_case())
+
     def test_reply_cooldown_blocks_repeated_trigger(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.RandomBenefitPlugin()
@@ -239,6 +284,23 @@ class RandomBenefitPluginTest(unittest.TestCase):
                 await plugin.on_direct_message(ctx, event)
 
             self.assertEqual(event.replies, ["送给 小明: +1-6666"])
+
+        asyncio.run(run_case())
+
+    def test_direct_message_ignores_self_and_bot_messages(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx(client=FakeClient(me_id=42), chat_cooldown_seconds=0, user_cooldown_seconds=0)
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                self_event = FakeDirectEvent(sender_id=42)
+                await plugin.on_direct_message(ctx, self_event)
+
+                bot_event = FakeDirectEvent(sender_id=77, bot=True)
+                await plugin.on_direct_message(ctx, bot_event)
+
+            self.assertEqual(self_event.replies, [])
+            self.assertEqual(bot_event.replies, [])
 
         asyncio.run(run_case())
 
