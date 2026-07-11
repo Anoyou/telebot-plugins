@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.4.0"
 
 REPLY_TEMPLATE_DEFAULT = "+1-6666"
 TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
@@ -68,12 +68,11 @@ CONFIG_SCHEMA = {
             "description": "随机命中后引用发言发送的文本。支持占位符：{sender}、{user_id}、{chat_id}、{message}。",
         },
         "trigger_probability": {
-            "type": "number",
+            "type": "string",
             "title": "随机回复概率",
-            "default": 0.05,
-            "minimum": 0,
-            "maximum": 1,
-            "description": "每条普通发言触发回复的概率，0 表示不自动回复，1 表示每条都回复。",
+            "default": "0.05",
+            "pattern": "^(0(\\.\\d+)?|1(\\.0+)?)$",
+            "description": "每条普通发言触发回复的概率，按 0 到 1 的小数填写；例如 0.09 表示 9%，0 表示不自动回复，1 表示每条都回复。",
         },
         "chat_cooldown_seconds": {
             "type": "integer",

@@ -107,6 +107,10 @@ class FakeDirectEvent:
         return types.SimpleNamespace(text=text, kwargs=kwargs)
 
 
+class FakeCommandEvent(FakeDirectEvent):
+    pass
+
+
 class RandomBenefitPluginTest(unittest.TestCase):
     def _ctx(self, **overrides):
         config = {
@@ -115,7 +119,7 @@ class RandomBenefitPluginTest(unittest.TestCase):
             "status_command": "福利状态",
             "allowed_chat_ids": [-1001],
             "reply_template": "送给 {sender}: +1-6666",
-            "trigger_probability": 1,
+            "trigger_probability": "1",
             "default_enabled": True,
         }
         config.update(overrides)
@@ -125,13 +129,15 @@ class RandomBenefitPluginTest(unittest.TestCase):
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.3.0")
+        self.assertEqual(manifest["version"], "1.4.0")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertEqual(properties["start_command"]["default"], "福利开启")
         self.assertEqual(properties["stop_command"]["default"], "福利暂停")
         self.assertEqual(properties["status_command"]["default"], "福利状态")
         self.assertTrue(properties["template_preview"]["readOnly"])
+        self.assertEqual(properties["trigger_probability"]["type"], "string")
+        self.assertEqual(properties["trigger_probability"]["default"], "0.05")
         self.assertEqual(properties["chat_cooldown_seconds"]["default"], 30)
         self.assertEqual(properties["user_cooldown_seconds"]["default"], 120)
         self.assertEqual(
@@ -208,6 +214,21 @@ class RandomBenefitPluginTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_decimal_probability_string_is_preserved_at_runtime(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx(trigger_probability="0.09", chat_cooldown_seconds=0, user_cooldown_seconds=0)
+
+            with patch.object(plugin_module.random, "random", return_value=0.08):
+                hit = await plugin.on_event(ctx, _message_payload(message_id=201))
+            with patch.object(plugin_module.random, "random", return_value=0.10):
+                miss = await plugin.on_event(ctx, _message_payload(message_id=202))
+
+            self.assertEqual(len(hit), 1)
+            self.assertEqual(miss, [])
+
+        asyncio.run(run_case())
+
     def test_direct_message_replies_through_live_event(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.RandomBenefitPlugin()
@@ -231,6 +252,18 @@ class RandomBenefitPluginTest(unittest.TestCase):
                 await plugin.on_direct_message(ctx, event)
 
             self.assertEqual(event.replies, [])
+
+        asyncio.run(run_case())
+
+    def test_legacy_command_accepts_extra_dispatch_arguments(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx()
+            event = FakeCommandEvent(text=",福利暂停")
+
+            await plugin._legacy_command(ctx, event, "arg1", "arg2", "arg3")
+
+            self.assertEqual(event.replies, ["随机福利已暂停。"])
 
         asyncio.run(run_case())
 

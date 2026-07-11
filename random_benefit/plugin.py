@@ -16,7 +16,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.3.0"
+PLUGIN_VERSION = "1.4.0"
 
 DEFAULT_START_COMMAND = "福利开启"
 DEFAULT_STOP_COMMAND = "福利暂停"
@@ -49,6 +49,14 @@ def _int_set(value: Any) -> set[int]:
 def _bounded_int(value: Any, *, minimum: int, maximum: int, default: int) -> int:
     try:
         number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, number))
+
+
+def _bounded_float(value: Any, *, minimum: float, maximum: float, default: float) -> float:
+    try:
+        number = float(value)
     except (TypeError, ValueError):
         return default
     return max(minimum, min(maximum, number))
@@ -222,6 +230,10 @@ def _event_chat_id(event: Any) -> int | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _event_command_name(event: Any) -> str:
+    return _command_name_from_text(_event_text(event))
 
 
 def _event_message_id(event: Any) -> int | None:
@@ -439,10 +451,12 @@ class RandomBenefitPlugin(Plugin):
         }
         self._allowed_chat_ids = _int_set(cfg.get("allowed_chat_ids"))
         self._reply_template = str(cfg.get("reply_template") or DEFAULT_REPLY_TEMPLATE)
-        try:
-            self._probability = max(0.0, min(1.0, float(cfg.get("trigger_probability", DEFAULT_PROBABILITY))))
-        except (TypeError, ValueError):
-            self._probability = DEFAULT_PROBABILITY
+        self._probability = _bounded_float(
+            cfg.get("trigger_probability", DEFAULT_PROBABILITY),
+            minimum=0.0,
+            maximum=1.0,
+            default=DEFAULT_PROBABILITY,
+        )
         self._chat_cooldown_seconds = _bounded_int(
             cfg.get("chat_cooldown_seconds", DEFAULT_CHAT_COOLDOWN_SECONDS),
             minimum=0,
@@ -557,6 +571,30 @@ class RandomBenefitPlugin(Plugin):
         except Exception:
             return self._reply_template
 
-    async def _legacy_command(self, ctx: PluginContext, event: Any) -> None:
+    async def _legacy_command(self, ctx: PluginContext, event: Any, *args: Any, **kwargs: Any) -> None:
         """兼容旧命令入口；新运行时优先使用 on_event。"""
+        self._reload_config(ctx)
+        chat_id = _event_chat_id(event)
+        if chat_id is None:
+            return None
+
+        command = _event_command_name(event)
+        message: str | None = None
+        if command == self._start_command:
+            if not self._chat_configured(chat_id):
+                message = self._not_configured_text()
+            else:
+                await self._set_active(ctx, chat_id, True)
+                message = "随机福利已开启。"
+        elif command == self._stop_command:
+            if not self._chat_configured(chat_id):
+                message = self._not_configured_text()
+            else:
+                await self._set_active(ctx, chat_id, False)
+                message = "随机福利已暂停。"
+        elif command == self._status_command:
+            message = await self._status_text(ctx, chat_id)
+
+        if message and hasattr(event, "reply"):
+            await event.reply(message)
         return None

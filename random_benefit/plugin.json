@@ -4,7 +4,7 @@
   "description": "监听指定群组发言，随机引用某条消息回复自定义福利语",
   "usage": "从配置页的已允许会话选择器中选择要纳入随机福利作用范围的群组。选中群组默认监听群友发言，并按概率随机引用其中一条消息回复自定义福利语；账号主人或授权管理员可发送独立配置的开启、暂停和状态指令控制当前群组。为防刷屏，命中回复后会进入全群冷却和同一用户冷却，冷却秒数设为 0 可关闭。",
   "author": "Anoyou",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "entry": "plugin.py",
   "category": "interactive",
   "min_telepilot_version": "0.33.0",
@@ -89,12 +89,11 @@
         "description": "随机命中后引用发言发送的文本。支持占位符：{sender}、{user_id}、{chat_id}、{message}。"
       },
       "trigger_probability": {
-        "type": "number",
+        "type": "string",
         "title": "随机回复概率",
-        "default": 0.05,
-        "minimum": 0,
-        "maximum": 1,
-        "description": "每条普通发言触发回复的概率，0 表示不自动回复，1 表示每条都回复。"
+        "default": "0.05",
+        "pattern": "^(0(\\.\\d+)?|1(\\.0+)?)$",
+        "description": "每条普通发言触发回复的概率，按 0 到 1 的小数填写；例如 0.09 表示 9%，0 表示不自动回复，1 表示每条都回复。"
       },
       "chat_cooldown_seconds": {
         "type": "integer",
