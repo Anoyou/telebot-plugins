@@ -1,7 +1,8 @@
 """随机福利插件。
 
-主路径使用 TelePilot Event Bus：命令事件控制当前群组开关，普通消息事件按概率返回
-标准 send_message action，由平台 MessageOps 负责投递。
+默认主路径使用 TelePilot Event Bus：命令事件控制当前群组开关，普通消息事件按概率
+返回标准 send_message action，由平台 MessageOps 负责投递。声明裸直通能力并在账号配置
+二次开启后，incoming userbot 消息也可通过 on_direct_message 低延时处理。
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.0"
 
 DEFAULT_COMMAND = "随机福利"
 DEFAULT_REPLY_TEMPLATE = "+1-6666"
@@ -198,6 +199,72 @@ def _send_action(
     return action
 
 
+def _event_text(event: Any) -> str:
+    return str(
+        getattr(event, "raw_text", None)
+        or getattr(event, "text", None)
+        or getattr(getattr(event, "message", None), "message", None)
+        or ""
+    )
+
+
+def _event_chat_id(event: Any) -> int | None:
+    for value in (getattr(event, "chat_id", None), getattr(getattr(event, "message", None), "chat_id", None)):
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _event_message_id(event: Any) -> int | None:
+    for value in (
+        getattr(event, "id", None),
+        getattr(event, "message_id", None),
+        getattr(getattr(event, "message", None), "id", None),
+    ):
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _event_sender_id(event: Any) -> int | None:
+    for value in (
+        getattr(event, "sender_id", None),
+        getattr(getattr(event, "message", None), "sender_id", None),
+    ):
+        try:
+            if value is not None:
+                return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+async def _event_sender_name(event: Any, sender_id: int | None) -> str:
+    try:
+        sender = await event.get_sender()
+    except Exception:
+        sender = None
+    for attr in ("first_name", "username", "title"):
+        value = getattr(sender, attr, None)
+        if value:
+            return str(value)
+    return str(sender_id) if sender_id is not None else "群友"
+
+
+async def _event_actor_is_bot(event: Any) -> bool:
+    try:
+        sender = await event.get_sender()
+    except Exception:
+        sender = None
+    return bool(getattr(sender, "bot", False) or getattr(sender, "is_bot", False))
+
+
 @register
 class RandomBenefitPlugin(Plugin):
     """监听指定群组发言，随机引用回复福利语。"""
@@ -237,6 +304,49 @@ class RandomBenefitPlugin(Plugin):
         if event_type != "message":
             return []
         return await self._handle_message(ctx, payload)
+
+    async def on_direct_message(self, ctx: PluginContext, event: Any) -> None:
+        """裸直通入口：收到 live Telethon event 后直接回复，不返回标准 action。"""
+        self._reload_config(ctx)
+        chat_id = _event_chat_id(event)
+        if chat_id is None or not self._chat_configured(chat_id):
+            return
+        if not await self._is_active(ctx, chat_id):
+            return
+        if self._probability <= 0:
+            return
+        if bool(getattr(event, "out", False) or getattr(event, "outgoing", False)):
+            return
+
+        text = _event_text(event)
+        if not text.strip() or text.lstrip().startswith(COMMAND_PREFIXES):
+            return
+        if await _event_actor_is_bot(event):
+            return
+        if random.random() >= self._probability:
+            return
+
+        sender_id = _event_sender_id(event)
+        reply_text = self._render_reply(
+            sender=await _event_sender_name(event, sender_id),
+            sender_id=sender_id,
+            chat_id=chat_id,
+            message=text,
+        )
+        if not reply_text.strip():
+            return
+
+        try:
+            await event.reply(reply_text)
+        except Exception as exc:  # noqa: BLE001
+            if ctx.log:
+                await ctx.log(
+                    "warning",
+                    "[random_benefit] 裸直通回复失败",
+                    chat_id=chat_id,
+                    message_id=_event_message_id(event),
+                    error=str(exc),
+                )
 
     async def _handle_command(self, ctx: PluginContext, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         chat_id = _payload_chat_id(payload)

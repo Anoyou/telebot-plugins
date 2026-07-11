@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.1.0"
 
 REPLY_TEMPLATE_DEFAULT = "+1-6666"
 TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
@@ -14,14 +14,14 @@ TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": "从当前账号的已允许会话中选择要开启随机福利的群组。选中群组默认开启监听，管理员可在群内发送 {prefix}{command} off 暂停、{prefix}{command} on 恢复、{prefix}{command} status 查看状态。插件会监听群友发言，并按配置概率随机引用其中一条消息回复自定义福利语。",
+    "x-usage-guide": "从当前账号的已允许会话中选择要开启随机福利的群组。选中群组默认开启监听，管理员可在群内发送 {prefix}{command} off 暂停、{prefix}{command} on 恢复、{prefix}{command} status 查看状态。插件会监听群友发言，并按配置概率随机引用其中一条消息回复自定义福利语。本版本声明 userbot incoming 裸直通能力；安装后还需要在账号配置里手动开启 direct_passthrough.enabled=true 才会调用 on_direct_message。",
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
             "type": "string",
             "title": "使用说明",
             "readOnly": True,
-            "default": "1. 在“目标群组”中从已允许会话选择需要开启的群组。\n2. 群组默认开启随机福利；管理员可发送 {prefix}{command} off 暂停，发送 {prefix}{command} on 恢复。\n3. 插件会随机引用群友发言回复福利语，默认回复：+1-6666。",
+            "default": "1. 在“目标群组”中从已允许会话选择需要开启的群组。\n2. 群组默认开启随机福利；管理员可发送 {prefix}{command} off 暂停，发送 {prefix}{command} on 恢复。\n3. 插件会随机引用群友发言回复福利语，默认回复：+1-6666。\n4. 要测试裸直通，请在账号配置里额外开启 direct_passthrough.enabled=true。",
             "description": "只读说明；实际系统前缀由 TelePilot 当前命令前缀决定。",
         },
         "command": {
@@ -92,7 +92,14 @@ EVENT_SUBSCRIPTIONS = [
     },
 ]
 
-CAPABILITIES = {}
+CAPABILITIES = {
+    "telegram_direct_passthrough": {
+        "enabled": True,
+        "reason": "用于测试 TelePilot userbot incoming 裸直通链路，并在低延时路径随机引用群友发言回复福利语。",
+        "sources": ["userbot"],
+        "directions": ["incoming"],
+    }
+}
 
 MANIFEST = Manifest(
     key=PLUGIN_KEY,

@@ -78,6 +78,34 @@ def _command_payload(text: str, *, chat_id: int = -1001, message_id: int = 9):
     }
 
 
+class FakeDirectEvent:
+    def __init__(
+        self,
+        *,
+        text: str = "今天真不错",
+        chat_id: int = -1001,
+        message_id: int = 66,
+        sender_id: int = 42,
+        outgoing: bool = False,
+        bot: bool = False,
+    ) -> None:
+        self.raw_text = text
+        self.text = text
+        self.chat_id = chat_id
+        self.id = message_id
+        self.sender_id = sender_id
+        self.outgoing = outgoing
+        self.replies: list[str] = []
+        self.sender = types.SimpleNamespace(first_name="小明", username="", bot=bot, is_bot=bot)
+
+    async def get_sender(self):
+        return self.sender
+
+    async def reply(self, text: str, **kwargs):
+        self.replies.append(text)
+        return types.SimpleNamespace(text=text, kwargs=kwargs)
+
+
 class RandomBenefitPluginTest(unittest.TestCase):
     def _ctx(self, **overrides):
         config = {
@@ -94,11 +122,15 @@ class RandomBenefitPluginTest(unittest.TestCase):
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.0.0")
+        self.assertEqual(manifest["version"], "1.1.0")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertTrue(properties["template_preview"]["readOnly"])
         self.assertIn("x-usage-guide", manifest["config_schema"])
+        passthrough = manifest["capabilities"]["telegram_direct_passthrough"]
+        self.assertTrue(passthrough["enabled"])
+        self.assertEqual(passthrough["sources"], ["userbot"])
+        self.assertEqual(passthrough["directions"], ["incoming"])
 
     def test_message_randomly_replies_to_allowed_active_chat(self) -> None:
         async def run_case() -> None:
@@ -147,6 +179,32 @@ class RandomBenefitPluginTest(unittest.TestCase):
             with patch.object(plugin_module.random, "random", return_value=0):
                 actions = await plugin.on_event(ctx, _message_payload(chat_id=-2002))
             self.assertEqual(actions, [])
+
+        asyncio.run(run_case())
+
+    def test_direct_message_replies_through_live_event(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx()
+            event = FakeDirectEvent()
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                await plugin.on_direct_message(ctx, event)
+
+            self.assertEqual(event.replies, ["送给 小明: +1-6666"])
+
+        asyncio.run(run_case())
+
+    def test_direct_message_ignores_outgoing_commands(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx()
+            event = FakeDirectEvent(text=",福利 off", outgoing=True)
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                await plugin.on_direct_message(ctx, event)
+
+            self.assertEqual(event.replies, [])
 
         asyncio.run(run_case())
 
