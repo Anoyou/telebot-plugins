@@ -150,15 +150,17 @@ class RandomBenefitPluginTest(unittest.TestCase):
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.5.0")
+        self.assertEqual(manifest["version"], "1.5.1")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertEqual(properties["start_command"]["default"], "福利开启")
         self.assertEqual(properties["stop_command"]["default"], "福利暂停")
         self.assertEqual(properties["status_command"]["default"], "福利状态")
         self.assertTrue(properties["template_preview"]["readOnly"])
-        self.assertEqual(properties["trigger_probability"]["type"], "string")
+        self.assertEqual(properties["trigger_probability"]["type"], ["string", "number"])
         self.assertEqual(properties["trigger_probability"]["default"], "0.05")
+        self.assertEqual(properties["trigger_probability"]["minimum"], 0)
+        self.assertEqual(properties["trigger_probability"]["maximum"], 1)
         self.assertEqual(properties["chat_cooldown_seconds"]["default"], 30)
         self.assertEqual(properties["user_cooldown_seconds"]["default"], 120)
         self.assertEqual(
