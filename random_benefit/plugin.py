@@ -576,14 +576,14 @@ class RandomBenefitPlugin(Plugin):
         return int(chat_id) in self._allowed_chat_ids
 
     def _state_key(self, ctx: PluginContext, chat_id: int) -> str:
-        account_id = int(getattr(ctx, "account_id", 0) or 0)
-        return f"random_benefit:active:{account_id}:{int(chat_id)}"
+        del ctx
+        return f"active:{int(chat_id)}"
 
     def _cooldown_key(self, ctx: PluginContext, scope: str, chat_id: int, sender_id: int | None = None) -> str:
-        account_id = int(getattr(ctx, "account_id", 0) or 0)
+        del ctx
         if scope == "user":
-            return f"random_benefit:cooldown:user:{account_id}:{int(chat_id)}:{int(sender_id or 0)}"
-        return f"random_benefit:cooldown:chat:{account_id}:{int(chat_id)}"
+            return f"cooldown:user:{int(chat_id)}:{int(sender_id or 0)}"
+        return f"cooldown:chat:{int(chat_id)}"
 
     async def _is_active(self, ctx: PluginContext, chat_id: int) -> bool:
         if not self._chat_configured(chat_id):

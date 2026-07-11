@@ -151,7 +151,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(start_actions[0]["parse_mode"], "html")
             self.assertEqual(start_actions[0]["send_via"], "interaction_bot")
             self.assertEqual(start_actions[0]["send_via_options"], ["interaction_bot", "userbot_reply"])
-            self.assertEqual(start_actions[0]["save_message_id_key"], "dice_grid_hunt:1:-100123:round")
+            self.assertEqual(start_actions[0]["save_message_id_key"], "round:-100123")
             self.assertIn("九宫格竞猜v1.1.28 开始", start_actions[0]["caption"])
             self.assertEqual(start_actions[1]["type"], "update_session")
             state = dict(start_actions[1]["data"])
@@ -166,7 +166,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(answer_actions[0]["chat_id"], -100123)
             self.assertNotIn("message_id", answer_actions[0])
             self.assertNotIn("edit_message_id", answer_actions[0])
-            self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
+            self.assertEqual(answer_actions[0]["message_id_key"], "round:-100123")
             self.assertEqual(answer_actions[0]["parse_mode"], "html")
             self.assertEqual(answer_actions[0]["send_via"], "interaction_bot")
             self.assertEqual(answer_actions[0]["send_via_options"], ["interaction_bot", "userbot_reply"])
@@ -238,7 +238,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             )
 
             self.assertEqual(answer_actions[0]["type"], "edit_caption")
-            self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
+            self.assertEqual(answer_actions[0]["message_id_key"], "round:-100123")
             self.assertNotIn("message_id", answer_actions[0])
             self.assertEqual(answer_actions[1]["type"], "payout")
             self.assertEqual(answer_actions[1]["reply_to_message_id"], 100)
@@ -273,7 +273,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
             self.assertEqual(answer_actions[0]["type"], "edit_caption")
             self.assertNotIn("message_id", answer_actions[0])
-            self.assertEqual(answer_actions[0]["message_id_key"], "dice_grid_hunt:1:-100123:round")
+            self.assertEqual(answer_actions[0]["message_id_key"], "round:-100123")
 
         asyncio.run(scenario())
 

@@ -22,8 +22,8 @@ TOTAL_CHAMBER = 6
 JOIN_TIMEOUT = 60
 TURN_TIMEOUT = 30
 COURAGE_MULTIPLIER: dict[int, float] = {0: 1.00, 1: 1.10, 2: 1.25, 3: 1.45, 4: 1.70}
-REDIS_MSG_KEY_PREFIX = "dead_revolver:msg:"
-REDIS_GUIDANCE_KEY_PREFIX = "dead_revolver:guidance:"
+REDIS_MSG_KEY_PREFIX = "msg:"
+REDIS_GUIDANCE_KEY_PREFIX = "guidance:"
 DEFAULT_START_KEYWORD = "开始挑战"
 LEGACY_START_COMMAND = "dr_start"
 
@@ -48,11 +48,11 @@ def _next_player_id(players: list[Player]) -> int:
 
 
 def _interaction_msg_key(account_id: int, chat_id: int) -> str:
-    return f"{REDIS_MSG_KEY_PREFIX}{account_id}:{chat_id}"
+    return f"{REDIS_MSG_KEY_PREFIX}{chat_id}"
 
 
 def _guidance_msg_key(account_id: int, chat_id: int) -> str:
-    return f"{REDIS_GUIDANCE_KEY_PREFIX}{account_id}:{chat_id}"
+    return f"{REDIS_GUIDANCE_KEY_PREFIX}{chat_id}"
 
 
 def _int_or_zero(val: Any) -> int:

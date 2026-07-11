@@ -2987,7 +2987,7 @@ class TenHalfInteractionTest(unittest.TestCase):
             self.assertEqual(top_up["reply_to_message_id"], 600)
             self.assertEqual(top_up["reply_anchor_missing_text"], "无法自动补扣庄家，请人工处理。")
             self.assertFalse(top_up["suppress_reply_anchor_missing_notice"])
-            self.assertTrue(top_up["save_message_id_key"].startswith("ten_half:transient_userbot:1:-100123:dealer_topup_999:"))
+            self.assertTrue(top_up["save_message_id_key"].startswith("transient_userbot:-100123:dealer_topup_999:"))
             self.assertEqual([action["amount"] for action in rewards], [185000, 95000])
             self.assertEqual([action["reply_to_user_id"] for action in rewards], [111, 222])
             self.assertEqual(result["result"]["dealer_top_up"], 150000)

@@ -77,12 +77,13 @@ def _receiver_label_from_entity(entity: Any, *, fallback: str = "") -> str:
 # ─────────────────────────────────────────────────────
 SUITS = ["♠️", "♥️", "♦️", "♣️"]
 RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
-REDIS_MAIN_MSG_KEY_PREFIX = "ten_half:main:"
-REDIS_JOIN_NOTICE_KEY_PREFIX = "ten_half:join_notice:"
-REDIS_SETTLEMENT_MSG_KEY_PREFIX = "ten_half:settlement:"
-REDIS_REWARD_MSG_KEY_PREFIX = "ten_half:reward:"
-REDIS_LOBBY_STATE_KEY_PREFIX = "ten_half:lobby_state:"
-REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "ten_half:transient_userbot:"
+# 相对 key：account 由 PluginRedisFacade 命名空间承载。
+REDIS_MAIN_MSG_KEY_PREFIX = "main:"
+REDIS_JOIN_NOTICE_KEY_PREFIX = "join_notice:"
+REDIS_SETTLEMENT_MSG_KEY_PREFIX = "settlement:"
+REDIS_REWARD_MSG_KEY_PREFIX = "reward:"
+REDIS_LOBBY_STATE_KEY_PREFIX = "lobby_state:"
+REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
 PLUGIN_VERSION = "0.4.15"
@@ -129,32 +130,39 @@ def _fv(v: float) -> str:
 
 
 def _main_msg_key(account_id: int, chat_id: int) -> str:
-    return f"{REDIS_MAIN_MSG_KEY_PREFIX}{account_id}:{chat_id}"
+    del account_id
+    return f"{REDIS_MAIN_MSG_KEY_PREFIX}{chat_id}"
 
 
 def _join_notice_key(account_id: int, chat_id: int) -> str:
-    return f"{REDIS_JOIN_NOTICE_KEY_PREFIX}{account_id}:{chat_id}"
+    del account_id
+    return f"{REDIS_JOIN_NOTICE_KEY_PREFIX}{chat_id}"
 
 
 def _settlement_msg_key(account_id: int, chat_id: int, game_id: str) -> str:
-    return f"{REDIS_SETTLEMENT_MSG_KEY_PREFIX}{account_id}:{chat_id}:{game_id}"
+    del account_id
+    return f"{REDIS_SETTLEMENT_MSG_KEY_PREFIX}{chat_id}:{game_id}"
 
 
 def _reward_msg_key(account_id: int, chat_id: int, game_id: str, user_id: int) -> str:
-    return f"{REDIS_REWARD_MSG_KEY_PREFIX}{account_id}:{chat_id}:{game_id}:{user_id}"
+    del account_id
+    return f"{REDIS_REWARD_MSG_KEY_PREFIX}{chat_id}:{game_id}:{user_id}"
 
 
 def _transient_userbot_msg_key(account_id: int, chat_id: int, label: str) -> str:
+    del account_id
     safe_label = "".join(ch for ch in str(label or "msg") if ch.isalnum() or ch in "_-")[:32] or "msg"
-    return f"{REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX}{account_id}:{chat_id}:{safe_label}:{secrets.token_hex(3)}"
+    return f"{REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX}{chat_id}:{safe_label}:{secrets.token_hex(3)}"
 
 
 def _lobby_state_key(account_id: int, chat_id: int) -> str:
-    return f"{REDIS_LOBBY_STATE_KEY_PREFIX}{account_id}:{chat_id}"
+    del account_id
+    return f"{REDIS_LOBBY_STATE_KEY_PREFIX}{chat_id}"
 
 
 def _join_mode_key(account_id: int) -> str:
-    return f"ten_half:join_mode:{account_id}"
+    del account_id
+    return "join_mode"
 
 
 def _normalize_command_name(raw: Any) -> str:

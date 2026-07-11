@@ -998,10 +998,12 @@ class LuckyRedpackPlugin(Plugin):
         return active
 
     def _state_key(self, account_id: int, chat_id: int) -> str:
-        return f"lucky_redpack:{int(account_id)}:{int(chat_id)}:packs"
+        del account_id
+        return f"packs:{int(chat_id)}"
 
     def _account_state_key(self, account_id: int) -> str:
-        return f"lucky_redpack:{int(account_id)}:packs"
+        del account_id
+        return "packs:all"
 
     def _state_dir(self) -> Path:
         configured = str(os.environ.get(STATE_DIR_ENV) or "").strip()

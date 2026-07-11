@@ -984,7 +984,8 @@ class DiceGridHuntPlugin(Plugin):
         return parsed or None
 
     def _interaction_message_key(self, account_id: int, chat_id: int) -> str:
-        return f"dice_grid_hunt:{int(account_id)}:{int(chat_id)}:round"
+        del account_id
+        return f"round:{int(chat_id)}"
 
     def _positive_int(self, value: Any, default: int, *, minimum: int, maximum: int | None = None) -> int:
         try:

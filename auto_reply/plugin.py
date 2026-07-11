@@ -428,8 +428,8 @@ class AutoReplyPlugin(Plugin):
             keys.append(_chat_cooldown_key(ctx.account_id, rule.id, chat_id))
             keys.append(_user_cooldown_key(ctx.account_id, rule.id, chat_id, target_id))
             keys.append(_daily_limit_key(ctx.account_id, rule.id, chat_id, target_id))
-            keys.append(f"ar:pending:{ctx.account_id}:{rule.id}:chat:{chat_id or 0}")
-            keys.append(f"ar:pending:{ctx.account_id}:{rule.id}:user:{chat_id or 0}:{target_id or 0}")
+            keys.append(f"pending:{rule.id}:chat:{chat_id or 0}")
+            keys.append(f"pending:{rule.id}:user:{chat_id or 0}:{target_id or 0}")
         deleted = await _redis_delete_keys(ctx.redis, keys)
         scope = f"规则 {rule_filter}" if rule_filter else "当前会话全部自动回复规则"
         await event.edit(
@@ -822,18 +822,22 @@ def _event_sender_id(event: Any) -> int | None:
 
 
 def _user_cooldown_key(account_id: int, rule_id: int, chat_id: int | None, sender_id: int | None) -> str:
-    return f"ar:cool:{account_id}:{rule_id}:user:{chat_id or 0}:{sender_id or 0}"
+    # account_id 由 PluginRedisFacade 命名空间承载。
+    del account_id
+    return f"cool:{rule_id}:user:{chat_id or 0}:{sender_id or 0}"
 
 
 def _cooldown_key(account_id: int, rule_id: int, chat_id: int | None, sender_id: int | None, cfg: dict[str, Any]) -> str:
     scope = str(cfg.get("cooldown_scope") or "chat")
     if scope == "user":
         return _user_cooldown_key(account_id, rule_id, chat_id, sender_id)
-    return f"ar:cool:{account_id}:{rule_id}:chat:{chat_id or 0}"
+    del account_id
+    return f"cool:{rule_id}:chat:{chat_id or 0}"
 
 
 def _chat_cooldown_key(account_id: int, rule_id: int, chat_id: int | None) -> str:
-    return f"ar:cool:{account_id}:{rule_id}:chat:{chat_id or 0}"
+    del account_id
+    return f"cool:{rule_id}:chat:{chat_id or 0}"
 
 
 def _usage_pending_key(
@@ -844,10 +848,11 @@ def _usage_pending_key(
     cfg: dict[str, Any],
     cooldown_seconds: int,
 ) -> str:
+    del account_id
     scope = str(cfg.get("cooldown_scope") or "chat")
     if cooldown_seconds > 0 and scope != "user":
-        return f"ar:pending:{account_id}:{rule_id}:chat:{chat_id or 0}"
-    return f"ar:pending:{account_id}:{rule_id}:user:{chat_id or 0}:{sender_id or 0}"
+        return f"pending:{rule_id}:chat:{chat_id or 0}"
+    return f"pending:{rule_id}:user:{chat_id or 0}:{sender_id or 0}"
 
 
 def _usage_pending_ttl(cooldown_seconds: int) -> int:
@@ -900,8 +905,9 @@ def _parse_duration_seconds(value: Any, *, default: int = 0) -> int:
 
 
 def _daily_limit_key(account_id: int, rule_id: int, chat_id: int | None, sender_id: int | None) -> str:
+    del account_id
     day = datetime.now().strftime("%Y%m%d")
-    return f"ar:quota:{account_id}:{rule_id}:user_day:{day}:{chat_id or 0}:{sender_id or 0}"
+    return f"quota:{rule_id}:user_day:{day}:{chat_id or 0}:{sender_id or 0}"
 
 
 def _seconds_until_next_day() -> int:

@@ -27,8 +27,8 @@ DEFAULT_COMMAND = "24d"
 DEFAULT_TIMEOUT = 500
 MIN_TIMEOUT = 30
 MAX_TIMEOUT = 3600
-INTERACTION_GAME_PREFIX = "account_bot:game24:"
-INTERACTION_GAME_CLAIM_PREFIX = "account_bot:game24_claim:"
+INTERACTION_GAME_PREFIX = "game:"
+INTERACTION_GAME_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
 PLUGIN_VERSION = "1.1.9"
 
@@ -339,19 +339,17 @@ def _interaction_payout_info(payload: dict[str, Any]) -> tuple[str, str]:
 
 
 def _interaction_game_key(account_id: int, chat_id: int) -> str:
-    return f"{INTERACTION_GAME_PREFIX}{int(account_id)}:{int(chat_id)}"
+    # account_id 由 PluginRedisFacade 命名空间承载，相对 key 仅保留 chat 维度。
+    del account_id
+    return f"{INTERACTION_GAME_PREFIX}{int(chat_id)}"
 
 
 def _interaction_claim_key(state: InteractionGameState) -> str:
-    return f"{INTERACTION_GAME_CLAIM_PREFIX}{state.account_id}:{state.chat_id}:{state.game_id}"
+    return f"{INTERACTION_GAME_CLAIM_PREFIX}{state.chat_id}:{state.game_id}"
 
 
 def _interaction_message_key(state: InteractionGameState) -> str:
-    return f"game24:{state.account_id}:{state.chat_id}:{state.game_id}:question"
-
-
-def _saved_message_redis_key(account_id: int, save_key: str) -> str:
-    return f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(account_id)}:{save_key}"
+    return f"question:{state.chat_id}:{state.game_id}"
 
 
 def _interaction_state_from_payload(payload: Any) -> InteractionGameState | None:
@@ -799,7 +797,9 @@ class Game24Plugin(Plugin):
             return None
         save_key = _interaction_message_key(state)
         try:
-            raw = await ctx.redis.get(_saved_message_redis_key(state.account_id, save_key))
+            # 平台 save_message_id 落在 tp:msgid:{aid}:{key}；builtin 裸 Redis 可直读。
+            # facade 命名空间下再尝试相对 key（兼容测试/自写）。
+            raw = await ctx.redis.get(f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(state.account_id)}:{save_key}")
             if raw is None:
                 raw = await ctx.redis.get(save_key)
         except Exception:

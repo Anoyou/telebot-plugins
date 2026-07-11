@@ -514,7 +514,8 @@ def _result_action(success: bool, result: dict[str, Any] | None = None, settleme
 
 
 def _game_key(account_id: int, chat_id: int) -> str:
-    return f"quick_qa:game:{account_id}:{chat_id}"
+    del account_id
+    return f"game:{chat_id}"
 
 
 def _kb_id(url: str, title: str) -> str:
@@ -819,12 +820,12 @@ class QuickQAPlugin(Plugin):
 
     def _game_message_key(self, game: QuickQAGame, label: str) -> str:
         game.message_seq += 1
-        key = f"quick_qa:{game.account_id}:{game.chat_id}:{game.game_id}:{label}:{game.message_seq}"
+        key = f"msg:{game.chat_id}:{game.game_id}:{label}:{game.message_seq}"
         game.tracked_message_keys.append(key)
         return key
 
     def _lobby_message_key(self, game: QuickQAGame) -> str:
-        key = f"quick_qa:{game.account_id}:{game.chat_id}:{game.game_id}:lobby"
+        key = f"lobby:{game.chat_id}:{game.game_id}"
         if key not in game.tracked_message_keys:
             game.tracked_message_keys.append(key)
         return key

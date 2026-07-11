@@ -12,8 +12,8 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 from app.worker.plugins.events import event_from_interaction_payload
 
-MATH10_GAME_PREFIX = "account_bot:math10:"
-MATH10_CLAIM_PREFIX = "account_bot:math10_claim:"
+MATH10_GAME_PREFIX = "game:"
+MATH10_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
 PLUGIN_VERSION = "1.0.9"
 DEFAULT_PRIZE = 123
@@ -71,19 +71,17 @@ def _ttl_from_payload(payload: dict[str, Any]) -> int:
 
 
 def _game_key(account_id: int, chat_id: int) -> str:
-    return f"{MATH10_GAME_PREFIX}{int(account_id)}:{int(chat_id)}"
+    # account_id 由 PluginRedisFacade 命名空间承载，相对 key 仅保留 chat 维度。
+    del account_id
+    return f"{MATH10_GAME_PREFIX}{int(chat_id)}"
 
 
 def _claim_key(state: Math10GameState) -> str:
-    return f"{MATH10_CLAIM_PREFIX}{state.account_id}:{state.chat_id}:{state.game_id}"
+    return f"{MATH10_CLAIM_PREFIX}{state.chat_id}:{state.game_id}"
 
 
 def _question_message_key(state: Math10GameState) -> str:
-    return f"math10:{state.account_id}:{state.chat_id}:{state.game_id}:question"
-
-
-def _saved_message_redis_key(account_id: int, save_key: str) -> str:
-    return f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(account_id)}:{save_key}"
+    return f"question:{state.chat_id}:{state.game_id}"
 
 
 def _state_from_payload(payload: Any) -> Math10GameState | None:
@@ -483,7 +481,9 @@ class Math10Plugin(Plugin):
             return None
         save_key = _question_message_key(state)
         try:
-            raw = await ctx.redis.get(_saved_message_redis_key(state.account_id, save_key))
+            # 平台 save_message_id 落在 tp:msgid:{aid}:{key}；builtin 裸 Redis 可直读。
+            # facade 命名空间下再尝试相对 key（兼容测试/自写）。
+            raw = await ctx.redis.get(f"{MESSAGE_ID_NAMESPACE_PREFIX}:{int(state.account_id)}:{save_key}")
             if raw is None:
                 raw = await ctx.redis.get(save_key)
         except Exception:

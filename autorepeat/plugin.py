@@ -72,7 +72,7 @@ def _content_key(text: str) -> str:
 
 # ─── Redis 键名 ─────────────────────────────────────────
 
-_RK_DAILY = "autorepeat:daily:{aid}:{cid}"  # SET, TTL 24h
+_RK_DAILY = "daily:{cid}"  # SET, TTL 24h
 
 
 # ─── 帮助文本 ───────────────────────────────────────────
@@ -264,15 +264,13 @@ class AutoRepeatPlugin(Plugin):
     ) -> bool:
         """检查每日去重并标记。返回 True 表示可以复读，False 表示今日已复读。"""
         if ctx.redis:
-            daily_key = _RK_DAILY.format(aid=ctx.account_id, cid=chat_id)
+            daily_key = _RK_DAILY.format(cid=chat_id)
             already = await ctx.redis.sismember(daily_key, content_key)
             if already:
                 return False
             # 标记为已复读
-            pipe = ctx.redis.pipeline()
-            pipe.sadd(daily_key, content_key)
-            pipe.expire(daily_key, 86400)  # 24h 自动过期
-            await pipe.execute()
+            await ctx.redis.sadd(daily_key, content_key)
+            await ctx.redis.expire(daily_key, 86400)  # 24h 自动过期
             return True
 
         # Redis 不可用时用内存回退

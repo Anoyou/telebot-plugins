@@ -1042,7 +1042,7 @@ class PTPromotePlugin(Plugin):
         return {"success": True}
 
     def _torrent_guard_keys(self, ctx: PluginContext, torrent_id: str) -> tuple[str, str]:
-        base = f"pt_promote:{ctx.account_id}:{torrent_id}"
+        base = f"torrent:{torrent_id}"
         return f"{base}:lock", f"{base}:cooldown"
 
     async def _claim_torrent_guard(self, ctx: PluginContext, torrent_id: str) -> dict[str, Any]:
