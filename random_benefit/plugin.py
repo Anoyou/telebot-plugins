@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import random
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -16,11 +17,13 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 
 DEFAULT_COMMAND = "随机福利"
 DEFAULT_REPLY_TEMPLATE = "+1-6666"
 DEFAULT_PROBABILITY = 0.05
+DEFAULT_CHAT_COOLDOWN_SECONDS = 30
+DEFAULT_USER_COOLDOWN_SECONDS = 120
 
 COMMAND_ON = {"on", "start", "enable", "开启", "启动", "恢复"}
 COMMAND_OFF = {"off", "stop", "disable", "pause", "暂停", "关闭", "停止"}
@@ -44,6 +47,14 @@ def _int_set(value: Any) -> set[int]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _bounded_int(value: Any, *, minimum: int, maximum: int, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, number))
 
 
 def _as_mapping(value: Any) -> Mapping[str, Any]:
@@ -280,8 +291,11 @@ class RandomBenefitPlugin(Plugin):
         self._allowed_chat_ids: set[int] = set()
         self._reply_template = DEFAULT_REPLY_TEMPLATE
         self._probability = DEFAULT_PROBABILITY
+        self._chat_cooldown_seconds = DEFAULT_CHAT_COOLDOWN_SECONDS
+        self._user_cooldown_seconds = DEFAULT_USER_COOLDOWN_SECONDS
         self._default_enabled = True
         self._active_fallback: dict[tuple[int, int], bool] = {}
+        self._cooldown_fallback: dict[str, float] = {}
         self.commands = {self._command: self._legacy_command}
 
     async def on_startup(self, ctx: PluginContext) -> None:
@@ -295,6 +309,7 @@ class RandomBenefitPlugin(Plugin):
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         self._active_fallback.clear()
+        self._cooldown_fallback.clear()
 
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
         self._reload_config(ctx)
@@ -323,10 +338,12 @@ class RandomBenefitPlugin(Plugin):
             return
         if await _event_actor_is_bot(event):
             return
+        sender_id = _event_sender_id(event)
+        if await self._in_reply_cooldown(ctx, chat_id, sender_id):
+            return
         if random.random() >= self._probability:
             return
 
-        sender_id = _event_sender_id(event)
         reply_text = self._render_reply(
             sender=await _event_sender_name(event, sender_id),
             sender_id=sender_id,
@@ -338,6 +355,7 @@ class RandomBenefitPlugin(Plugin):
 
         try:
             await event.reply(reply_text)
+            await self._mark_reply_cooldown(ctx, chat_id, sender_id)
         except Exception as exc:  # noqa: BLE001
             if ctx.log:
                 await ctx.log(
@@ -389,10 +407,12 @@ class RandomBenefitPlugin(Plugin):
         text = _payload_text(payload)
         if not text.strip() or text.lstrip().startswith(COMMAND_PREFIXES):
             return []
+        sender_id = _payload_sender_id(payload)
+        if await self._in_reply_cooldown(ctx, chat_id, sender_id):
+            return []
         if random.random() >= self._probability:
             return []
 
-        sender_id = _payload_sender_id(payload)
         reply_text = self._render_reply(
             sender=_payload_sender_name(payload, sender_id),
             sender_id=sender_id,
@@ -401,6 +421,7 @@ class RandomBenefitPlugin(Plugin):
         )
         if not reply_text.strip():
             return []
+        await self._mark_reply_cooldown(ctx, chat_id, sender_id)
         return [
             _send_action(
                 reply_text,
@@ -420,6 +441,18 @@ class RandomBenefitPlugin(Plugin):
             self._probability = max(0.0, min(1.0, float(cfg.get("trigger_probability", DEFAULT_PROBABILITY))))
         except (TypeError, ValueError):
             self._probability = DEFAULT_PROBABILITY
+        self._chat_cooldown_seconds = _bounded_int(
+            cfg.get("chat_cooldown_seconds", DEFAULT_CHAT_COOLDOWN_SECONDS),
+            minimum=0,
+            maximum=86400,
+            default=DEFAULT_CHAT_COOLDOWN_SECONDS,
+        )
+        self._user_cooldown_seconds = _bounded_int(
+            cfg.get("user_cooldown_seconds", DEFAULT_USER_COOLDOWN_SECONDS),
+            minimum=0,
+            maximum=86400,
+            default=DEFAULT_USER_COOLDOWN_SECONDS,
+        )
         self._default_enabled = bool(cfg.get("default_enabled", True))
 
     def _chat_configured(self, chat_id: int) -> bool:
@@ -428,6 +461,12 @@ class RandomBenefitPlugin(Plugin):
     def _state_key(self, ctx: PluginContext, chat_id: int) -> str:
         account_id = int(getattr(ctx, "account_id", 0) or 0)
         return f"random_benefit:active:{account_id}:{int(chat_id)}"
+
+    def _cooldown_key(self, ctx: PluginContext, scope: str, chat_id: int, sender_id: int | None = None) -> str:
+        account_id = int(getattr(ctx, "account_id", 0) or 0)
+        if scope == "user":
+            return f"random_benefit:cooldown:user:{account_id}:{int(chat_id)}:{int(sender_id or 0)}"
+        return f"random_benefit:cooldown:chat:{account_id}:{int(chat_id)}"
 
     async def _is_active(self, ctx: PluginContext, chat_id: int) -> bool:
         if not self._chat_configured(chat_id):
@@ -449,12 +488,56 @@ class RandomBenefitPlugin(Plugin):
         if redis is not None:
             await redis.set(self._state_key(ctx, chat_id), "1" if active else "0")
 
+    async def _in_reply_cooldown(self, ctx: PluginContext, chat_id: int, sender_id: int | None) -> bool:
+        keys: list[str] = []
+        if self._chat_cooldown_seconds > 0:
+            keys.append(self._cooldown_key(ctx, "chat", chat_id))
+        if self._user_cooldown_seconds > 0 and sender_id is not None:
+            keys.append(self._cooldown_key(ctx, "user", chat_id, sender_id))
+        if not keys:
+            return False
+
+        redis = getattr(ctx, "redis", None)
+        if redis is not None:
+            for key in keys:
+                if await redis.get(key) is not None:
+                    return True
+            return False
+
+        now = time.time()
+        expired = [key for key, until in self._cooldown_fallback.items() if until <= now]
+        for key in expired:
+            self._cooldown_fallback.pop(key, None)
+        return any(key in self._cooldown_fallback for key in keys)
+
+    async def _mark_reply_cooldown(self, ctx: PluginContext, chat_id: int, sender_id: int | None) -> None:
+        entries: list[tuple[str, int]] = []
+        if self._chat_cooldown_seconds > 0:
+            entries.append((self._cooldown_key(ctx, "chat", chat_id), self._chat_cooldown_seconds))
+        if self._user_cooldown_seconds > 0 and sender_id is not None:
+            entries.append((self._cooldown_key(ctx, "user", chat_id, sender_id), self._user_cooldown_seconds))
+        if not entries:
+            return
+
+        redis = getattr(ctx, "redis", None)
+        if redis is not None:
+            for key, ttl in entries:
+                await redis.set(key, "1", ex=int(ttl))
+            return
+
+        now = time.time()
+        for key, ttl in entries:
+            self._cooldown_fallback[key] = now + float(ttl)
+
     async def _status_text(self, ctx: PluginContext, chat_id: int) -> str:
         if not self._chat_configured(chat_id):
             return self._not_configured_text()
         active = await self._is_active(ctx, chat_id)
         status = "开启" if active else "暂停"
-        return f"当前群组随机福利：{status}；随机回复概率：{self._probability:g}。"
+        return (
+            f"当前群组随机福利：{status}；随机回复概率：{self._probability:g}；"
+            f"全群冷却：{self._chat_cooldown_seconds}s；同用户冷却：{self._user_cooldown_seconds}s。"
+        )
 
     def _help_text(self) -> str:
         prefix = current_command_prefix(fallback=",")

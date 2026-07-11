@@ -122,10 +122,12 @@ class RandomBenefitPluginTest(unittest.TestCase):
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.1.0")
+        self.assertEqual(manifest["version"], "1.2.0")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertTrue(properties["template_preview"]["readOnly"])
+        self.assertEqual(properties["chat_cooldown_seconds"]["default"], 30)
+        self.assertEqual(properties["user_cooldown_seconds"]["default"], 120)
         self.assertIn("x-usage-guide", manifest["config_schema"])
         passthrough = manifest["capabilities"]["telegram_direct_passthrough"]
         self.assertTrue(passthrough["enabled"])
@@ -179,6 +181,20 @@ class RandomBenefitPluginTest(unittest.TestCase):
             with patch.object(plugin_module.random, "random", return_value=0):
                 actions = await plugin.on_event(ctx, _message_payload(chat_id=-2002))
             self.assertEqual(actions, [])
+
+        asyncio.run(run_case())
+
+    def test_reply_cooldown_blocks_repeated_trigger(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx(chat_cooldown_seconds=30, user_cooldown_seconds=120)
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                first = await plugin.on_event(ctx, _message_payload(message_id=101))
+                second = await plugin.on_event(ctx, _message_payload(message_id=102))
+
+            self.assertEqual(len(first), 1)
+            self.assertEqual(second, [])
 
         asyncio.run(run_case())
 

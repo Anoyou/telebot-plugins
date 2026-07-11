@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.2.0"
 
 REPLY_TEMPLATE_DEFAULT = "+1-6666"
 TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
@@ -14,14 +14,14 @@ TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": "从当前账号的已允许会话中选择要开启随机福利的群组。选中群组默认开启监听，管理员可在群内发送 {prefix}{command} off 暂停、{prefix}{command} on 恢复、{prefix}{command} status 查看状态。插件会监听群友发言，并按配置概率随机引用其中一条消息回复自定义福利语。本版本声明 userbot incoming 裸直通能力；安装后还需要在账号配置里手动开启 direct_passthrough.enabled=true 才会调用 on_direct_message。",
+    "x-usage-guide": "从当前账号的已允许会话中选择要开启随机福利的群组。选中群组默认纳入作用范围；管理员可在群内发送 {prefix}{command} off 暂停、{prefix}{command} on 恢复、{prefix}{command} status 查看状态。插件会监听群友发言，并按配置概率随机引用其中一条消息回复自定义福利语。为防刷屏，命中回复后会进入全群冷却和同一用户冷却，冷却秒数设为 0 可关闭。裸直通需要安装后在账号配置里手动开启 direct_passthrough.enabled=true。",
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
             "type": "string",
             "title": "使用说明",
             "readOnly": True,
-            "default": "1. 在“目标群组”中从已允许会话选择需要开启的群组。\n2. 群组默认开启随机福利；管理员可发送 {prefix}{command} off 暂停，发送 {prefix}{command} on 恢复。\n3. 插件会随机引用群友发言回复福利语，默认回复：+1-6666。\n4. 要测试裸直通，请在账号配置里额外开启 direct_passthrough.enabled=true。",
+            "default": "1. 在“目标群组”中从已允许会话选择需要纳入随机福利作用范围的群组。\n2. 群组默认开启；管理员可在群内发送 {prefix}{command} off 暂停，发送 {prefix}{command} on 恢复，发送 {prefix}{command} status 查看状态。\n3. 插件会随机引用群友发言回复福利语，默认回复：+1-6666。\n4. 为防刷屏，默认每个群 30 秒最多回复一次，同一用户 120 秒最多触发一次；对应冷却秒数设为 0 可关闭。\n5. 要测试裸直通，请在账号配置里额外开启 direct_passthrough.enabled=true。",
             "description": "只读说明；实际系统前缀由 TelePilot 当前命令前缀决定。",
         },
         "command": {
@@ -57,6 +57,22 @@ CONFIG_SCHEMA = {
             "maximum": 1,
             "description": "每条普通发言触发回复的概率，0 表示不自动回复，1 表示每条都回复。",
         },
+        "chat_cooldown_seconds": {
+            "type": "integer",
+            "title": "全群回复冷却（秒）",
+            "default": 30,
+            "minimum": 0,
+            "maximum": 86400,
+            "description": "任意一次随机福利回复后，当前群组进入冷却。0 表示关闭全群冷却。",
+        },
+        "user_cooldown_seconds": {
+            "type": "integer",
+            "title": "同一用户回复冷却（秒）",
+            "default": 120,
+            "minimum": 0,
+            "maximum": 86400,
+            "description": "某个用户触发随机福利回复后，该用户在当前群组进入冷却。0 表示关闭同用户冷却。",
+        },
         "default_enabled": {
             "type": "boolean",
             "title": "选中群组默认开启",
@@ -71,10 +87,18 @@ CONFIG_SCHEMA = {
             "description": "使用示例上下文渲染后的最终消息。仅用于配置预览，不会保存或发送。",
         },
     },
-    "required": ["command", "allowed_chat_ids", "reply_template", "trigger_probability", "default_enabled"],
+    "required": [
+        "command",
+        "allowed_chat_ids",
+        "reply_template",
+        "trigger_probability",
+        "chat_cooldown_seconds",
+        "user_cooldown_seconds",
+        "default_enabled",
+    ],
 }
 
-USAGE = "从配置页的已允许会话选择器中选择要开启随机福利的群组。选中群组默认监听群友发言，并按概率随机引用其中一条消息回复自定义福利语；管理员可发送 {prefix}{command} off 暂停当前群组，发送 {prefix}{command} on 恢复，发送 {prefix}{command} status 查看状态。"
+USAGE = "从配置页的已允许会话选择器中选择要纳入随机福利作用范围的群组。选中群组默认监听群友发言，并按概率随机引用其中一条消息回复自定义福利语；管理员可发送 {prefix}{command} off 暂停当前群组，发送 {prefix}{command} on 恢复，发送 {prefix}{command} status 查看状态。为防刷屏，命中回复后会进入全群冷却和同一用户冷却，冷却秒数设为 0 可关闭。"
 
 EVENT_SUBSCRIPTIONS = [
     {
