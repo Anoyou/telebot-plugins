@@ -134,6 +134,8 @@ MANIFEST = Manifest(
                 "type": "string",
                 "title": "Cookie",
                 "description": "登录后浏览器复制的完整 Cookie 字符串",
+                "format": "password",
+                "x-sensitive": True,
                 "default": "",
                 "level": "global",
             },

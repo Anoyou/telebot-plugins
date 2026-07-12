@@ -183,7 +183,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "命令解释模板",
             "description": "支持 {content} 占位被回复消息与用户问题。",
-            "default": "请根据下面内容回答用户问题。若用户没有额外问题，就解释这段内容的主要意思、语气和可能的隐含信息。\\n\\n{content}",
+            "default": "请根据下面内容回答用户问题。若用户没有额外问题，就解释这段内容的主要意思、语气和可能的隐含信息。\n\n{content}",
             "x-ui-widget": "textarea",
             "minLength": 1,
             "maxLength": 4000,
