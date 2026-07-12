@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.1.10 (2026-07-12)
+- 移除仅存在于 `manifest.py`、但运行时未开放对应配置能力的文案模板字段，恢复 Manifest 与 `plugin.json` 的一致性。
+- 游戏规则、结算和现有可配置项保持不变。
+
 ## 1.1.9 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 相关 payload 读取（事件类型、chat_id、user_id、message_id、显示名、用户名、文本、付款金额）主路径改用标准事件信封 `event_from_interaction_payload`，旧平铺 payload 字段保留为 fallback。
 - 元数据同步：`plugin.json` 与 `manifest.py` 版本递增并保持一致。

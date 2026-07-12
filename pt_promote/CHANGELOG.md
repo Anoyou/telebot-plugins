@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.0.23 (2026-07-12)
+- 将 Cookie 配置显式标记为密码与敏感字段，使 TelePilot 保存时使用 `secret:v1` 加密信封，并在界面中按敏感输入处理。
+- 同步 `manifest.py` 与 `plugin.json` 元数据。
+
 ## 1.0.22 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封 `event_from_interaction_payload`（事件类型、message.text 参数解析、message_id），旧平铺 payload 字段保留为 fallback。
 - 元数据同步：`plugin.json` 与 `manifest.py` 版本递增并保持一致。
