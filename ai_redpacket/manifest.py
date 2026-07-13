@@ -5,11 +5,11 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.3"
 USAGE = (
-    "管理员在插件配置页填写题库来源 URL，选择 Provider 和模型后点击“生成题库”；题库只需首次生成，后续红包直接复用。"
+    "管理员在插件配置页填写题库来源 URL，选择 Provider 和模型后点击“生成/补齐题库”；网页正文会缓存，已有题目会保留并补齐到目标题数。"
     "使用 {prefix}{command} create 总金额 [题目数] [题库ID] 创建红包；用户通过交互 Bot 按钮答题，"
-    "答对后的整数金额由平台 payout 交给 userbot 发放。每人每天最多成功领取一次，首次答错可重试一次。"
+    "答对后的整数金额由平台 payout 交给 userbot 发放。每日成功领取上限和答错重试次数可在配置页调整。"
 )
 
 CONFIG_SCHEMA = {
@@ -25,7 +25,7 @@ CONFIG_SCHEMA = {
             "readOnly": True,
             "default": (
                 "1. 填写题库来源 URL，并保存插件配置。\n"
-                "2. 选择 Provider 和模型，点击“生成题库”；只需成功生成一次。\n"
+                "2. 选择 Provider 和模型，点击“生成/补齐题库”；已有题目会保留并补齐到目标数量。\n"
                 "3. 发送 {prefix}{command} create 400 40 创建总额 400、40 题的红包。\n"
                 "4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n"
                 "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。"
@@ -44,7 +44,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "题库来源 URL",
             "default": "",
-            "description": "用于首次生成题库。生成成功后，创建红包不会再次抓取网页或调用 AI。",
+            "description": "首次生成时抓取并缓存正文；后续补齐题库会复用缓存，创建红包不会抓网页或调用 AI。",
         },
         "telepilot_provider": {
             "type": "string",
@@ -64,18 +64,18 @@ CONFIG_SCHEMA = {
         },
         "generation_count": {
             "type": "integer",
-            "title": "题库题目总数（仅首次生成）",
-            "default": 100,
-            "minimum": 3,
-            "maximum": 200,
-            "description": "点击一次“生成题库”后，由插件自动分批生成的题目总数。成功后不再重复生成。",
+            "title": "题库目标题数",
+            "default": 200,
+            "minimum": 100,
+            "maximum": 500,
+            "description": "范围 100-500。已有题库不足目标数量时会保留原题并继续补齐；达到目标后不会调用 AI。",
         },
         "default_questions": {
             "type": "integer",
             "title": "默认红包份数（每份一题）",
             "default": 40,
             "minimum": 1,
-            "maximum": 200,
+            "maximum": 500,
             "description": "创建红包未指定数量时，从题库抽取多少道题并分成多少份奖励；每位用户只回答其中一道题。",
         },
         "question_bank_status": {
@@ -83,14 +83,13 @@ CONFIG_SCHEMA = {
             "title": "题库状态（只读）",
             "default": "尚未生成",
             "readOnly": True,
-            "description": "生成成功后显示题库名称和实际有效题目数。",
+            "description": "生成成功后显示题库名称、实际有效题目数和默认题库 ID。",
         },
         "question_bank_id": {
             "type": "string",
-            "title": "题库 ID",
+            "title": "默认题库",
             "default": "",
-            "readOnly": True,
-            "x-ui-hidden": True,
+            "description": "生成或补齐题库后自动填入当前题库 ID；也可手动填写其它已有题库 ID。创建红包未指定题库时优先使用此项。",
         },
         "question_bank_count": {
             "type": "integer",
@@ -110,16 +109,17 @@ CONFIG_SCHEMA = {
             "type": "integer",
             "title": "每日成功领取上限",
             "default": 1,
-            "enum": [1],
-            "readOnly": True,
-            "description": "首版固定为每个 Telegram 用户每天最多成功领取一次。",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "同一个 Telegram 用户每天最多答对并领取多少次红包。",
         },
         "retry_count": {
             "type": "integer",
             "title": "答错后重试次数",
             "default": 1,
-            "enum": [1],
-            "readOnly": True,
+            "minimum": 0,
+            "maximum": 10,
+            "description": "每道题首次答错后还能重试多少次；设为 0 表示答错后立即结束当天挑战。",
         },
         "reward_min": {
             "type": "integer",
@@ -180,38 +180,38 @@ CONFIG_SCHEMA = {
         "packet_message_template": {
             "type": "string",
             "title": "红包开场模板",
-            "default": "<b>AI 答题红包</b>\n总金额：<code>{total_amount}</code>\n题目数量：<code>{question_count}</code>\n红包 ID：<code>{redpacket_id}</code>\n\n每人每天最多领取一次；答错后还有一次机会。",
-            "description": "占位符：{total_amount} 总金额；{question_count} 题目数；{redpacket_id} 红包 ID。支持 Telegram HTML。",
+            "default": "<b>AI 答题红包</b>\n总金额：<code>{total_amount}</code>\n题目数量：<code>{question_count}</code>\n红包 ID：<code>{redpacket_id}</code>\n\n今日日期：<code>{date}</code>\n每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。",
+            "description": "占位符：{total_amount} 总金额；{question_count} 题目数；{redpacket_id} 红包 ID；{date} 今日日期；{daily_limit} 每日成功上限；{retry_count} 重试次数。支持 Telegram HTML。",
         },
         "question_message_template": {
             "type": "string",
             "title": "答题题面模板",
             "default": "<b>AI 红包题目</b>\n{question}\n\n{options}\n\n请选择唯一正确答案。",
-            "description": "占位符：{question} 题目；{options} 三个选项。支持 Telegram HTML。",
+            "description": "占位符：{question} 题目；{options} 三个选项；{date} 今日日期；{daily_limit} 每日成功上限；{retry_count} 重试次数。支持 Telegram HTML。",
         },
         "success_message_template": {
             "type": "string",
             "title": "答对结果模板",
             "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答对了，获得 {reward}</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
-            "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}。",
+            "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}、{date}、{daily_limit}、{retry_count}。",
         },
         "failed_message_template": {
             "type": "string",
             "title": "挑战失败模板",
-            "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>两次答错，今天的挑战已结束</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
-            "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}。",
+            "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答题机会已用完，今天的挑战已结束</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
+            "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}、{date}、{daily_limit}、{retry_count}。",
         },
         "template_placeholders": {
             "type": "string",
             "title": "模板占位符（只读）",
             "readOnly": True,
-            "default": "红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}",
+            "default": "通用：{date} {daily_limit} {retry_count}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}",
         },
         "template_preview": {
             "type": "string",
             "title": "红包消息预览",
             "readOnly": True,
-            "default": "<b>AI 答题红包</b>\n总金额：<code>400</code>\n题目数量：<code>40</code>\n\n每人每天最多领取一次；答错后还有一次机会。",
+            "default": "<b>AI 答题红包</b>\n总金额：<code>400</code>\n题目数量：<code>40</code>\n\n今日日期：<code>2026-07-14</code>\n每人每天最多成功领取 1 次；每题答错后可重试 1 次。",
         },
     },
     "required": [
@@ -226,10 +226,10 @@ CONFIG_SCHEMA = {
 CONFIG_ACTIONS = [
     {
         "key": "generate_question_bank",
-        "title": "首次生成题库",
-        "description": "抓取上方 URL 并调用选定模型一次性生成题库；已有题库时不会再次调用 AI。",
+        "title": "生成或补齐题库",
+        "description": "首次抓取并缓存上方 URL 正文；已有题库不足目标题数时保留原题并调用 AI 补齐。",
         "placement": "field:question_source_url",
-        "submit_label": "生成题库（仅首次）",
+        "submit_label": "生成/补齐题库",
         "input_schema": {
             "type": "object",
             "additionalProperties": False,

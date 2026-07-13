@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class StorageError(RuntimeError):
@@ -70,6 +70,14 @@ class AIStorage:
 
                 CREATE INDEX IF NOT EXISTS idx_question_bank_lookup
                     ON question_bank(account_id, bank_id, id);
+
+                CREATE TABLE IF NOT EXISTS question_source_cache (
+                    account_id INTEGER NOT NULL,
+                    source_url TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    fetched_at REAL NOT NULL,
+                    PRIMARY KEY(account_id, source_url)
+                );
 
                 CREATE TABLE IF NOT EXISTS redpacket (
                     id TEXT PRIMARY KEY,
@@ -134,6 +142,36 @@ class AIStorage:
             row = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
             if row is None:
                 conn.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
+            elif int(row["version"]) < SCHEMA_VERSION:
+                conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
+
+    def get_source_cache(self, account_id: int, source_url: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM question_source_cache WHERE account_id = ? AND source_url = ?",
+                (account_id, source_url),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def save_source_cache(self, account_id: int, source_url: str, content: str) -> dict[str, Any]:
+        fetched_at = time.time()
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO question_source_cache(account_id, source_url, content, fetched_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id, source_url) DO UPDATE SET
+                    content = excluded.content,
+                    fetched_at = excluded.fetched_at
+                """,
+                (account_id, source_url, content, fetched_at),
+            )
+        return {
+            "account_id": account_id,
+            "source_url": source_url,
+            "content": content,
+            "fetched_at": fetched_at,
+        }
 
     def replace_bank(
         self,
@@ -202,6 +240,28 @@ class AIStorage:
                 (account_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_bank_questions(self, account_id: int, bank_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT question, options_json, answer, explanation, source
+                FROM question_bank
+                WHERE account_id = ? AND bank_id = ? AND active = 1
+                ORDER BY id
+                """,
+                (account_id, bank_id),
+            ).fetchall()
+        return [
+            {
+                "question": str(row["question"]),
+                "options": json.loads(str(row["options_json"])),
+                "answer": int(row["answer"]),
+                "explanation": str(row["explanation"] or ""),
+                "source": str(row["source"] or ""),
+            }
+            for row in rows
+        ]
 
     def create_redpacket(
         self,
@@ -292,8 +352,12 @@ class AIStorage:
         date: str,
         submission_token: str,
         reservation_seconds: int,
+        daily_limit: int = 1,
+        retry_count: int = 1,
     ) -> dict[str, Any]:
         now = time.time()
+        success_limit = max(1, int(daily_limit))
+        max_attempts = 1 + max(0, int(retry_count))
         with self.transaction() as conn:
             packet = conn.execute(
                 "SELECT * FROM redpacket WHERE id = ? AND account_id = ? AND chat_id = ?",
@@ -307,16 +371,17 @@ class AIStorage:
                 conn.execute("UPDATE redpacket SET status = 'expired' WHERE id = ?", (redpacket_id,))
                 raise StorageError("红包已经过期")
 
-            blocked = conn.execute(
+            daily = conn.execute(
                 """
-                SELECT 1 FROM redpacket_attempt
+                SELECT
+                    COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS successes,
+                    COALESCE(MAX(CASE WHEN success = 0 AND attempts >= ? THEN 1 ELSE 0 END), 0) AS failed_out
+                FROM redpacket_attempt
                 WHERE account_id = ? AND user_id = ? AND date = ?
-                  AND (success = 1 OR attempts >= 2)
-                LIMIT 1
                 """,
-                (account_id, user_id, date),
+                (max_attempts, account_id, user_id, date),
             ).fetchone()
-            if blocked:
+            if daily and (int(daily["successes"]) >= success_limit or bool(daily["failed_out"])):
                 raise StorageError("你今天的红包挑战已经结束")
 
             existing = conn.execute(
@@ -434,9 +499,11 @@ class AIStorage:
         submission_token: str,
         submission_key: str,
         retry_count: int,
+        daily_limit: int = 1,
     ) -> dict[str, Any]:
         now = time.time()
-        max_attempts = 1 + retry_count
+        max_attempts = 1 + max(0, int(retry_count))
+        success_limit = max(1, int(daily_limit))
         with self.transaction() as conn:
             row = conn.execute(
                 """
@@ -448,13 +515,15 @@ class AIStorage:
                 JOIN redpacket_question rq ON rq.id = a.question_slot_id
                 JOIN question_bank q ON q.id = rq.question_bank_id
                 JOIN redpacket p ON p.id = a.redpacket_id
-                WHERE a.id = ? AND a.account_id = ? AND a.user_id = ?
+                WHERE a.id = ? AND a.account_id = ?
                   AND a.chat_id = ? AND a.redpacket_id = ?
                 """,
-                (attempt_id, account_id, user_id, chat_id, redpacket_id),
+                (attempt_id, account_id, chat_id, redpacket_id),
             ).fetchone()
             if row is None:
                 raise StorageError("答题记录不存在")
+            if int(row["user_id"]) != user_id:
+                raise StorageError("点点点，不是你的题你也点！")
             if row["submission_token"] != submission_token:
                 raise StorageError("答题按钮已经失效")
             if row["last_submission_key"] == submission_key:
@@ -483,16 +552,17 @@ class AIStorage:
                     (row["question_slot_id"], user_id),
                 )
                 raise StorageError("红包已经结束或过期")
-            daily_block = conn.execute(
+            daily = conn.execute(
                 """
-                SELECT 1 FROM redpacket_attempt
+                SELECT
+                    COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS successes,
+                    COALESCE(MAX(CASE WHEN success = 0 AND attempts >= ? THEN 1 ELSE 0 END), 0) AS failed_out
+                FROM redpacket_attempt
                 WHERE account_id = ? AND user_id = ? AND date = ? AND id <> ?
-                  AND (success = 1 OR attempts >= ?)
-                LIMIT 1
                 """,
-                (account_id, user_id, row["date"], attempt_id, max_attempts),
+                (max_attempts, account_id, user_id, row["date"], attempt_id),
             ).fetchone()
-            if daily_block:
+            if daily and (int(daily["successes"]) >= success_limit or bool(daily["failed_out"])):
                 conn.execute(
                     """
                     UPDATE redpacket_question
@@ -576,5 +646,6 @@ class AIStorage:
                 "attempts": attempts,
                 "correct": correct,
                 "finished": correct or attempts >= max_attempts,
+                "max_attempts": max_attempts,
                 "duplicate": False,
             }
