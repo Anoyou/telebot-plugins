@@ -154,11 +154,21 @@ class FakeAI:
 
 
 class FakeIncomingEvent(FakeEvent):
-    def __init__(self, text: str, *, chat_id: int = 123, media=None) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        text: str,
+        *,
+        chat_id: int = 123,
+        media=None,
+        is_private: bool = True,
+        is_group: bool = False,
+        reply_text: str = "",
+    ) -> None:
+        super().__init__(reply_text=reply_text)
         self.chat_id = chat_id
         self.raw_text = text
-        self.is_private = True
+        self.is_private = is_private
+        self.is_group = is_group
         self.media = media
 
     async def get_sender(self):
@@ -192,6 +202,7 @@ class AIChatTest(unittest.TestCase):
         self.assertIn("model_test_client_identity", plugin_meta["config_schema"]["properties"])
         self.assertIn("model_test_result", plugin_meta["config_schema"]["properties"])
         self.assertIn("payment_guard_reply", plugin_meta["config_schema"]["properties"])
+        self.assertIn("reply_to_trigger_message", plugin_meta["config_schema"]["properties"])
         self.assertIn("ai_text", plugin_meta["permissions"])
 
     def test_package_loads_with_hyphenated_key_like_installed_loader(self) -> None:
@@ -418,6 +429,53 @@ class AIChatTest(unittest.TestCase):
 
             self.assertEqual(ctx.ai.calls, [])
             self.assertEqual(client.sent, [])
+
+        asyncio.run(scenario())
+
+    def test_group_chat_reply_references_trigger_message_by_default(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_group_reply_to_trigger_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(client=client)
+            ctx.ai = FakeAI("默认引用触发消息")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeIncomingEvent("@tester 你好", chat_id=-100123, is_private=False, is_group=True)
+            await plugin.on_message(ctx, event)
+
+            self.assertEqual(len(client.sent), 1)
+            self.assertEqual(client.sent[0][1], "默认引用触发消息")
+            self.assertEqual(client.sent[0][2].get("reply_to"), 77)
+
+        asyncio.run(scenario())
+
+    def test_group_chat_reply_can_be_sent_without_referencing_trigger_message(self) -> None:
+        plugin_module = _load_module(
+            "ai_chat_plugin_group_no_reply_to_trigger_under_test",
+            ROOT / "ai-chat" / "plugin.py",
+        )
+
+        async def scenario() -> None:
+            client = FakeClient()
+            ctx = sys.modules["app.worker.plugins.base"].PluginContext(
+                client=client,
+                config={"reply_to_trigger_message": False},
+            )
+            ctx.ai = FakeAI("直接发新消息")
+            plugin = plugin_module.AIChatPlugin()
+
+            await plugin.on_startup(ctx)
+            event = FakeIncomingEvent("@tester 你好", chat_id=-100123, is_private=False, is_group=True)
+            await plugin.on_message(ctx, event)
+
+            self.assertEqual(len(client.sent), 1)
+            self.assertEqual(client.sent[0][1], "直接发新消息")
+            self.assertNotIn("reply_to", client.sent[0][2])
 
         asyncio.run(scenario())
 

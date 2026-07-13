@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.9"
+PLUGIN_VERSION = "0.1.10"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -143,6 +143,12 @@ CONFIG_SCHEMA = {
             "description": "开启后，群聊里 @当前账号或回复当前账号消息时调用 AI 回复。",
             "default": True,
         },
+        "reply_to_trigger_message": {
+            "type": "boolean",
+            "title": "引用触发消息回复",
+            "description": "开启后，群聊 AI 回答会以回复触发消息的形式发出；关闭后仍由 @当前账号或回复当前账号触发，但回答会作为普通新消息直接发送。",
+            "default": True,
+        },
         "group_chat_ids": {
             "type": "string",
             "title": "群聊生效群组（可选）",
@@ -211,6 +217,7 @@ CONFIG_SCHEMA = {
         "blocked_bare_outputs",
         "enable_private_chat",
         "enable_group_chat",
+        "reply_to_trigger_message",
         "group_chat_ids",
         "white_list_chats",
         "system_prompt",

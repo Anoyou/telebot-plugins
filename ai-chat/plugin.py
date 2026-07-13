@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.9"
+PLUGIN_VERSION = "0.1.10"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
@@ -120,6 +120,7 @@ def _cfg(ctx: PluginContext) -> dict[str, Any]:
         "blocked_bare_outputs": str(raw.get("blocked_bare_outputs") or DEFAULT_BLOCKED_BARE_OUTPUTS),
         "enable_private_chat": _bool(raw.get("enable_private_chat"), True),
         "enable_group_chat": _bool(raw.get("enable_group_chat"), True),
+        "reply_to_trigger_message": _bool(raw.get("reply_to_trigger_message"), True),
         "group_chat_ids": str(raw.get("group_chat_ids") or ""),
         "white_list_chats": str(raw.get("white_list_chats") or ""),
         "system_prompt": str(raw.get("system_prompt") or DEFAULT_SYSTEM_PROMPT).strip() or DEFAULT_SYSTEM_PROMPT,
@@ -448,6 +449,12 @@ def _split_text(text: str, limit: int = MAX_TELEGRAM_TEXT) -> list[str]:
     return chunks
 
 
+def _chat_reply_to_id(event: Any, cfg: dict[str, Any], is_private: bool) -> int | None:
+    if is_private or not cfg.get("reply_to_trigger_message", True):
+        return None
+    return _message_id(event)
+
+
 async def _maybe_await(value: Any) -> Any:
     if hasattr(value, "__await__"):
         return await value
@@ -647,7 +654,7 @@ class AIChatPlugin(Plugin):
                 return
             self._remember(key, "user", prompt_text, cfg["max_history"])
             self._remember(key, "assistant", reply, cfg["max_history"])
-            reply_to = _message_id(event) if not is_private else None
+            reply_to = _chat_reply_to_id(event, cfg, is_private)
             for chunk in _split_text(reply):
                 await _send_text(ctx, event, chunk, reply_to=reply_to)
                 reply_to = None
@@ -673,7 +680,7 @@ class AIChatPlugin(Plugin):
             prompt_text = await self._group_prompt_text(event, text)
             if not prompt_text:
                 return
-            reply_to = _message_id(event)
+            reply_to = _chat_reply_to_id(event, cfg, is_private)
         if not await _trigger_message_available(ctx, event):
             return
         await _send_text(ctx, event, DEFAULT_MEDIA_UNSUPPORTED_REPLY, reply_to=reply_to)

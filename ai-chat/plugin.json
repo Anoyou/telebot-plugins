@@ -3,7 +3,7 @@
   "display_name": "AI-Chat",
   "description": "调用 TelePilot AI Provider 的 AI-Chat 聊天与消息解释助手，支持私聊/群聊触发和短期上下文记忆。",
   "author": "Anoyou",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.33.0",
@@ -177,6 +177,12 @@
         "description": "开启后，群聊里 @当前账号或回复当前账号消息时调用 AI 回复。",
         "default": true
       },
+      "reply_to_trigger_message": {
+        "type": "boolean",
+        "title": "引用触发消息回复",
+        "description": "开启后，群聊 AI 回答会以回复触发消息的形式发出；关闭后仍由 @当前账号或回复当前账号触发，但回答会作为普通新消息直接发送。",
+        "default": true
+      },
       "group_chat_ids": {
         "type": "string",
         "title": "群聊生效群组（可选）",
@@ -245,6 +251,7 @@
       "blocked_bare_outputs",
       "enable_private_chat",
       "enable_group_chat",
+      "reply_to_trigger_message",
       "group_chat_ids",
       "white_list_chats",
       "system_prompt",
