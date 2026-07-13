@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 class StorageError(RuntimeError):
@@ -90,7 +90,8 @@ class AIStorage:
                     question_count INTEGER NOT NULL CHECK(question_count > 0),
                     status TEXT NOT NULL,
                     created_at REAL NOT NULL,
-                    expires_at REAL NOT NULL
+                    expires_at REAL NOT NULL,
+                    settled_at REAL
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_redpacket_chat
@@ -115,6 +116,7 @@ class AIStorage:
                     id TEXT PRIMARY KEY,
                     account_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
+                    user_display_name TEXT NOT NULL DEFAULT '',
                     chat_id INTEGER NOT NULL,
                     redpacket_id TEXT NOT NULL REFERENCES redpacket(id) ON DELETE CASCADE,
                     question_slot_id INTEGER NOT NULL REFERENCES redpacket_question(id),
@@ -137,8 +139,34 @@ class AIStorage:
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_submission
                     ON redpacket_attempt(last_submission_key)
                     WHERE last_submission_key IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS redpacket_limit_reset (
+                    account_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    date TEXT NOT NULL,
+                    reset_at REAL NOT NULL,
+                    PRIMARY KEY(account_id, user_id, date)
+                );
+
+                CREATE TABLE IF NOT EXISTS redpacket_weekly_report (
+                    account_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    week_start TEXT NOT NULL,
+                    published_at REAL NOT NULL,
+                    PRIMARY KEY(account_id, chat_id, week_start)
+                );
                 """
             )
+            redpacket_columns = {
+                str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket)").fetchall()
+            }
+            if "settled_at" not in redpacket_columns:
+                conn.execute("ALTER TABLE redpacket ADD COLUMN settled_at REAL")
+            attempt_columns = {
+                str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket_attempt)").fetchall()
+            }
+            if "user_display_name" not in attempt_columns:
+                conn.execute("ALTER TABLE redpacket_attempt ADD COLUMN user_display_name TEXT NOT NULL DEFAULT ''")
             row = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
             if row is None:
                 conn.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
@@ -263,6 +291,20 @@ class AIStorage:
             for row in rows
         ]
 
+    def reset_daily_limit(self, account_id: int, user_id: int, date: str) -> dict[str, Any]:
+        with self.transaction() as conn:
+            reset_at = time.time()
+            conn.execute(
+                """
+                INSERT INTO redpacket_limit_reset(account_id, user_id, date, reset_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id, user_id, date) DO UPDATE SET
+                    reset_at = excluded.reset_at
+                """,
+                (account_id, user_id, date, reset_at),
+            )
+        return {"account_id": account_id, "user_id": user_id, "date": date, "reset_at": reset_at}
+
     def create_redpacket(
         self,
         *,
@@ -341,6 +383,130 @@ class AIStorage:
             )
         return result.rowcount == 1
 
+    def list_unsettled_redpackets(self, account_id: int, now: float | None = None) -> list[dict[str, Any]]:
+        current = time.time() if now is None else float(now)
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE redpacket
+                SET status = 'expired'
+                WHERE account_id = ? AND status = 'active' AND expires_at <= ?
+                """,
+                (account_id, current),
+            )
+            rows = conn.execute(
+                """
+                SELECT * FROM redpacket
+                WHERE account_id = ? AND status IN ('finished', 'expired')
+                  AND settled_at IS NULL
+                ORDER BY created_at
+                """,
+                (account_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_redpacket_settlement(self, account_id: int, redpacket_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id, user_display_name, reward, updated_at
+                FROM redpacket_attempt
+                WHERE account_id = ? AND redpacket_id = ? AND success = 1
+                ORDER BY reward DESC, updated_at, user_id
+                """,
+                (account_id, redpacket_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_redpacket_settled(self, account_id: int, redpacket_id: str, settled_at: float | None = None) -> bool:
+        current = time.time() if settled_at is None else float(settled_at)
+        with self.transaction() as conn:
+            result = conn.execute(
+                """
+                UPDATE redpacket SET settled_at = ?
+                WHERE account_id = ? AND id = ? AND settled_at IS NULL
+                  AND status IN ('finished', 'expired')
+                """,
+                (current, account_id, redpacket_id),
+            )
+        return result.rowcount == 1
+
+    def weekly_leaderboard(
+        self,
+        account_id: int,
+        chat_id: int,
+        start_at: float,
+        end_at: float,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    user_id,
+                    COALESCE(MAX(NULLIF(user_display_name, '')), '用户' || user_id) AS user_display_name,
+                    COUNT(*) AS success_count,
+                    COALESCE(SUM(reward), 0) AS total_reward
+                FROM redpacket_attempt
+                WHERE account_id = ? AND chat_id = ? AND success = 1
+                  AND updated_at >= ? AND updated_at < ?
+                GROUP BY user_id
+                """,
+                (account_id, chat_id, float(start_at), float(end_at)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def weekly_report_chat_ids(self, account_id: int, start_at: float, end_at: float) -> list[int]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT chat_id FROM redpacket
+                WHERE account_id = ? AND created_at >= ? AND created_at < ?
+                UNION
+                SELECT chat_id FROM redpacket_attempt
+                WHERE account_id = ? AND updated_at >= ? AND updated_at < ?
+                ORDER BY chat_id
+                """,
+                (
+                    account_id,
+                    float(start_at),
+                    float(end_at),
+                    account_id,
+                    float(start_at),
+                    float(end_at),
+                ),
+            ).fetchall()
+        return [int(row["chat_id"]) for row in rows]
+
+    def weekly_report_published(self, account_id: int, chat_id: int, week_start: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM redpacket_weekly_report
+                WHERE account_id = ? AND chat_id = ? AND week_start = ?
+                """,
+                (account_id, chat_id, week_start),
+            ).fetchone()
+        return row is not None
+
+    def mark_weekly_report_published(
+        self,
+        account_id: int,
+        chat_id: int,
+        week_start: str,
+        published_at: float | None = None,
+    ) -> None:
+        current = time.time() if published_at is None else float(published_at)
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO redpacket_weekly_report(account_id, chat_id, week_start, published_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id, chat_id, week_start) DO UPDATE SET
+                    published_at = excluded.published_at
+                """,
+                (account_id, chat_id, week_start, current),
+            )
+
     def reserve_question(
         self,
         *,
@@ -354,6 +520,7 @@ class AIStorage:
         reservation_seconds: int,
         daily_limit: int = 1,
         retry_count: int = 1,
+        user_display_name: str = "",
     ) -> dict[str, Any]:
         now = time.time()
         success_limit = max(1, int(daily_limit))
@@ -371,15 +538,20 @@ class AIStorage:
                 conn.execute("UPDATE redpacket SET status = 'expired' WHERE id = ?", (redpacket_id,))
                 raise StorageError("红包已经过期")
 
+            reset = conn.execute(
+                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
+                (account_id, user_id, date),
+            ).fetchone()
+            reset_at = float(reset["reset_at"]) if reset else 0.0
             daily = conn.execute(
                 """
                 SELECT
                     COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS successes,
                     COALESCE(MAX(CASE WHEN success = 0 AND attempts >= ? THEN 1 ELSE 0 END), 0) AS failed_out
                 FROM redpacket_attempt
-                WHERE account_id = ? AND user_id = ? AND date = ?
+                WHERE account_id = ? AND user_id = ? AND date = ? AND updated_at >= ?
                 """,
-                (max_attempts, account_id, user_id, date),
+                (max_attempts, account_id, user_id, date, reset_at),
             ).fetchone()
             if daily and (int(daily["successes"]) >= success_limit or bool(daily["failed_out"])):
                 raise StorageError("你今天的红包挑战已经结束")
@@ -397,6 +569,11 @@ class AIStorage:
                 (account_id, user_id, redpacket_id, date),
             ).fetchone()
             if existing:
+                if user_display_name and str(existing["user_display_name"] or "") != user_display_name:
+                    conn.execute(
+                        "UPDATE redpacket_attempt SET user_display_name = ? WHERE id = ?",
+                        (user_display_name, existing["id"]),
+                    )
                 if existing["claimed_by"] is not None:
                     raise StorageError("这道红包题已经被领取")
                 if existing["reserved_by"] != user_id or not existing["reserved_until"] or existing["reserved_until"] <= now:
@@ -453,15 +630,16 @@ class AIStorage:
             conn.execute(
                 """
                 INSERT INTO redpacket_attempt(
-                    id, account_id, user_id, chat_id, redpacket_id, question_slot_id,
+                    id, account_id, user_id, user_display_name, chat_id, redpacket_id, question_slot_id,
                     date, attempts, success, reward, option_order_json, answer_index,
                     submission_token, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt_id,
                     account_id,
                     user_id,
+                    user_display_name,
                     chat_id,
                     redpacket_id,
                     slot["id"],
@@ -552,6 +730,11 @@ class AIStorage:
                     (row["question_slot_id"], user_id),
                 )
                 raise StorageError("红包已经结束或过期")
+            reset = conn.execute(
+                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
+                (account_id, user_id, row["date"]),
+            ).fetchone()
+            reset_at = float(reset["reset_at"]) if reset else 0.0
             daily = conn.execute(
                 """
                 SELECT
@@ -559,8 +742,9 @@ class AIStorage:
                     COALESCE(MAX(CASE WHEN success = 0 AND attempts >= ? THEN 1 ELSE 0 END), 0) AS failed_out
                 FROM redpacket_attempt
                 WHERE account_id = ? AND user_id = ? AND date = ? AND id <> ?
+                  AND updated_at >= ?
                 """,
-                (max_attempts, account_id, user_id, row["date"], attempt_id),
+                (max_attempts, account_id, user_id, row["date"], attempt_id, reset_at),
             ).fetchone()
             if daily and (int(daily["successes"]) >= success_limit or bool(daily["failed_out"])):
                 conn.execute(

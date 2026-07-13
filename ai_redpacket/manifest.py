@@ -5,11 +5,12 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.3"
+PLUGIN_VERSION = "0.1.5"
 USAGE = (
     "管理员在插件配置页填写题库来源 URL，选择 Provider 和模型后点击“生成/补齐题库”；网页正文会缓存，已有题目会保留并补齐到目标题数。"
-    "使用 {prefix}{command} create 总金额 [题目数] [题库ID] 创建红包；用户通过交互 Bot 按钮答题，"
-    "答对后的整数金额由平台 payout 交给 userbot 发放。每日成功领取上限和答错重试次数可在配置页调整。"
+    "直接发送 {prefix}{command} 按默认总金额、份数和题库创建红包；也可使用 {prefix}{command} create 总金额 [题目数] [题库ID]。用户通过交互 Bot 按钮答题，"
+    "答对后的整数金额由平台 payout 交给 userbot 发放。红包领完或到期后自动发布折叠结算；"
+    "{prefix}{command}-7 可查询周日 10:00 起算的本周排行榜，每周日 10:00 默认自动发布上一完整周期。"
 )
 
 CONFIG_SCHEMA = {
@@ -26,14 +27,19 @@ CONFIG_SCHEMA = {
             "default": (
                 "1. 填写题库来源 URL，并保存插件配置。\n"
                 "2. 选择 Provider 和模型，点击“生成/补齐题库”；已有题目会保留并补齐到目标数量。\n"
-                "3. 发送 {prefix}{command} create 400 40 创建总额 400、40 题的红包。\n"
+                "3. 直接发送 {prefix}{command} 按默认配置创建总额 150000、40 份的红包。\n"
                 "4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n"
-                "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。"
+                "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n"
+                "6. 测试后可发送 {prefix}{command} reset 重置自己当天的领取与答题限制。\n"
+                "7. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。"
             ),
         },
         "command": {
             "type": "string",
             "title": "管理指令名",
+            "x-ui-section": "基础设置",
+            "x-ui-columns": 2,
+            "x-ui-order": 10,
             "default": "airp",
             "minLength": 1,
             "maxLength": 32,
@@ -43,12 +49,18 @@ CONFIG_SCHEMA = {
         "question_source_url": {
             "type": "string",
             "title": "题库来源 URL",
+            "x-ui-section": "题库来源",
+            "x-ui-columns": 1,
+            "x-ui-order": 100,
             "default": "",
             "description": "首次生成时抓取并缓存正文；后续补齐题库会复用缓存，创建红包不会抓网页或调用 AI。",
         },
         "telepilot_provider": {
             "type": "string",
             "title": "题库生成 Provider（可选）",
+            "x-ui-section": "AI 生成",
+            "x-ui-columns": 2,
+            "x-ui-order": 200,
             "default": "",
             "x-ui-widget": "llm-provider-select",
             "description": "留空由 TelePilot 自动选择可用 Provider。",
@@ -56,6 +68,9 @@ CONFIG_SCHEMA = {
         "telepilot_model": {
             "type": "string",
             "title": "题库生成模型（可选）",
+            "x-ui-section": "AI 生成",
+            "x-ui-columns": 2,
+            "x-ui-order": 210,
             "default": "",
             "x-ui-widget": "llm-model-select",
             "x-ui-provider-field": "telepilot_provider",
@@ -65,6 +80,9 @@ CONFIG_SCHEMA = {
         "generation_count": {
             "type": "integer",
             "title": "题库目标题数",
+            "x-ui-section": "AI 生成",
+            "x-ui-columns": 2,
+            "x-ui-order": 220,
             "default": 200,
             "minimum": 100,
             "maximum": 500,
@@ -73,14 +91,31 @@ CONFIG_SCHEMA = {
         "default_questions": {
             "type": "integer",
             "title": "默认红包份数（每份一题）",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 400,
             "default": 40,
             "minimum": 1,
             "maximum": 500,
             "description": "创建红包未指定数量时，从题库抽取多少道题并分成多少份奖励；每位用户只回答其中一道题。",
         },
+        "default_total_amount": {
+            "type": "integer",
+            "title": "默认红包总金额",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 390,
+            "default": 150000,
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "单独发送管理指令时使用的总奖池金额，必须是整数。",
+        },
         "question_bank_status": {
             "type": "string",
             "title": "题库状态（只读）",
+            "x-ui-section": "题库来源",
+            "x-ui-columns": 1,
+            "x-ui-order": 110,
             "default": "尚未生成",
             "readOnly": True,
             "description": "生成成功后显示题库名称、实际有效题目数和默认题库 ID。",
@@ -88,6 +123,9 @@ CONFIG_SCHEMA = {
         "question_bank_id": {
             "type": "string",
             "title": "默认题库",
+            "x-ui-section": "基础设置",
+            "x-ui-columns": 2,
+            "x-ui-order": 20,
             "default": "",
             "description": "生成或补齐题库后自动填入当前题库 ID；也可手动填写其它已有题库 ID。创建红包未指定题库时优先使用此项。",
         },
@@ -108,6 +146,9 @@ CONFIG_SCHEMA = {
         "daily_limit": {
             "type": "integer",
             "title": "每日成功领取上限",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 410,
             "default": 1,
             "minimum": 1,
             "maximum": 100,
@@ -116,6 +157,9 @@ CONFIG_SCHEMA = {
         "retry_count": {
             "type": "integer",
             "title": "答错后重试次数",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 420,
             "default": 1,
             "minimum": 0,
             "maximum": 10,
@@ -124,6 +168,9 @@ CONFIG_SCHEMA = {
         "reward_min": {
             "type": "integer",
             "title": "单题最低金额",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 430,
             "default": 1,
             "minimum": 1,
             "maximum": 1000000000,
@@ -132,7 +179,10 @@ CONFIG_SCHEMA = {
         "reward_max": {
             "type": "integer",
             "title": "单题最高金额",
-            "default": 20,
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 440,
+            "default": 10000,
             "minimum": 1,
             "maximum": 1000000000,
             "description": "红包金额只允许整数，且不得低于最低金额。",
@@ -140,6 +190,9 @@ CONFIG_SCHEMA = {
         "redpacket_ttl_seconds": {
             "type": "integer",
             "title": "红包有效期（秒）",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 450,
             "default": 86400,
             "minimum": 60,
             "maximum": 604800,
@@ -147,6 +200,9 @@ CONFIG_SCHEMA = {
         "answer_timeout_seconds": {
             "type": "integer",
             "title": "题目预约时间（秒）",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 460,
             "default": 300,
             "minimum": 30,
             "maximum": 3600,
@@ -154,12 +210,27 @@ CONFIG_SCHEMA = {
         },
         "timezone": {
             "type": "string",
-            "title": "每日限制时区",
+            "title": "每日限制与周榜时区",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 470,
             "default": "Asia/Shanghai",
+        },
+        "weekly_auto_publish": {
+            "type": "boolean",
+            "title": "每周日自动发布周榜",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 480,
+            "default": True,
+            "description": "开启后，每周日 10:00 自动发布上一周期（上周日 10:00 至本周日 10:00）的排行榜。",
         },
         "max_source_chars": {
             "type": "integer",
             "title": "网页正文最大字符数",
+            "x-ui-section": "AI 生成",
+            "x-ui-columns": 2,
+            "x-ui-order": 230,
             "default": 120000,
             "minimum": 1000,
             "maximum": 300000,
@@ -167,13 +238,30 @@ CONFIG_SCHEMA = {
         "ai_timeout_seconds": {
             "type": "integer",
             "title": "AI 生成超时（秒）",
+            "x-ui-section": "AI 生成",
+            "x-ui-columns": 2,
+            "x-ui-order": 240,
             "default": 600,
             "minimum": 30,
             "maximum": 3600,
         },
+        "generation_concurrency": {
+            "type": "integer",
+            "title": "AI 并发批次数",
+            "x-ui-section": "AI 生成",
+            "x-ui-columns": 2,
+            "x-ui-order": 250,
+            "default": 3,
+            "minimum": 1,
+            "maximum": 5,
+            "description": "同时生成多少批题目。默认 3 可明显缩短等待时间；Provider 容易限流时可调低。",
+        },
         "question_generation_prompt": {
             "type": "string",
             "title": "AI 出题系统提示词",
+            "x-ui-section": "AI 出题要求",
+            "x-ui-columns": 1,
+            "x-ui-order": 300,
             "default": "",
             "description": "留空使用插件内置提示词；自定义时仍必须要求严格 JSON 和三选一题型。",
         },
@@ -211,7 +299,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "红包消息预览",
             "readOnly": True,
-            "default": "<b>AI 答题红包</b>\n总金额：<code>400</code>\n题目数量：<code>40</code>\n\n今日日期：<code>2026-07-14</code>\n每人每天最多成功领取 1 次；每题答错后可重试 1 次。",
+            "default": "<b>AI 答题红包</b>\n总金额：<code>150000</code>\n题目数量：<code>40</code>\n\n今日日期：<code>2026-07-14</code>\n每人每天最多成功领取 1 次；每题答错后可重试 1 次。",
         },
     },
     "required": [
@@ -301,7 +389,7 @@ INTERACTION_ENTRIES = [
             "required_event_fields": ["type", "chat_id"],
         },
         "result_contract": {
-            "actions": ["send_message", "edit_message", "answer_callback", "payout", "end_session"],
+            "actions": ["send_message", "edit_message", "delete_message", "answer_callback", "payout", "end_session"],
         },
         "settlement": {
             "mode": "auto",
@@ -324,7 +412,7 @@ MANIFEST = Manifest(
     description="从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
     usage=USAGE,
     category="interactive",
-    permissions=["send_message", "edit_message", "read_chat", "external_http", "ai_text"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat", "external_http", "ai_text", "payout"],
     allowed_hosts=ALLOWED_HOSTS,
     config_schema=CONFIG_SCHEMA,
     event_subscriptions=EVENT_SUBSCRIPTIONS,
