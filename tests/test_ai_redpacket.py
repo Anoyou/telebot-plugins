@@ -46,7 +46,7 @@ plugin_module = importlib.import_module("ai_redpacket.plugin")
 storage_module = importlib.import_module("ai_redpacket.storage")
 
 
-def _questions(count: int = 5) -> list[dict[str, object]]:
+def _questions(count: int = 5, *, start: int = 0) -> list[dict[str, object]]:
     return [
         {
             "question": f"问题 {index}",
@@ -55,7 +55,7 @@ def _questions(count: int = 5) -> list[dict[str, object]]:
             "explanation": f"解析 {index}",
             "source": "https://example.com/source",
         }
-        for index in range(count)
+        for index in range(start, start + count)
     ]
 
 
@@ -443,6 +443,71 @@ class PluginActionTest(unittest.TestCase):
                 announcement = create_actions[0]
                 self.assertEqual(announcement["send_via"], "interaction_bot")
                 self.assertEqual(announcement["reply_markup"]["inline_keyboard"][0][0]["text"], "领取答题红包")
+
+        asyncio.run(run_case())
+
+    def test_large_bank_generation_retries_invalid_json_and_saves_atomically(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+
+                class HTTP:
+                    async def get(self, url):
+                        return types.SimpleNamespace(status_code=200, text="可用于出题的网页正文。" * 5000)
+
+                class AI:
+                    def __init__(self):
+                        self.calls = 0
+                        self.kwargs = []
+
+                    async def complete(self, **kwargs):
+                        self.calls += 1
+                        self.kwargs.append(kwargs)
+                        if self.calls == 1:
+                            return types.SimpleNamespace(text='{"title":"损坏结果","questions":[{"question":"缺少结尾"}')
+                        start = (self.calls - 2) * plugin_module.GENERATION_BATCH_SIZE
+                        return types.SimpleNamespace(
+                            text=json.dumps(
+                                {
+                                    "title": "分批题库",
+                                    "questions": _questions(plugin_module.GENERATION_BATCH_SIZE, start=start),
+                                },
+                                ensure_ascii=False,
+                            )
+                        )
+
+                logs = []
+
+                async def log(level, message, **detail):
+                    logs.append((level, message, detail))
+
+                class Context:
+                    account_id = 1
+                    config = {
+                        "question_source_url": "https://example.com/source",
+                        "generation_count": 25,
+                    }
+                    account_config = {}
+                    http = HTTP()
+
+                ctx = Context()
+                ctx.ai = AI()
+                ctx.log = log
+                result = await plugin.on_config_action(
+                    ctx,
+                    "generate_question_bank",
+                    {"config": dict(ctx.config)},
+                )
+
+                self.assertEqual(result["config_patch"]["question_bank_count"], 25)
+                self.assertEqual(ctx.ai.calls, 4)
+                self.assertTrue(all(call["max_tokens"] <= 4096 for call in ctx.ai.kwargs))
+                self.assertTrue(all("本批只生成" in call["user"] for call in ctx.ai.kwargs))
+                self.assertTrue(any(message == "AI 题库分批结果无效，准备重试" for _, message, _ in logs))
+                self.assertTrue(any(message == "AI 题库生成进度" for _, message, _ in logs))
+                banks = plugin.storage.list_banks(1)
+                self.assertEqual(banks[0]["question_count"], 25)
 
         asyncio.run(run_case())
 

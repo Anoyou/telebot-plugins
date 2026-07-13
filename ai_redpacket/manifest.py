@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.2"
 USAGE = (
     "管理员在插件配置页填写题库来源 URL，选择 Provider 和模型后点击“生成题库”；题库只需首次生成，后续红包直接复用。"
     "使用 {prefix}{command} create 总金额 [题目数] [题库ID] 创建红包；用户通过交互 Bot 按钮答题，"
@@ -68,7 +68,7 @@ CONFIG_SCHEMA = {
             "default": 100,
             "minimum": 3,
             "maximum": 200,
-            "description": "点击“生成题库”时希望 AI 一次生成的题目数量。成功后不再重复生成。",
+            "description": "点击一次“生成题库”后，由插件自动分批生成的题目总数。成功后不再重复生成。",
         },
         "default_questions": {
             "type": "integer",

@@ -3,7 +3,7 @@
   "display_name": "AI 答题红包",
   "description": "从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
   "author": "Anoyou",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "entry": "plugin.py",
   "category": "interactive",
   "min_telepilot_version": "0.33.0",
@@ -96,7 +96,7 @@
         "default": 100,
         "minimum": 3,
         "maximum": 200,
-        "description": "点击“生成题库”时希望 AI 一次生成的题目数量。成功后不再重复生成。"
+        "description": "点击一次“生成题库”后，由插件自动分批生成的题目总数。成功后不再重复生成。"
       },
       "default_questions": {
         "type": "integer",
