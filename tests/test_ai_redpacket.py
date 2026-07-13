@@ -373,7 +373,7 @@ class PluginActionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不得包含小数点"):
             plugin._amount_config(Context(), "reward_min", 1)
 
-    def test_ai_is_only_called_when_refreshing_bank(self) -> None:
+    def test_config_action_generates_bank_once_and_create_reuses_it(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
                 plugin = plugin_module.AIRedpacketPlugin()
@@ -387,9 +387,11 @@ class PluginActionTest(unittest.TestCase):
                 class AI:
                     def __init__(self):
                         self.calls = 0
+                        self.kwargs = []
 
                     async def complete(self, **kwargs):
                         self.calls += 1
+                        self.kwargs.append(kwargs)
                         return types.SimpleNamespace(
                             text=json.dumps(
                                 {
@@ -417,8 +419,23 @@ class PluginActionTest(unittest.TestCase):
 
                 ctx = Context()
                 ctx.ai = ai
-                refresh_actions = await plugin._refresh_bank(ctx, -1001, 11)
-                self.assertIn("题库已更新", refresh_actions[0]["text"])
+                action_result = await plugin.on_config_action(
+                    ctx,
+                    "generate_question_bank",
+                    {"config": dict(ctx.config)},
+                )
+                self.assertIn("题库生成完成", action_result["message"])
+                self.assertEqual(action_result["config_patch"]["question_bank_count"], 3)
+                self.assertEqual(ai.calls, 1)
+                self.assertEqual(ai.kwargs[0]["route"], "auto")
+                self.assertNotIn("provider_tag", ai.kwargs[0])
+
+                repeated = await plugin.on_config_action(
+                    ctx,
+                    "generate_question_bank",
+                    {"config": dict(ctx.config)},
+                )
+                self.assertIn("无需重复生成", repeated["message"])
                 self.assertEqual(ai.calls, 1)
 
                 create_actions = await plugin._create_packet(ctx, -1001, 99, 12, ["30", "3"])
@@ -426,6 +443,50 @@ class PluginActionTest(unittest.TestCase):
                 announcement = create_actions[0]
                 self.assertEqual(announcement["send_via"], "interaction_bot")
                 self.assertEqual(announcement["reply_markup"]["inline_keyboard"][0][0]["text"], "领取答题红包")
+
+        asyncio.run(run_case())
+
+    def test_selected_provider_and_model_use_fixed_route(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+
+                class HTTP:
+                    async def get(self, url):
+                        return types.SimpleNamespace(status_code=200, text="有效网页正文。" * 80)
+
+                class AI:
+                    def __init__(self):
+                        self.kwargs = None
+
+                    async def complete(self, **kwargs):
+                        self.kwargs = kwargs
+                        return types.SimpleNamespace(
+                            text=json.dumps({"title": "固定模型题库", "questions": _questions(3)}, ensure_ascii=False)
+                        )
+
+                ai = AI()
+
+                class Context:
+                    account_id = 1
+                    config = {
+                        "question_source_url": "https://example.com/source",
+                        "generation_count": 3,
+                        "telepilot_provider": "provider-1",
+                        "telepilot_model": "model-1",
+                    }
+                    account_config = {}
+                    log = None
+                    http = HTTP()
+
+                ctx = Context()
+                ctx.ai = ai
+                await plugin.on_config_action(ctx, "generate_question_bank", {"config": dict(ctx.config)})
+                self.assertEqual(ai.kwargs["route"], "fixed")
+                self.assertEqual(ai.kwargs["provider"], "provider-1")
+                self.assertEqual(ai.kwargs["model"], "model-1")
+                self.assertNotIn("provider_tag", ai.kwargs)
 
         asyncio.run(run_case())
 
