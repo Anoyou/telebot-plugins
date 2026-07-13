@@ -1,0 +1,276 @@
+"""AI 答题红包插件 Manifest。"""
+
+from __future__ import annotations
+
+from app.worker.plugins.manifest import Manifest
+
+
+PLUGIN_VERSION = "0.1.0"
+USAGE = (
+    "管理员先在插件配置中填写题库来源 URL，再发送 {prefix}{command} bank refresh 抓取网页并调用 AI 生成题库。"
+    "使用 {prefix}{command} create 总金额 [题目数] [题库ID] 创建红包；用户通过交互 Bot 按钮答题，"
+    "答对后的整数金额由平台 payout 交给 userbot 发放。每人每天最多成功领取一次，首次答错可重试一次。"
+)
+
+CONFIG_SCHEMA = {
+    "type": "object",
+    "x-ui-mode": "single",
+    "x-category": "interactive",
+    "x-usage-guide": USAGE,
+    "additionalProperties": False,
+    "properties": {
+        "usage_preview": {
+            "type": "string",
+            "title": "使用说明（只读）",
+            "readOnly": True,
+            "default": (
+                "1. 填写题库来源 URL，并保存插件配置。\n"
+                "2. 发送 {prefix}{command} bank refresh 生成或更新题库。\n"
+                "3. 发送 {prefix}{command} create 400 40 创建总额 400、40 题的红包。\n"
+                "4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n"
+                "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。"
+            ),
+        },
+        "command": {
+            "type": "string",
+            "title": "管理指令名",
+            "default": "airp",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^\\S+$",
+            "description": "只填写指令本体，不包含系统指令前缀。",
+        },
+        "question_source_url": {
+            "type": "string",
+            "title": "题库来源 URL",
+            "default": "",
+            "description": "保存后需执行 bank refresh；创建红包时不会再次调用 AI。",
+        },
+        "generation_count": {
+            "type": "integer",
+            "title": "每次生成题目数",
+            "default": 100,
+            "minimum": 3,
+            "maximum": 200,
+        },
+        "default_questions": {
+            "type": "integer",
+            "title": "默认红包题目数",
+            "default": 40,
+            "minimum": 1,
+            "maximum": 200,
+        },
+        "daily_limit": {
+            "type": "integer",
+            "title": "每日成功领取上限",
+            "default": 1,
+            "enum": [1],
+            "readOnly": True,
+            "description": "首版固定为每个 Telegram 用户每天最多成功领取一次。",
+        },
+        "retry_count": {
+            "type": "integer",
+            "title": "答错后重试次数",
+            "default": 1,
+            "enum": [1],
+            "readOnly": True,
+        },
+        "reward_min": {
+            "type": "integer",
+            "title": "单题最低金额",
+            "default": 1,
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "红包金额只允许整数。",
+        },
+        "reward_max": {
+            "type": "integer",
+            "title": "单题最高金额",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 1000000000,
+            "description": "红包金额只允许整数，且不得低于最低金额。",
+        },
+        "redpacket_ttl_seconds": {
+            "type": "integer",
+            "title": "红包有效期（秒）",
+            "default": 86400,
+            "minimum": 60,
+            "maximum": 604800,
+        },
+        "answer_timeout_seconds": {
+            "type": "integer",
+            "title": "题目预约时间（秒）",
+            "default": 300,
+            "minimum": 30,
+            "maximum": 3600,
+            "description": "超过时间未作答，题目金额会重新开放给其他用户。",
+        },
+        "timezone": {
+            "type": "string",
+            "title": "每日限制时区",
+            "default": "Asia/Shanghai",
+        },
+        "max_source_chars": {
+            "type": "integer",
+            "title": "网页正文最大字符数",
+            "default": 120000,
+            "minimum": 1000,
+            "maximum": 300000,
+        },
+        "ai_timeout_seconds": {
+            "type": "integer",
+            "title": "AI 生成超时（秒）",
+            "default": 600,
+            "minimum": 30,
+            "maximum": 3600,
+        },
+        "question_generation_prompt": {
+            "type": "string",
+            "title": "AI 出题系统提示词",
+            "default": "",
+            "description": "留空使用插件内置提示词；自定义时仍必须要求严格 JSON 和三选一题型。",
+        },
+        "packet_message_template": {
+            "type": "string",
+            "title": "红包开场模板",
+            "default": "<b>AI 答题红包</b>\n总金额：<code>{total_amount}</code>\n题目数量：<code>{question_count}</code>\n红包 ID：<code>{redpacket_id}</code>\n\n每人每天最多领取一次；答错后还有一次机会。",
+            "description": "占位符：{total_amount} 总金额；{question_count} 题目数；{redpacket_id} 红包 ID。支持 Telegram HTML。",
+        },
+        "question_message_template": {
+            "type": "string",
+            "title": "答题题面模板",
+            "default": "<b>AI 红包题目</b>\n{question}\n\n{options}\n\n请选择唯一正确答案。",
+            "description": "占位符：{question} 题目；{options} 三个选项。支持 Telegram HTML。",
+        },
+        "success_message_template": {
+            "type": "string",
+            "title": "答对结果模板",
+            "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答对了，获得 {reward}</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
+            "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}。",
+        },
+        "failed_message_template": {
+            "type": "string",
+            "title": "挑战失败模板",
+            "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>两次答错，今天的挑战已结束</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
+            "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}。",
+        },
+        "template_placeholders": {
+            "type": "string",
+            "title": "模板占位符（只读）",
+            "readOnly": True,
+            "default": "红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}",
+        },
+        "template_preview": {
+            "type": "string",
+            "title": "红包消息预览",
+            "readOnly": True,
+            "default": "<b>AI 答题红包</b>\n总金额：<code>400</code>\n题目数量：<code>40</code>\n\n每人每天最多领取一次；答错后还有一次机会。",
+        },
+    },
+    "required": [
+        "command",
+        "question_source_url",
+        "default_questions",
+        "reward_min",
+        "reward_max",
+    ],
+}
+
+EVENT_SUBSCRIPTIONS = [
+    {
+        "events": ["command"],
+        "source": ["userbot"],
+        "scope": "owner_only",
+        "description": "管理员通过 UserBot 命令生成题库、创建和管理红包。",
+    },
+    {
+        "events": ["callback_query", "session_close", "session_expired"],
+        "source": ["interaction_bot"],
+        "scope": "all_allowed_chats",
+        "entry_key": "ai_redpacket_claim",
+        "description": "交互 Bot 承接领取按钮、三选一答题和会话清理。",
+    },
+]
+
+ALLOWED_HOSTS = [
+    "**.com",
+    "**.net",
+    "**.org",
+    "**.io",
+    "**.dev",
+    "**.app",
+    "**.xyz",
+    "**.cn",
+    "**.top",
+    "**.site",
+    "**.online",
+    "**.info",
+    "**.me",
+    "**.tv",
+    "**.ai",
+    "**.co",
+    "**.cc",
+    "**.wiki",
+    "**.edu",
+    "**.gov",
+    "**.jp",
+    "**.hk",
+    "**.tw",
+]
+
+INTERACTION_ENTRIES = [
+    {
+        "key": "ai_redpacket_claim",
+        "title": "AI 红包领取与答题",
+        "description": "处理红包领取按钮和三选一答题按钮。",
+        "interaction_profile": "session_game",
+        "launch_mode": "hybrid",
+        "dispatch_modes": ["public_keyword"],
+        "events": ["callback_query", "session_close", "session_expired"],
+        "session_scope": "user",
+        "session_policy": {
+            "ttl_seconds": 3600,
+            "duplicate_start": "continue",
+            "close_on": ["completed", "session_close", "session_expired"],
+        },
+        "payload_contract": {
+            "required_envelope": ["source", "actor", "trigger", "session"],
+            "required_event_fields": ["type", "chat_id"],
+        },
+        "result_contract": {
+            "actions": ["send_message", "edit_message", "answer_callback", "payout", "end_session"],
+        },
+        "settlement": {
+            "mode": "auto",
+            "recipient_field": "reply_to_user_id",
+            "amount_field": "amount",
+        },
+        "message_channels": {"public_keyword": "interaction_bot"},
+        "money_channel": "userbot_reply",
+        "preserve_command_trigger": True,
+        "callback_fast_ack": False,
+    }
+]
+
+MANIFEST = Manifest(
+    key="ai_redpacket",
+    display_name="AI 答题红包",
+    version=PLUGIN_VERSION,
+    min_telepilot_version="0.33.0",
+    author="Anoyou",
+    description="从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
+    usage=USAGE,
+    category="interactive",
+    permissions=["send_message", "edit_message", "read_chat", "external_http", "ai_text"],
+    allowed_hosts=ALLOWED_HOSTS,
+    config_schema=CONFIG_SCHEMA,
+    event_subscriptions=EVENT_SUBSCRIPTIONS,
+    capabilities={},
+    strict_trace=True,
+    interaction_profile="session_game",
+    interaction_entries=INTERACTION_ENTRIES,
+)
+
+
+__all__ = ["MANIFEST"]

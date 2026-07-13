@@ -1,0 +1,4 @@
+ai_redpacket.sqlite3
+ai_redpacket.sqlite3-shm
+ai_redpacket.sqlite3-wal
+__pycache__/

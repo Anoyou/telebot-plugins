@@ -28,6 +28,7 @@ TelePilot 远程插件仓库。
 | [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
 | [quick_qa](./quick_qa/) | `{prefix}quickqa` | 快问快答积分淘汰赛，支持 URL + AI 生成题库 |
 | [lucky_redpack](./lucky_redpack/) | `{prefix}rp 发财 88888 10` | 拼手气口令红包，财富密码每次领取后随机刷新 |
+| [ai_redpacket](./ai_redpacket/) | `{prefix}airp create 总金额 [题目数]` | 基于 URL + AI 题库的三选一答题红包，Interaction Bot 答题、UserBot 发奖 |
 | [reply_anchor_test](./reply_anchor_test/) | `{prefix}send 用户ID 金额` | 测试 userbot 搜索目标用户近期发言并回复 `+金额` |
 | [random_benefit](./random_benefit/) | `{prefix}随机福利 on/off` | 随机引用指定群组发言回复自定义福利语 |
 

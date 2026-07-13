@@ -1,0 +1,580 @@
+"""AI 红包插件的 SQLite 持久化与事务层。"""
+
+from __future__ import annotations
+
+import json
+import random
+import sqlite3
+import time
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Iterator
+
+
+SCHEMA_VERSION = 1
+
+
+class StorageError(RuntimeError):
+    """持久化层业务错误。"""
+
+
+class AIStorage:
+    def __init__(self, path: Path | str) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.initialize()
+
+    def connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 10000")
+        return conn
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def initialize(self) -> None:
+        with self.connect() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS schema_meta (
+                    version INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS question_bank (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id INTEGER NOT NULL,
+                    bank_id TEXT NOT NULL,
+                    bank_title TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    options_json TEXT NOT NULL,
+                    answer INTEGER NOT NULL CHECK(answer BETWEEN 0 AND 2),
+                    explanation TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at REAL NOT NULL,
+                    UNIQUE(account_id, bank_id, question)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_question_bank_lookup
+                    ON question_bank(account_id, bank_id, id);
+
+                CREATE TABLE IF NOT EXISTS redpacket (
+                    id TEXT PRIMARY KEY,
+                    account_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    creator_id INTEGER NOT NULL,
+                    bank_id TEXT NOT NULL,
+                    total_amount INTEGER NOT NULL CHECK(total_amount > 0),
+                    remaining_amount INTEGER NOT NULL CHECK(remaining_amount >= 0),
+                    question_count INTEGER NOT NULL CHECK(question_count > 0),
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    expires_at REAL NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_redpacket_chat
+                    ON redpacket(account_id, chat_id, status, created_at);
+
+                CREATE TABLE IF NOT EXISTS redpacket_question (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    redpacket_id TEXT NOT NULL REFERENCES redpacket(id) ON DELETE CASCADE,
+                    question_bank_id INTEGER NOT NULL REFERENCES question_bank(id),
+                    reward INTEGER NOT NULL CHECK(reward > 0),
+                    reserved_by INTEGER,
+                    reserved_until REAL,
+                    claimed_by INTEGER,
+                    claimed_at REAL,
+                    UNIQUE(redpacket_id, question_bank_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_redpacket_question_available
+                    ON redpacket_question(redpacket_id, claimed_by, reserved_until);
+
+                CREATE TABLE IF NOT EXISTS redpacket_attempt (
+                    id TEXT PRIMARY KEY,
+                    account_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    redpacket_id TEXT NOT NULL REFERENCES redpacket(id) ON DELETE CASCADE,
+                    question_slot_id INTEGER NOT NULL REFERENCES redpacket_question(id),
+                    date TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    success INTEGER NOT NULL DEFAULT 0,
+                    reward INTEGER NOT NULL DEFAULT 0,
+                    option_order_json TEXT NOT NULL,
+                    answer_index INTEGER NOT NULL CHECK(answer_index BETWEEN 0 AND 2),
+                    submission_token TEXT NOT NULL,
+                    last_submission_key TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(account_id, user_id, redpacket_id, date)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_attempt_daily
+                    ON redpacket_attempt(account_id, user_id, date, success, attempts);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_submission
+                    ON redpacket_attempt(last_submission_key)
+                    WHERE last_submission_key IS NOT NULL;
+                """
+            )
+            row = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
+            if row is None:
+                conn.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
+
+    def replace_bank(
+        self,
+        *,
+        account_id: int,
+        bank_id: str,
+        title: str,
+        questions: list[dict[str, Any]],
+    ) -> int:
+        now = time.time()
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE question_bank
+                SET active = 0,
+                    bank_id = bank_id || ':archive:' || CAST(? AS INTEGER) || ':' || id
+                WHERE account_id = ? AND bank_id = ? AND active = 1
+                """,
+                (now, account_id, bank_id),
+            )
+            conn.executemany(
+                """
+                INSERT INTO question_bank(
+                    account_id, bank_id, bank_title, question, options_json,
+                    answer, explanation, source, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        account_id,
+                        bank_id,
+                        title,
+                        item["question"],
+                        json.dumps(item["options"], ensure_ascii=False),
+                        item["answer"],
+                        item.get("explanation", ""),
+                        item.get("source", ""),
+                        now,
+                    )
+                    for item in questions
+                ],
+            )
+            conn.execute(
+                """
+                DELETE FROM question_bank
+                WHERE active = 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM redpacket_question
+                      WHERE redpacket_question.question_bank_id = question_bank.id
+                  )
+                """
+            )
+        return len(questions)
+
+    def list_banks(self, account_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT bank_id, bank_title, source, COUNT(*) AS question_count,
+                       MAX(created_at) AS created_at
+                FROM question_bank
+                WHERE account_id = ? AND active = 1
+                GROUP BY bank_id, bank_title, source
+                ORDER BY created_at DESC
+                """,
+                (account_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def create_redpacket(
+        self,
+        *,
+        redpacket_id: str,
+        account_id: int,
+        chat_id: int,
+        creator_id: int,
+        bank_id: str,
+        total_amount: int,
+        rewards: list[int],
+        ttl_seconds: int,
+    ) -> dict[str, Any]:
+        now = time.time()
+        with self.transaction() as conn:
+            questions = conn.execute(
+                """
+                SELECT id FROM question_bank
+                WHERE account_id = ? AND bank_id = ? AND active = 1
+                ORDER BY RANDOM() LIMIT ?
+                """,
+                (account_id, bank_id, len(rewards)),
+            ).fetchall()
+            if len(questions) < len(rewards):
+                raise StorageError(f"题库只有 {len(questions)} 道可用题目，无法创建 {len(rewards)} 题红包")
+            conn.execute(
+                """
+                INSERT INTO redpacket(
+                    id, account_id, chat_id, creator_id, bank_id, total_amount,
+                    remaining_amount, question_count, status, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (
+                    redpacket_id,
+                    account_id,
+                    chat_id,
+                    creator_id,
+                    bank_id,
+                    total_amount,
+                    total_amount,
+                    len(rewards),
+                    now,
+                    now + ttl_seconds,
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO redpacket_question(redpacket_id, question_bank_id, reward) VALUES (?, ?, ?)",
+                [(redpacket_id, row["id"], reward) for row, reward in zip(questions, rewards)],
+            )
+        return self.get_redpacket(redpacket_id) or {}
+
+    def get_redpacket(self, redpacket_id: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM redpacket WHERE id = ?", (redpacket_id,)).fetchone()
+        return dict(row) if row else None
+
+    def list_redpackets(self, account_id: int, chat_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM redpacket
+                WHERE account_id = ? AND chat_id = ?
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (account_id, chat_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def close_redpacket(self, account_id: int, chat_id: int, redpacket_id: str) -> bool:
+        with self.transaction() as conn:
+            result = conn.execute(
+                """
+                UPDATE redpacket SET status = 'closed'
+                WHERE id = ? AND account_id = ? AND chat_id = ? AND status = 'active'
+                """,
+                (redpacket_id, account_id, chat_id),
+            )
+        return result.rowcount == 1
+
+    def reserve_question(
+        self,
+        *,
+        attempt_id: str,
+        account_id: int,
+        user_id: int,
+        chat_id: int,
+        redpacket_id: str,
+        date: str,
+        submission_token: str,
+        reservation_seconds: int,
+    ) -> dict[str, Any]:
+        now = time.time()
+        with self.transaction() as conn:
+            packet = conn.execute(
+                "SELECT * FROM redpacket WHERE id = ? AND account_id = ? AND chat_id = ?",
+                (redpacket_id, account_id, chat_id),
+            ).fetchone()
+            if packet is None:
+                raise StorageError("红包不存在")
+            if packet["status"] != "active":
+                raise StorageError("红包已经结束")
+            if packet["expires_at"] <= now:
+                conn.execute("UPDATE redpacket SET status = 'expired' WHERE id = ?", (redpacket_id,))
+                raise StorageError("红包已经过期")
+
+            blocked = conn.execute(
+                """
+                SELECT 1 FROM redpacket_attempt
+                WHERE account_id = ? AND user_id = ? AND date = ?
+                  AND (success = 1 OR attempts >= 2)
+                LIMIT 1
+                """,
+                (account_id, user_id, date),
+            ).fetchone()
+            if blocked:
+                raise StorageError("你今天的红包挑战已经结束")
+
+            existing = conn.execute(
+                """
+                SELECT a.*, q.question, q.options_json AS source_options_json,
+                       q.explanation, q.source, rq.reward AS slot_reward, rq.claimed_by,
+                       rq.reserved_by, rq.reserved_until
+                FROM redpacket_attempt a
+                JOIN redpacket_question rq ON rq.id = a.question_slot_id
+                JOIN question_bank q ON q.id = rq.question_bank_id
+                WHERE a.account_id = ? AND a.user_id = ? AND a.redpacket_id = ? AND a.date = ?
+                """,
+                (account_id, user_id, redpacket_id, date),
+            ).fetchone()
+            if existing:
+                if existing["claimed_by"] is not None:
+                    raise StorageError("这道红包题已经被领取")
+                if existing["reserved_by"] != user_id or not existing["reserved_until"] or existing["reserved_until"] <= now:
+                    conn.execute(
+                        "UPDATE redpacket_question SET reserved_by = ?, reserved_until = ? WHERE id = ? AND claimed_by IS NULL",
+                        (user_id, now + reservation_seconds, existing["question_slot_id"]),
+                    )
+                return dict(existing)
+
+            expired_slots = conn.execute(
+                """
+                SELECT id FROM redpacket_question
+                WHERE redpacket_id = ? AND claimed_by IS NULL
+                  AND reserved_until IS NOT NULL AND reserved_until <= ?
+                """,
+                (redpacket_id, now),
+            ).fetchall()
+            if expired_slots:
+                slot_ids = [int(item["id"]) for item in expired_slots]
+                placeholders = ",".join("?" for _ in slot_ids)
+                conn.execute(
+                    f"DELETE FROM redpacket_attempt WHERE attempts = 0 AND question_slot_id IN ({placeholders})",
+                    slot_ids,
+                )
+            conn.execute(
+                """
+                UPDATE redpacket_question
+                SET reserved_by = NULL, reserved_until = NULL
+                WHERE redpacket_id = ? AND claimed_by IS NULL
+                  AND reserved_until IS NOT NULL AND reserved_until <= ?
+                """,
+                (redpacket_id, now),
+            )
+            slot = conn.execute(
+                """
+                SELECT rq.id, rq.reward, q.question, q.options_json AS source_options_json,
+                       q.answer, q.explanation, q.source
+                FROM redpacket_question rq
+                JOIN question_bank q ON q.id = rq.question_bank_id
+                WHERE rq.redpacket_id = ? AND rq.claimed_by IS NULL AND rq.reserved_by IS NULL
+                ORDER BY RANDOM() LIMIT 1
+                """,
+                (redpacket_id,),
+            ).fetchone()
+            if slot is None:
+                raise StorageError("红包暂时没有可领取的题目，请稍后再试")
+            option_order = [0, 1, 2]
+            random.SystemRandom().shuffle(option_order)
+            answer_index = option_order.index(int(slot["answer"]))
+            conn.execute(
+                "UPDATE redpacket_question SET reserved_by = ?, reserved_until = ? WHERE id = ?",
+                (user_id, now + reservation_seconds, slot["id"]),
+            )
+            conn.execute(
+                """
+                INSERT INTO redpacket_attempt(
+                    id, account_id, user_id, chat_id, redpacket_id, question_slot_id,
+                    date, attempts, success, reward, option_order_json, answer_index,
+                    submission_token, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attempt_id,
+                    account_id,
+                    user_id,
+                    chat_id,
+                    redpacket_id,
+                    slot["id"],
+                    date,
+                    json.dumps(option_order),
+                    answer_index,
+                    submission_token,
+                    now,
+                    now,
+                ),
+            )
+            return {
+                "id": attempt_id,
+                "attempts": 0,
+                "success": 0,
+                "question": slot["question"],
+                "source_options_json": slot["source_options_json"],
+                "explanation": slot["explanation"],
+                "source": slot["source"],
+                "reward": slot["reward"],
+                "option_order_json": json.dumps(option_order),
+                "answer_index": answer_index,
+                "submission_token": submission_token,
+            }
+
+    def submit_answer(
+        self,
+        *,
+        attempt_id: str,
+        account_id: int,
+        user_id: int,
+        chat_id: int,
+        redpacket_id: str,
+        option_index: int,
+        submission_token: str,
+        submission_key: str,
+        retry_count: int,
+    ) -> dict[str, Any]:
+        now = time.time()
+        max_attempts = 1 + retry_count
+        with self.transaction() as conn:
+            row = conn.execute(
+                """
+                SELECT a.*, rq.reward AS slot_reward, rq.claimed_by, rq.reserved_by,
+                       q.question, q.options_json AS source_options_json,
+                       q.explanation, q.source, p.status AS packet_status,
+                       p.expires_at AS packet_expires_at
+                FROM redpacket_attempt a
+                JOIN redpacket_question rq ON rq.id = a.question_slot_id
+                JOIN question_bank q ON q.id = rq.question_bank_id
+                JOIN redpacket p ON p.id = a.redpacket_id
+                WHERE a.id = ? AND a.account_id = ? AND a.user_id = ?
+                  AND a.chat_id = ? AND a.redpacket_id = ?
+                """,
+                (attempt_id, account_id, user_id, chat_id, redpacket_id),
+            ).fetchone()
+            if row is None:
+                raise StorageError("答题记录不存在")
+            if row["submission_token"] != submission_token:
+                raise StorageError("答题按钮已经失效")
+            if row["last_submission_key"] == submission_key:
+                return {
+                    **dict(row),
+                    "reward": int(row["slot_reward"]),
+                    "duplicate": True,
+                    "correct": bool(row["success"]),
+                }
+            if row["success"]:
+                return {
+                    **dict(row),
+                    "reward": int(row["slot_reward"]),
+                    "duplicate": True,
+                    "correct": True,
+                }
+            if row["packet_status"] != "active" or row["packet_expires_at"] <= now:
+                if row["packet_expires_at"] <= now:
+                    conn.execute("UPDATE redpacket SET status = 'expired' WHERE id = ? AND status = 'active'", (row["redpacket_id"],))
+                conn.execute(
+                    """
+                    UPDATE redpacket_question
+                    SET reserved_by = NULL, reserved_until = NULL
+                    WHERE id = ? AND reserved_by = ? AND claimed_by IS NULL
+                    """,
+                    (row["question_slot_id"], user_id),
+                )
+                raise StorageError("红包已经结束或过期")
+            daily_block = conn.execute(
+                """
+                SELECT 1 FROM redpacket_attempt
+                WHERE account_id = ? AND user_id = ? AND date = ? AND id <> ?
+                  AND (success = 1 OR attempts >= ?)
+                LIMIT 1
+                """,
+                (account_id, user_id, row["date"], attempt_id, max_attempts),
+            ).fetchone()
+            if daily_block:
+                conn.execute(
+                    """
+                    UPDATE redpacket_question
+                    SET reserved_by = NULL, reserved_until = NULL
+                    WHERE id = ? AND reserved_by = ? AND claimed_by IS NULL
+                    """,
+                    (row["question_slot_id"], user_id),
+                )
+                raise StorageError("你今天的红包挑战已经结束")
+            if row["attempts"] >= max_attempts:
+                raise StorageError("你今天的答题次数已经用完")
+            if row["reserved_by"] != user_id or row["claimed_by"] is not None:
+                raise StorageError("这道红包题已经失效")
+
+            attempts = row["attempts"] + 1
+            correct = option_index == row["answer_index"]
+            if correct:
+                claimed = conn.execute(
+                    """
+                    UPDATE redpacket_question
+                    SET claimed_by = ?, claimed_at = ?, reserved_by = NULL, reserved_until = NULL
+                    WHERE id = ? AND claimed_by IS NULL AND reserved_by = ?
+                    """,
+                    (user_id, now, row["question_slot_id"], user_id),
+                )
+                if claimed.rowcount != 1:
+                    raise StorageError("红包已被领取，请重新选择")
+                packet = conn.execute(
+                    "SELECT remaining_amount FROM redpacket WHERE id = ? AND status = 'active'",
+                    (row["redpacket_id"],),
+                ).fetchone()
+                if packet is None or packet["remaining_amount"] < row["slot_reward"]:
+                    raise StorageError("红包余额不足")
+                conn.execute(
+                    """
+                    UPDATE redpacket
+                    SET remaining_amount = remaining_amount - ?,
+                        status = CASE WHEN remaining_amount - ? = 0 THEN 'finished' ELSE status END
+                    WHERE id = ?
+                    """,
+                    (row["slot_reward"], row["slot_reward"], row["redpacket_id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE redpacket_attempt
+                    SET attempts = ?, success = 1, reward = ?, last_submission_key = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (attempts, row["slot_reward"], submission_key, now, attempt_id),
+                )
+            else:
+                finished = attempts >= max_attempts
+                conn.execute(
+                    """
+                    UPDATE redpacket_attempt
+                    SET attempts = ?, last_submission_key = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (attempts, submission_key, now, attempt_id),
+                )
+                if finished:
+                    conn.execute(
+                        """
+                        UPDATE redpacket_question
+                        SET reserved_by = NULL, reserved_until = NULL
+                        WHERE id = ? AND reserved_by = ? AND claimed_by IS NULL
+                        """,
+                        (row["question_slot_id"], user_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE redpacket_question SET reserved_until = ?
+                        WHERE id = ? AND reserved_by = ? AND claimed_by IS NULL
+                        """,
+                        (row["packet_expires_at"], row["question_slot_id"], user_id),
+                    )
+            return {
+                **dict(row),
+                "reward": int(row["slot_reward"]),
+                "attempts": attempts,
+                "correct": correct,
+                "finished": correct or attempts >= max_attempts,
+                "duplicate": False,
+            }
