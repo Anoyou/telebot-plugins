@@ -7,6 +7,7 @@ import random
 import secrets
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -17,6 +18,27 @@ SCHEMA_VERSION = 4
 
 class StorageError(RuntimeError):
     """持久化层业务错误。"""
+
+
+def migrate_database(source: Path | str, target: Path | str) -> bool:
+    """Create a consistent SQLite backup at target when migrating legacy storage."""
+
+    source_path = Path(source)
+    target_path = Path(target)
+    if target_path.exists() or not source_path.is_file():
+        return False
+    if source_path.resolve() == target_path.resolve():
+        return False
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target_path.with_name(f".{target_path.name}.migrating-{uuid.uuid4().hex}")
+    try:
+        with sqlite3.connect(source_path) as source_db, sqlite3.connect(temporary) as target_db:
+            source_db.backup(target_db)
+        temporary.replace(target_path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return True
 
 
 class AIStorage:

@@ -21,10 +21,10 @@ from zoneinfo import ZoneInfo
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-from .storage import AIStorage, StorageError
+from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.7"
+PLUGIN_VERSION = "0.1.8"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -386,9 +386,22 @@ class AIRedpacketPlugin(Plugin):
 
     def __init__(self) -> None:
         super().__init__()
-        self.storage = AIStorage(DATA_PATH)
+        self.storage: AIStorage | None = None
+
+    def _ensure_storage(self, ctx: PluginContext) -> None:
+        data_dir = getattr(ctx, "data_dir", None)
+        if data_dir:
+            target = Path(data_dir) / DATA_PATH.name
+            migrate_database(DATA_PATH, target)
+        elif self.storage is not None:
+            return
+        else:
+            target = DATA_PATH
+        if self.storage is None or self.storage.path != target:
+            self.storage = AIStorage(target)
 
     async def on_startup(self, ctx: PluginContext) -> None:
+        self._ensure_storage(ctx)
         self.commands = {
             self._command(ctx): self._legacy_command,
             self._weekly_command(ctx): self._legacy_weekly_command,
@@ -417,6 +430,7 @@ class AIRedpacketPlugin(Plugin):
         return await self.on_interaction(ctx, ENTRY_KEY, payload)
 
     async def on_interaction(self, ctx: PluginContext, entry_key: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        self._ensure_storage(ctx)
         event_type = _event_type(payload)
         callback_id, callback_data = _callback(payload)
         if callback_data.startswith(f"{CALLBACK_PREFIX}:"):
@@ -433,6 +447,7 @@ class AIRedpacketPlugin(Plugin):
         action_key: str,
         payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        self._ensure_storage(ctx)
         if action_key != "generate_question_bank":
             return None
         current_config = _dict(payload.get("config"))

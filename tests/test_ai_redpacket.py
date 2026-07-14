@@ -12,6 +12,7 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _install_telepilot_stubs() -> None:
@@ -94,8 +95,8 @@ class RewardAllocationTest(unittest.TestCase):
 class QuestionGenerationTest(unittest.TestCase):
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.7")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.0")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.8")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -129,6 +130,29 @@ class QuestionGenerationTest(unittest.TestCase):
             self.assertIn(preview_key, properties)
         self.assertIn("weekly_message_template", properties)
         self.assertIn("settlement_message_template", properties)
+
+    def test_legacy_database_is_migrated_to_context_data_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            legacy_path = root / "installed" / "ai_redpacket.sqlite3"
+            legacy_storage = storage_module.AIStorage(legacy_path)
+            legacy_storage.replace_bank(
+                account_id=1,
+                bank_id="persistent-bank",
+                title="持久题库",
+                questions=_questions(3),
+            )
+
+            class Context:
+                data_dir = root / "plugin-data"
+
+            with patch.object(plugin_module, "DATA_PATH", legacy_path):
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin._ensure_storage(Context())
+
+            self.assertIsNotNone(plugin.storage)
+            self.assertEqual(plugin.storage.path, Context.data_dir / "ai_redpacket.sqlite3")
+            self.assertEqual(len(plugin.storage.get_bank_questions(1, "persistent-bank")), 3)
 
     def test_config_fields_are_grouped_into_one_and_two_column_sections(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
