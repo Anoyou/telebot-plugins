@@ -95,7 +95,7 @@ class RewardAllocationTest(unittest.TestCase):
 class QuestionGenerationTest(unittest.TestCase):
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.10")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.11")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -109,6 +109,8 @@ class QuestionGenerationTest(unittest.TestCase):
         self.assertEqual(properties["default_total_amount"]["default"], 150000)
         self.assertEqual(properties["default_questions"]["default"], 40)
         self.assertEqual(properties["reward_max"]["default"], 10000)
+        self.assertEqual(properties["answer_timeout_seconds"]["default"], 300)
+        self.assertIn("实际配置", properties["answer_timeout_seconds"]["description"])
         self.assertTrue(properties["weekly_auto_publish"]["default"])
         self.assertNotIn("readOnly", properties["daily_limit"])
         self.assertEqual(properties["daily_limit"]["maximum"], 100)
@@ -464,8 +466,13 @@ class StorageFlowTest(unittest.TestCase):
                 submission_key=f"retry-submit-{index}",
                 retry_count=2,
                 daily_limit=1,
+                reservation_seconds=45,
             )
             results.append(result)
+            if not result["finished"]:
+                remaining = float(result["reserved_until"]) - datetime.now().timestamp()
+                self.assertGreaterEqual(remaining, 44)
+                self.assertLessEqual(remaining, 46)
             token = str(result["submission_token"])
         self.assertFalse(results[0]["finished"])
         self.assertFalse(results[1]["finished"])
@@ -562,6 +569,71 @@ class StorageFlowTest(unittest.TestCase):
             ).fetchone()["count"]
         self.assertEqual([int(row["user_id"]) for row in reset_users], [153, 154])
         self.assertEqual(attempt_count, 3)
+
+    def test_unanswered_timeout_releases_question_without_consuming_attempt(self) -> None:
+        self._create_packet("timeout-return", 1)
+        attempt = self.storage.reserve_question(
+            attempt_id="timeout-attempt",
+            account_id=1,
+            user_id=156,
+            chat_id=-1001,
+            redpacket_id="timeout-return",
+            date="2026-07-14",
+            submission_token="timeout-token",
+            reservation_seconds=30,
+        )
+        with self.storage.transaction() as conn:
+            conn.execute(
+                "UPDATE redpacket_question SET reserved_until = ? WHERE id = ?",
+                (datetime.now().timestamp() - 1, int(attempt["question_slot_id"])),
+            )
+        with self.assertRaisesRegex(storage_module.StorageError, "题目答题时间已结束"):
+            self.storage.submit_answer(
+                attempt_id="timeout-attempt",
+                account_id=1,
+                user_id=156,
+                chat_id=-1001,
+                redpacket_id="timeout-return",
+                option_index=int(attempt["answer_index"]),
+                submission_token="timeout-token",
+                submission_key="timeout-submit",
+                retry_count=1,
+                reservation_seconds=30,
+            )
+
+        expired = self.storage.expire_unanswered_attempt(
+            account_id=1,
+            attempt_id="timeout-attempt",
+            user_id=156,
+            submission_token="timeout-token",
+            now=float(attempt["reserved_until"]) + 1,
+        )
+
+        self.assertTrue(expired["expired"])
+        with self.storage.connect() as conn:
+            old_attempt = conn.execute(
+                "SELECT 1 FROM redpacket_attempt WHERE id = ?",
+                ("timeout-attempt",),
+            ).fetchone()
+            slot = conn.execute(
+                "SELECT reserved_by, claimed_by FROM redpacket_question WHERE redpacket_id = ?",
+                ("timeout-return",),
+            ).fetchone()
+        self.assertIsNone(old_attempt)
+        self.assertIsNone(slot["reserved_by"])
+        self.assertIsNone(slot["claimed_by"])
+
+        retried = self.storage.reserve_question(
+            attempt_id="timeout-attempt-retry",
+            account_id=1,
+            user_id=156,
+            chat_id=-1001,
+            redpacket_id="timeout-return",
+            date="2026-07-14",
+            submission_token="timeout-token-retry",
+            reservation_seconds=30,
+        )
+        self.assertEqual(retried["attempts"], 0)
 
     def test_single_slot_cannot_be_reserved_concurrently(self) -> None:
         self._create_packet(count=1)
@@ -856,6 +928,18 @@ class PluginActionTest(unittest.TestCase):
         self.assertIn("自动删除原命令消息", usage)
         self.assertNotIn(",airp", usage)
 
+    def test_sender_display_name_prefers_name_then_username(self) -> None:
+        named = plugin_module.sender_display_name(
+            {"sender": {"user_id": 77, "display_name": "张三", "username": "zhangsan"}},
+            77,
+        )
+        username_only = plugin_module.sender_display_name(
+            {"sender": {"user_id": 78, "display_name": "  ", "username": "lisi"}},
+            78,
+        )
+        self.assertEqual(named, "张三")
+        self.assertEqual(username_only, "@lisi")
+
     def test_create_auto_adjusts_incompatible_reward_bounds_from_command(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
@@ -989,6 +1073,79 @@ class PluginActionTest(unittest.TestCase):
                 ],
             )
             self.assertEqual(unregistered, ["delete_failed_attempt-delete"])
+
+        asyncio.run(run_case())
+
+    def test_question_timeout_edits_returns_and_deletes_question_message(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="timeout-message",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                applied = []
+                delays = []
+
+                async def fake_sleep(delay):
+                    delays.append(delay)
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        return 88
+
+                    async def apply(self, actions, **kwargs):
+                        applied.append((actions, kwargs))
+
+                class Context:
+                    account_id = 1
+                    config = {"answer_timeout_seconds": 30}
+                    account_config = {}
+                    messages = Messages()
+                    log = None
+
+                with patch.object(plugin_module.asyncio, "sleep", fake_sleep):
+                    actions = plugin._start_attempt(Context(), "callback", -1001, 77, "张三", "timeout-message")
+                    question = actions[1]
+                    self.assertEqual(question["send_via"], "interaction_bot")
+                    self.assertIn("save_message_id_key", question)
+                    timeout_job_id = next(
+                        job_id for job_id in plugin._timer_tasks if job_id.startswith("question_timeout_")
+                    )
+                    attempt_id = timeout_job_id.removeprefix("question_timeout_")
+                    await plugin._timer_tasks[timeout_job_id]
+                    pending = list(plugin._timer_tasks.values())
+                    if pending:
+                        await asyncio.gather(*pending)
+
+                edit = applied[0][0][0]
+                self.assertEqual(edit["type"], "edit_message")
+                self.assertEqual(edit["message_id"], 88)
+                self.assertIn("30 秒内未作答", edit["text"])
+                self.assertIn("已回归题库", edit["text"])
+                self.assertIn("不消耗领取与答题次数", edit["text"])
+                self.assertEqual(edit["reply_markup"], {"inline_keyboard": []})
+                self.assertGreaterEqual(delays[0], 29)
+                self.assertLessEqual(delays[0], 31)
+                self.assertIn(5, delays)
+
+                deleted = applied[1][0][0]
+                self.assertEqual(deleted["type"], "delete_message")
+                self.assertEqual(deleted["message_id"], 88)
+                with plugin.storage.connect() as conn:
+                    attempt = conn.execute(
+                        "SELECT 1 FROM redpacket_attempt WHERE id = ?",
+                        (attempt_id,),
+                    ).fetchone()
+                self.assertIsNone(attempt)
 
         asyncio.run(run_case())
 
@@ -1297,6 +1454,8 @@ class PluginActionTest(unittest.TestCase):
                 plugin._today = lambda ctx: "2026-07-14"
                 actions = await plugin._handle_admin_command(Context(), -1001, 77, 1, ["reset"])
                 self.assertIn("用户 <code>77</code>", actions[0]["text"])
+                self.assertEqual(actions[0]["send_via"], "interaction_bot")
+                self.assertIn("save_message_id_key", actions[0])
                 self.assertNotIn("reply_to_message_id", actions[0])
                 self.assertEqual(actions[1]["type"], "delete_message")
                 self.assertEqual(actions[1]["message_id"], 1)
@@ -1314,25 +1473,49 @@ class PluginActionTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tempdir:
                 plugin = plugin_module.AIRedpacketPlugin()
                 plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                applied = []
+                delays = []
+
+                async def fake_sleep(delay):
+                    delays.append(delay)
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        return 99
+
+                    async def apply(self, actions, **kwargs):
+                        applied.append((actions, kwargs))
 
                 class Context:
                     account_id = 1
                     config = {"timezone": "Asia/Shanghai"}
                     account_config = {}
+                    messages = Messages()
                     log = None
 
                 plugin._today = lambda ctx: "2026-07-14"
-                with patch.object(
-                    plugin.storage,
-                    "reset_all_daily_limits",
-                    return_value={"user_count": 3},
-                ) as reset_all:
+                with (
+                    patch.object(
+                        plugin.storage,
+                        "reset_all_daily_limits",
+                        return_value={"user_count": 3},
+                    ) as reset_all,
+                    patch.object(plugin_module.asyncio, "sleep", fake_sleep),
+                ):
                     actions = await plugin._handle_admin_command(Context(), -1001, 77, 1, ["reset", "all"])
+                    timer_task = next(iter(plugin._timer_tasks.values()))
+                    await timer_task
 
                 reset_all.assert_called_once_with(1, "2026-07-14")
                 self.assertIn("全部 <code>3</code> 名用户", actions[0]["text"])
+                self.assertEqual(actions[0]["send_via"], "interaction_bot")
+                self.assertIn("save_message_id_key", actions[0])
                 self.assertEqual(actions[1]["type"], "delete_message")
                 self.assertEqual(actions[1]["send_via"], "userbot_reply")
+                self.assertEqual(delays, [3])
+                self.assertEqual(applied[0][0][0]["type"], "delete_message")
+                self.assertEqual(applied[0][0][0]["message_id"], 99)
+                self.assertEqual(applied[0][0][0]["send_via"], "interaction_bot")
 
                 invalid = await plugin._handle_admin_command(Context(), -1001, 77, 2, ["reset", "not-a-user"])
                 self.assertEqual([action["type"] for action in invalid], ["send_message"])

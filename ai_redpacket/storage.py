@@ -358,6 +358,64 @@ class AIStorage:
             "user_count": len(user_ids),
         }
 
+    def expire_unanswered_attempt(
+        self,
+        *,
+        account_id: int,
+        attempt_id: str,
+        user_id: int,
+        submission_token: str,
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        current = time.time() if now is None else float(now)
+        with self.transaction() as conn:
+            row = conn.execute(
+                """
+                SELECT a.id, a.redpacket_id, a.question_slot_id, a.submission_token,
+                       a.success, rq.claimed_by, rq.reserved_by, rq.reserved_until
+                FROM redpacket_attempt a
+                JOIN redpacket_question rq ON rq.id = a.question_slot_id
+                WHERE a.id = ? AND a.account_id = ? AND a.user_id = ?
+                """,
+                (attempt_id, account_id, user_id),
+            ).fetchone()
+            if row is None:
+                return {"expired": True, "already_released": True, "attempt_id": attempt_id}
+            if (
+                bool(row["success"])
+                or row["claimed_by"] is not None
+                or int(row["reserved_by"] or 0) != user_id
+                or str(row["submission_token"]) != submission_token
+                or not row["reserved_until"]
+                or float(row["reserved_until"]) > current
+            ):
+                return None
+            deleted = conn.execute(
+                """
+                DELETE FROM redpacket_attempt
+                WHERE id = ? AND account_id = ? AND user_id = ?
+                  AND success = 0 AND submission_token = ?
+                """,
+                (attempt_id, account_id, user_id, submission_token),
+            )
+            if deleted.rowcount != 1:
+                return None
+            conn.execute(
+                """
+                UPDATE redpacket_question
+                SET reserved_by = NULL, reserved_until = NULL
+                WHERE id = ? AND reserved_by = ? AND claimed_by IS NULL
+                """,
+                (row["question_slot_id"], user_id),
+            )
+            return {
+                "expired": True,
+                "already_released": False,
+                "attempt_id": attempt_id,
+                "redpacket_id": str(row["redpacket_id"]),
+                "question_slot_id": int(row["question_slot_id"]),
+            }
+
     def create_redpacket(
         self,
         *,
@@ -630,11 +688,15 @@ class AIStorage:
                 if existing["claimed_by"] is not None:
                     raise StorageError("这道红包题已经被领取")
                 if existing["reserved_by"] != user_id or not existing["reserved_until"] or existing["reserved_until"] <= now:
+                    reserved_until = now + reservation_seconds
                     conn.execute(
                         "UPDATE redpacket_question SET reserved_by = ?, reserved_until = ? WHERE id = ? AND claimed_by IS NULL",
-                        (user_id, now + reservation_seconds, existing["question_slot_id"]),
+                        (user_id, reserved_until, existing["question_slot_id"]),
                     )
+                else:
+                    reserved_until = float(existing["reserved_until"])
                 existing_result = dict(existing)
+                existing_result["reserved_until"] = reserved_until
                 if user_display_name:
                     existing_result["user_display_name"] = user_display_name
                 return existing_result
@@ -683,6 +745,7 @@ class AIStorage:
                 "UPDATE redpacket_question SET reserved_by = ?, reserved_until = ? WHERE id = ?",
                 (user_id, now + reservation_seconds, slot["id"]),
             )
+            reserved_until = now + reservation_seconds
             conn.execute(
                 """
                 INSERT INTO redpacket_attempt(
@@ -718,9 +781,11 @@ class AIStorage:
                 "explanation": slot["explanation"],
                 "source": slot["source"],
                 "reward": slot["reward"],
+                "question_slot_id": int(slot["id"]),
                 "option_order_json": json.dumps(option_order),
                 "answer_index": answer_index,
                 "submission_token": submission_token,
+                "reserved_until": reserved_until,
             }
 
     def submit_answer(
@@ -736,6 +801,7 @@ class AIStorage:
         submission_key: str,
         retry_count: int,
         daily_limit: int = 1,
+        reservation_seconds: int = 30,
     ) -> dict[str, Any]:
         now = time.time()
         max_attempts = 1 + max(0, int(retry_count))
@@ -744,6 +810,7 @@ class AIStorage:
             row = conn.execute(
                 """
                 SELECT a.*, rq.reward AS slot_reward, rq.claimed_by, rq.reserved_by,
+                       rq.reserved_until,
                        q.question, q.options_json AS source_options_json,
                        q.explanation, q.source, p.status AS packet_status,
                        p.expires_at AS packet_expires_at
@@ -788,6 +855,8 @@ class AIStorage:
                     (row["question_slot_id"], user_id),
                 )
                 raise StorageError("红包已经结束或过期")
+            if not row["reserved_until"] or float(row["reserved_until"]) <= now:
+                raise StorageError("题目答题时间已结束")
             reset = conn.execute(
                 "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
                 (account_id, user_id, row["date"]),
@@ -858,6 +927,10 @@ class AIStorage:
             else:
                 finished = attempts >= max_attempts
                 next_submission_token = secrets.token_urlsafe(6)
+                next_reserved_until = min(
+                    float(row["packet_expires_at"]),
+                    now + max(1, int(reservation_seconds)),
+                )
                 conn.execute(
                     """
                     UPDATE redpacket_attempt
@@ -881,7 +954,7 @@ class AIStorage:
                         UPDATE redpacket_question SET reserved_until = ?
                         WHERE id = ? AND reserved_by = ? AND claimed_by IS NULL
                         """,
-                        (row["packet_expires_at"], row["question_slot_id"], user_id),
+                        (next_reserved_until, row["question_slot_id"], user_id),
                     )
             return {
                 **dict(row),
@@ -892,4 +965,5 @@ class AIStorage:
                 "max_attempts": max_attempts,
                 "duplicate": False,
                 "submission_token": row["submission_token"] if correct else next_submission_token,
+                "reserved_until": None if correct or finished else next_reserved_until,
             }

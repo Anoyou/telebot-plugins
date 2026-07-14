@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -24,10 +24,13 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.10"
+PLUGIN_VERSION = "0.1.11"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
+RESET_NOTICE_DELETE_SECONDS = 3
+QUESTION_TIMEOUT_DELETE_SECONDS = 5
+DEFAULT_ANSWER_TIMEOUT_SECONDS = 300
 CALLBACK_PREFIX = "airp"
 ENTRY_KEY = "ai_redpacket_claim"
 DATA_PATH = Path(__file__).with_name("ai_redpacket.sqlite3")
@@ -93,16 +96,14 @@ def truncate_display_name(value: Any, limit: int = 10) -> str:
 
 def sender_display_name(payload: dict[str, Any], user_id: int) -> str:
     sender = _sender(payload)
-    username = str(sender.get("username") or "").strip().lstrip("@")
-    if username:
-        return f"@{username[:32]}"
     name = str(sender.get("display_name") or sender.get("name") or "").strip()
     if not name:
         name = " ".join(
             part for part in (str(sender.get("first_name") or "").strip(), str(sender.get("last_name") or "").strip()) if part
         )
     if not name:
-        name = str(sender.get("username") or f"用户{user_id}")
+        username = str(sender.get("username") or "").strip().lstrip("@")
+        name = f"@{username[:32]}" if username else f"用户{user_id}"
     return truncate_display_name(name)
 
 
@@ -427,6 +428,7 @@ class AIRedpacketPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__()
         self.storage: AIStorage | None = None
+        self._timer_tasks: dict[str, asyncio.Task[Any]] = {}
 
     def _ensure_storage(self, ctx: PluginContext) -> None:
         data_dir = getattr(ctx, "data_dir", None)
@@ -461,6 +463,12 @@ class AIRedpacketPlugin(Plugin):
         await self._log(ctx, "info", "AI 答题红包插件已启动", version=PLUGIN_VERSION)
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        timer_tasks = list(self._timer_tasks.values())
+        for task in timer_tasks:
+            task.cancel()
+        if timer_tasks:
+            await asyncio.gather(*timer_tasks, return_exceptions=True)
+        self._timer_tasks.clear()
         scheduler = getattr(ctx, "scheduler", None)
         if scheduler is not None:
             scheduler.unregister_all()
@@ -587,6 +595,7 @@ class AIRedpacketPlugin(Plugin):
             if len(args) >= 2 and args[1].lower() in {"all", "全部", "所有"}:
                 result = self.storage.reset_all_daily_limits(ctx.account_id, date)
                 user_count = int(result["user_count"])
+                notice_key = f"ai_redpacket:reset_notice:{secrets.token_hex(8)}"
                 await self._log(
                     ctx,
                     "info",
@@ -597,8 +606,18 @@ class AIRedpacketPlugin(Plugin):
                     _send(
                         f"已重置 <code>{date}</code> 当日全部 <code>{user_count}</code> 名用户的领取与答题限制。既有奖励和红包记录不会撤销。",
                         chat_id=chat_id,
+                        via="interaction_bot",
+                        save_message_id_key=notice_key,
                     )
                 ]
+                self._schedule_saved_message_delete(
+                    ctx,
+                    chat_id,
+                    notice_key,
+                    delay_seconds=RESET_NOTICE_DELETE_SECONDS,
+                    job_id=f"delete_reset_notice_{secrets.token_hex(8)}",
+                    log_message="全员重置提示已自动删除",
+                )
                 delete_action = _delete_command(reply_to, chat_id=chat_id)
                 if delete_action:
                     actions.append(delete_action)
@@ -609,6 +628,7 @@ class AIRedpacketPlugin(Plugin):
                     return [_send("用户 ID 必须是正整数。", chat_id=chat_id, reply_to=reply_to)]
                 target_user_id = int(args[1])
             self.storage.reset_daily_limit(ctx.account_id, target_user_id, date)
+            notice_key = f"ai_redpacket:reset_notice:{secrets.token_hex(8)}"
             await self._log(
                 ctx,
                 "info",
@@ -619,8 +639,18 @@ class AIRedpacketPlugin(Plugin):
                 _send(
                     f"已重置用户 <code>{target_user_id}</code> 在 <code>{date}</code> 的领取与答题限制。既有奖励和红包记录不会撤销。",
                     chat_id=chat_id,
+                    via="interaction_bot",
+                    save_message_id_key=notice_key,
                 )
             ]
+            self._schedule_saved_message_delete(
+                ctx,
+                chat_id,
+                notice_key,
+                delay_seconds=RESET_NOTICE_DELETE_SECONDS,
+                job_id=f"delete_reset_notice_{secrets.token_hex(8)}",
+                log_message="单人重置提示已自动删除",
+            )
             delete_action = _delete_command(reply_to, chat_id=chat_id)
             if delete_action:
                 actions.append(delete_action)
@@ -1121,6 +1151,13 @@ class AIRedpacketPlugin(Plugin):
             return [_ack(callback_id, "红包不存在", alert=True)]
         attempt_id = secrets.token_hex(8)
         token = secrets.token_urlsafe(6)
+        timeout_seconds = self._int_config(
+            ctx,
+            "answer_timeout_seconds",
+            DEFAULT_ANSWER_TIMEOUT_SECONDS,
+            30,
+            3600,
+        )
         try:
             attempt = self.storage.reserve_question(
                 attempt_id=attempt_id,
@@ -1130,7 +1167,7 @@ class AIRedpacketPlugin(Plugin):
                 redpacket_id=redpacket_id,
                 date=self._today(ctx),
                 submission_token=token,
-                reservation_seconds=self._int_config(ctx, "answer_timeout_seconds", 300, 30, 3600),
+                reservation_seconds=timeout_seconds,
                 daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
                 retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
                 user_display_name=user_display_name,
@@ -1139,6 +1176,17 @@ class AIRedpacketPlugin(Plugin):
             return [_ack(callback_id, str(exc), alert=True)]
         attempt_id = str(attempt["id"])
         token = str(attempt["submission_token"])
+        question_message_key = f"ai_redpacket:question:{attempt_id}"
+        self._schedule_question_timeout(
+            ctx,
+            chat_id=chat_id,
+            user_id=user_id,
+            attempt_id=attempt_id,
+            submission_token=token,
+            reserved_until=float(attempt["reserved_until"]),
+            message_key=question_message_key,
+            timeout_seconds=timeout_seconds,
+        )
         return [
             _ack(callback_id, "题目已发出"),
             _send(
@@ -1146,6 +1194,7 @@ class AIRedpacketPlugin(Plugin):
                 chat_id=chat_id,
                 markup=self._answer_markup(redpacket_id, attempt_id, token, attempt),
                 via="interaction_bot",
+                save_message_id_key=question_message_key,
             ),
         ]
 
@@ -1164,6 +1213,13 @@ class AIRedpacketPlugin(Plugin):
         if option_index not in {0, 1, 2}:
             return [_ack(callback_id, "答案无效", alert=True)]
         submission_key = hashlib.sha256(f"{callback_id}:{attempt_id}:{option_index}".encode()).hexdigest()
+        timeout_seconds = self._int_config(
+            ctx,
+            "answer_timeout_seconds",
+            DEFAULT_ANSWER_TIMEOUT_SECONDS,
+            30,
+            3600,
+        )
         try:
             result = self.storage.submit_answer(
                 attempt_id=attempt_id,
@@ -1176,6 +1232,7 @@ class AIRedpacketPlugin(Plugin):
                 submission_key=submission_key,
                 retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
                 daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
+                reservation_seconds=timeout_seconds,
             )
         except StorageError as exc:
             return [_ack(callback_id, str(exc), alert=True)]
@@ -1230,6 +1287,16 @@ class AIRedpacketPlugin(Plugin):
         actions = [_ack(callback_id, f"答错了，还有 {remaining} 次机会", alert=True)]
         if edit:
             actions.append(edit)
+        self._schedule_question_timeout(
+            ctx,
+            chat_id=chat_id,
+            user_id=user_id,
+            attempt_id=attempt_id,
+            submission_token=str(result["submission_token"]),
+            reserved_until=float(result["reserved_until"]),
+            message_key=f"ai_redpacket:question:{attempt_id}",
+            timeout_seconds=timeout_seconds,
+        )
         return actions
 
     def _payout_key(self, ctx: PluginContext, redpacket_id: str, question_slot_id: int, user_id: int) -> str:
@@ -1357,6 +1424,162 @@ class AIRedpacketPlugin(Plugin):
         for packet in packets:
             lines.append(f"- <code>{packet['id']}</code> {packet['status']}，剩余 {packet['remaining_amount']}/{packet['total_amount']}，{packet['question_count']} 题")
         return "\n".join(lines)
+
+    def _schedule_saved_message_delete(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        message_key: str,
+        *,
+        delay_seconds: int,
+        job_id: str,
+        log_message: str,
+    ) -> None:
+        async def delete_saved_message() -> None:
+            messages = getattr(ctx, "messages", None)
+            read_message_id = getattr(messages, "read_saved_message_id", None) if messages is not None else None
+            apply_actions = getattr(messages, "apply", None) if messages is not None else None
+            if not callable(read_message_id) or not callable(apply_actions):
+                raise RuntimeError("当前没有可用的消息删除能力")
+            message_id = await read_message_id(message_key)
+            if not message_id:
+                raise RuntimeError("尚未读取到待删除消息 ID")
+            await apply_actions(
+                [
+                    {
+                        "type": "delete_message",
+                        "send_via": "interaction_bot",
+                        "chat_id": chat_id,
+                        "message_id": int(message_id),
+                    }
+                ],
+                entry_key=ENTRY_KEY,
+            )
+            await self._log(
+                ctx,
+                "info",
+                log_message,
+                **{"聊天ID": chat_id, "消息ID": int(message_id)},
+            )
+
+        self._schedule_timer(
+            ctx,
+            job_id,
+            delay_seconds,
+            delete_saved_message,
+        )
+
+    def _schedule_timer(
+        self,
+        ctx: PluginContext,
+        job_id: str,
+        delay_seconds: float,
+        callback: Callable[[], Awaitable[None]],
+    ) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        previous = self._timer_tasks.pop(job_id, None)
+        if previous is not None and not previous.done():
+            previous.cancel()
+
+        async def run_timer() -> None:
+            try:
+                await asyncio.sleep(max(0.0, float(delay_seconds)))
+                await callback()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await self._log(
+                    ctx,
+                    "error",
+                    "AI 红包延时消息任务失败",
+                    **{"任务ID": job_id, "错误类型": type(exc).__name__},
+                )
+
+        task = loop.create_task(run_timer())
+        self._timer_tasks[job_id] = task
+
+        def cleanup(done: asyncio.Task[Any]) -> None:
+            if self._timer_tasks.get(job_id) is done:
+                self._timer_tasks.pop(job_id, None)
+
+        task.add_done_callback(cleanup)
+
+    def _schedule_question_timeout(
+        self,
+        ctx: PluginContext,
+        *,
+        chat_id: int,
+        user_id: int,
+        attempt_id: str,
+        submission_token: str,
+        reserved_until: float,
+        message_key: str,
+        timeout_seconds: int,
+    ) -> None:
+        if self.storage is None:
+            return
+        job_id = f"question_timeout_{attempt_id}"
+
+        async def expire_question() -> None:
+            expired = self.storage.expire_unanswered_attempt(
+                account_id=ctx.account_id,
+                attempt_id=attempt_id,
+                user_id=user_id,
+                submission_token=submission_token,
+                now=reserved_until,
+            )
+            if expired is None:
+                return
+            messages = getattr(ctx, "messages", None)
+            read_message_id = getattr(messages, "read_saved_message_id", None) if messages is not None else None
+            apply_actions = getattr(messages, "apply", None) if messages is not None else None
+            if not callable(read_message_id) or not callable(apply_actions):
+                raise RuntimeError("当前没有可用的题目超时消息操作能力")
+            message_id = await read_message_id(message_key)
+            if not message_id:
+                raise RuntimeError("尚未读取到超时题目消息 ID")
+            await apply_actions(
+                [
+                    {
+                        "type": "edit_message",
+                        "send_via": "interaction_bot",
+                        "chat_id": chat_id,
+                        "message_id": int(message_id),
+                        "text": (
+                            "<b>答题超时</b>\n\n"
+                            f"{timeout_seconds} 秒内未作答，本题失效并已回归题库。\n"
+                            "本次不消耗领取与答题次数。"
+                        ),
+                        "parse_mode": "html",
+                        "reply_markup": {"inline_keyboard": []},
+                    }
+                ],
+                entry_key=ENTRY_KEY,
+            )
+            self._schedule_saved_message_delete(
+                ctx,
+                chat_id,
+                message_key,
+                delay_seconds=QUESTION_TIMEOUT_DELETE_SECONDS,
+                job_id=f"delete_timeout_question_{attempt_id}",
+                log_message="超时题目消息已自动删除",
+            )
+            await self._log(
+                ctx,
+                "info",
+                "题目超时未作答并已回归题库",
+                **{"答题记录ID": attempt_id, "用户ID": user_id, "聊天ID": chat_id},
+            )
+
+        self._schedule_timer(
+            ctx,
+            job_id,
+            max(0.0, reserved_until - time.time()),
+            expire_question,
+        )
 
     def _schedule_failed_message_delete(
         self,
@@ -1659,7 +1882,8 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{self._prefix(ctx)}{self._weekly_command(ctx)}</code> 查看本周排行榜\n"
             f"<code>{base} list</code> 查看当前聊天红包\n"
             f"<code>{base} close 红包ID</code> 关闭红包\n"
-            "创建、重置或关闭成功后自动删除原命令消息；失败时保留。"
+            "创建、重置或关闭成功后自动删除原命令消息；失败时保留。\n"
+            "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。"
         )
 
     def _command_args(self, ctx: PluginContext, text: str, *, command_confirmed: bool = False) -> list[str] | None:

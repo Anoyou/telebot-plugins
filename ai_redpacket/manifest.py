@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.10"
+PLUGIN_VERSION = "0.1.11"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -18,6 +18,7 @@ USAGE = (
     "{prefix}{command} reset all 重置当天所有人的参与限制；{prefix}{command}-7 查询本周排行榜；"
     "{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。"
     "管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。"
+    "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。"
 )
 
 CONFIG_SCHEMA = {
@@ -41,7 +42,8 @@ CONFIG_SCHEMA = {
                 "7. 发送 {prefix}{command} bank list 查看题库，{prefix}{command} list 查看当前群红包。\n"
                 "8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n"
                 "9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。\n"
-                "10. 管理员创建、重置或关闭红包成功后会自动删除原命令消息；参数错误或操作失败时保留。"
+                "10. 管理员创建、重置或关闭红包成功后会自动删除原命令消息；参数错误或操作失败时保留。\n"
+                "11. 重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。"
             ),
         },
         "command": {
@@ -242,7 +244,7 @@ CONFIG_SCHEMA = {
             "default": 300,
             "minimum": 30,
             "maximum": 3600,
-            "description": "超过时间未作答，题目金额会重新开放给其他用户。",
+            "description": "按此实际配置为每次答题或重试计时；超时后题目消息会提示失效并回归题库，本次不消耗次数，5 秒后自动删除。",
         },
         "timezone": {
             "type": "string",
