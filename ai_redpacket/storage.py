@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import random
 import secrets
 import sqlite3
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class StorageError(RuntimeError):
@@ -177,6 +178,14 @@ class AIStorage:
                     week_start TEXT NOT NULL,
                     published_at REAL NOT NULL,
                     PRIMARY KEY(account_id, chat_id, week_start)
+                );
+
+                CREATE TABLE IF NOT EXISTS redpacket_daily_reminder (
+                    account_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
+                    packet_date TEXT NOT NULL,
+                    published_at REAL NOT NULL,
+                    PRIMARY KEY(account_id, chat_id, packet_date)
                 );
                 """
             )
@@ -490,8 +499,12 @@ class AIStorage:
         total_amount: int,
         rewards: list[int],
         ttl_seconds: int,
+        hard_expires_at: float | None = None,
     ) -> dict[str, Any]:
         now = time.time()
+        expires_at = now + ttl_seconds
+        if hard_expires_at is not None:
+            expires_at = min(expires_at, float(hard_expires_at))
         with self.transaction() as conn:
             questions = conn.execute(
                 """
@@ -520,7 +533,7 @@ class AIStorage:
                     total_amount,
                     len(rewards),
                     now,
-                    now + ttl_seconds,
+                    expires_at,
                 ),
             )
             conn.executemany(
@@ -528,6 +541,35 @@ class AIStorage:
                 [(redpacket_id, row["id"], reward) for row, reward in zip(questions, rewards)],
             )
         return self.get_redpacket(redpacket_id) or {}
+
+    def list_active_redpackets_for_account(self, account_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM redpacket
+                WHERE account_id = ? AND status = 'active'
+                ORDER BY created_at
+                """,
+                (account_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def shorten_redpacket_expiration(
+        self,
+        account_id: int,
+        redpacket_id: str,
+        expires_at: float,
+    ) -> bool:
+        with self.transaction() as conn:
+            result = conn.execute(
+                """
+                UPDATE redpacket
+                SET expires_at = MIN(expires_at, ?)
+                WHERE account_id = ? AND id = ? AND status = 'active'
+                """,
+                (float(expires_at), account_id, redpacket_id),
+            )
+        return result.rowcount == 1
 
     def get_redpacket(self, redpacket_id: str) -> dict[str, Any] | None:
         with self.connect() as conn:
@@ -639,6 +681,71 @@ class AIStorage:
                 (current, account_id, redpacket_id),
             )
         return result.rowcount == 1
+
+    def unfinished_redpackets_created_between(
+        self,
+        account_id: int,
+        start_at: float,
+        end_at: float,
+        now: float | None = None,
+    ) -> list[dict[str, Any]]:
+        current = time.time() if now is None else float(now)
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE redpacket
+                SET status = 'expired'
+                WHERE account_id = ? AND status = 'active' AND expires_at <= ?
+                """,
+                (account_id, current),
+            )
+            rows = conn.execute(
+                """
+                SELECT p.*,
+                       COUNT(CASE WHEN rq.claimed_by IS NOT NULL THEN 1 END) AS claimed_count,
+                       COALESCE(SUM(CASE WHEN rq.claimed_by IS NOT NULL THEN rq.reward ELSE 0 END), 0) AS claimed_amount
+                FROM redpacket p
+                LEFT JOIN redpacket_question rq ON rq.redpacket_id = p.id
+                WHERE p.account_id = ?
+                  AND p.created_at >= ? AND p.created_at < ?
+                  AND p.status = 'active' AND p.expires_at > ?
+                  AND p.remaining_amount > 0
+                GROUP BY p.id
+                ORDER BY p.chat_id, p.created_at
+                """,
+                (account_id, float(start_at), float(end_at), current),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def daily_reminder_published(self, account_id: int, chat_id: int, packet_date: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM redpacket_daily_reminder
+                WHERE account_id = ? AND chat_id = ? AND packet_date = ?
+                """,
+                (account_id, chat_id, packet_date),
+            ).fetchone()
+        return row is not None
+
+    def mark_daily_reminder_published(
+        self,
+        account_id: int,
+        chat_id: int,
+        packet_date: str,
+        published_at: float | None = None,
+    ) -> None:
+        current = time.time() if published_at is None else float(published_at)
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO redpacket_daily_reminder(account_id, chat_id, packet_date, published_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id, chat_id, packet_date) DO UPDATE SET
+                    published_at = excluded.published_at
+                """,
+                (account_id, chat_id, packet_date, current),
+            )
 
     def weekly_leaderboard(
         self,
@@ -902,6 +1009,7 @@ class AIStorage:
         retry_count: int,
         daily_limit: int = 1,
         reservation_seconds: int = 30,
+        answer_cooldown_seconds: float = 0,
     ) -> dict[str, Any]:
         now = time.time()
         max_attempts = 1 + max(0, int(retry_count))
@@ -957,6 +1065,11 @@ class AIStorage:
                 raise StorageError("红包已经结束或过期")
             if not row["reserved_until"] or float(row["reserved_until"]) <= now:
                 raise StorageError("题目答题时间已结束")
+            cooldown = max(0.0, float(answer_cooldown_seconds))
+            elapsed = now - float(row["updated_at"] or 0)
+            if int(row["attempts"] or 0) > 0 and cooldown > 0 and elapsed < cooldown:
+                remaining_seconds = max(1, math.ceil(cooldown - elapsed))
+                raise StorageError(f"点击太快，请 {remaining_seconds} 秒后再试，本次不会消耗答题机会")
             reset = conn.execute(
                 "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
                 (account_id, user_id, row["date"]),

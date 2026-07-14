@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.12"
+PLUGIN_VERSION = "0.1.13"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -19,8 +19,11 @@ USAGE = (
     "{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。"
     "管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。"
     "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。"
-    "答对结果会显示答题者姓名；未收到奖励时先在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。"
+    "答对结果会显示答题者姓名；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。"
     "{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。"
+    "普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。"
+    "答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。"
+    "红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。"
 )
 
 CONFIG_SCHEMA = {
@@ -41,12 +44,13 @@ CONFIG_SCHEMA = {
                 "4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n"
                 "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n"
                 "6. 测试后可发送 {prefix}{command} reset 重置自己，或发送 {prefix}{command} reset all 重置当天所有人的参与限制。\n"
-                "7. 发送 {prefix}{command} bank list 查看题库；{prefix}{command} list 仅查看进行中红包的领取进度、开题消息链接和补发入口，原命令自动删除但列表回执保留。\n"
+                "7. 发送 {prefix}{command} bank list 查看题库；管理员用 {prefix}{command} list、普通群员用 /airp list 查看进行中红包的领取进度、开题消息链接和补发入口。管理员原命令自动删除但列表回执保留。\n"
                 "8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n"
                 "9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。\n"
                 "10. 管理员创建、重置或关闭红包成功后会自动删除原命令消息；参数错误或操作失败时保留。\n"
                 "11. 重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。\n"
-                "12. 答题结果显示答题者姓名；未收到奖励时先在群里发言，再点击“申请补发奖励”，平台会校验状态且不会重复发放。"
+                "12. 答题结果显示答题者姓名；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态且不会重复发放。答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n"
+                "13. 红包实际到期时间不会晚于创建日次日 08:30；前一日红包如在 08:00 仍未领完，会按群发送一次提醒，08:30 后自动结算。"
             ),
         },
         "command": {
@@ -251,7 +255,7 @@ CONFIG_SCHEMA = {
         },
         "timezone": {
             "type": "string",
-            "title": "每日限制与周榜时区",
+            "title": "每日限制、提醒与周榜时区",
             "x-ui-section": "红包与答题",
             "x-ui-columns": 2,
             "x-ui-order": 470,
@@ -348,6 +352,12 @@ CONFIG_SCHEMA = {
             "default": "<b>AI 红包每日结算</b>\n红包 ID：<code>{redpacket_id}</code>\n状态：{status}\n已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code>\n领取人数：<code>{claim_count}</code>\n\n运气王：<b>{luckiest_name}</b> · {luckiest_reward}\n倒霉蛋：<b>{unluckiest_name}</b> · {unluckiest_reward}\n\n{ranking}",
             "description": "占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}。",
         },
+        "reminder_message_template": {
+            "type": "string",
+            "title": "未领完红包提醒模板",
+            "default": "<b>昨日雨露均沾即将到期</b>\n\n以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：\n{redpackets}",
+            "description": "占位符：{packet_date} 红包创建日期；{expire_time} 当日截止时间；{redpackets} 未领完红包、领取进度和跳转链接。",
+        },
         "weekly_message_template": {
             "type": "string",
             "title": "每周榜单模板",
@@ -358,7 +368,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "模板占位符（只读）",
             "readOnly": True,
-            "default": "通用：{date} {daily_limit} {retry_count}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}",
+            "default": "通用：{date} {daily_limit} {retry_count}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}",
         },
         "packet_message_preview": {
             "type": "string",
@@ -387,6 +397,12 @@ CONFIG_SCHEMA = {
         "settlement_message_preview": {
             "type": "string",
             "title": "红包结算预览",
+            "readOnly": True,
+            "default": "",
+        },
+        "reminder_message_preview": {
+            "type": "string",
+            "title": "未领完红包提醒预览",
             "readOnly": True,
             "default": "",
         },
@@ -430,11 +446,19 @@ EVENT_SUBSCRIPTIONS = [
         "description": "管理员通过 UserBot 命令生成题库、创建和管理红包。",
     },
     {
+        "events": ["message"],
+        "source": ["interaction_bot"],
+        "scope": "all_allowed_chats",
+        "entry_key": "ai_redpacket_claim",
+        "filters": {"keywords": ["/airp list"]},
+        "description": "群员发送 /airp list 自助查询进行中红包和申请补发；代码层仅开放只读列表。",
+    },
+    {
         "events": ["callback_query", "session_close", "session_expired"],
         "source": ["interaction_bot"],
         "scope": "all_allowed_chats",
         "entry_key": "ai_redpacket_claim",
-        "description": "交互 Bot 承接领取按钮、三选一答题和会话清理。",
+        "description": "交互 Bot 承接群员 /airp list、领取按钮、三选一答题和会话清理。",
     },
 ]
 
@@ -472,7 +496,7 @@ INTERACTION_ENTRIES = [
         "interaction_profile": "session_game",
         "launch_mode": "hybrid",
         "dispatch_modes": ["public_keyword"],
-        "events": ["callback_query", "session_close", "session_expired"],
+        "events": ["message", "callback_query", "session_close", "session_expired"],
         "session_scope": "user",
         "session_policy": {
             "ttl_seconds": 3600,

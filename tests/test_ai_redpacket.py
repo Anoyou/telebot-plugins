@@ -93,9 +93,20 @@ class RewardAllocationTest(unittest.TestCase):
 
 
 class QuestionGenerationTest(unittest.TestCase):
+    def test_static_manifest_matches_python_manifest(self) -> None:
+        raw = json.loads(
+            (Path(__file__).resolve().parents[1] / "ai_redpacket" / "plugin.json").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(raw["version"], manifest_module.PLUGIN_VERSION)
+        self.assertEqual(raw["usage"], manifest_module.USAGE)
+        self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
+        self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
+        self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
+
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.12")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.13")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -132,11 +143,21 @@ class QuestionGenerationTest(unittest.TestCase):
             "success_message_preview",
             "failed_message_preview",
             "settlement_message_preview",
+            "reminder_message_preview",
             "weekly_message_preview",
         ):
             self.assertIn(preview_key, properties)
         self.assertIn("weekly_message_template", properties)
         self.assertIn("settlement_message_template", properties)
+        self.assertIn("reminder_message_template", properties)
+        public_list = next(
+            item
+            for item in manifest_module.EVENT_SUBSCRIPTIONS
+            if item.get("filters") == {"keywords": ["/airp list"]}
+        )
+        self.assertEqual(public_list["events"], ["message"])
+        self.assertEqual(public_list["source"], ["interaction_bot"])
+        self.assertEqual(public_list["scope"], "all_allowed_chats")
 
     def test_legacy_database_is_migrated_to_context_data_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -261,9 +282,14 @@ class StorageMigrationTest(unittest.TestCase):
                 version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()["version"]
                 redpacket_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket)")}
                 attempt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket_attempt)")}
-            self.assertEqual(version, 4)
+            self.assertEqual(version, 5)
             self.assertIn("settled_at", redpacket_columns)
             self.assertIn("user_display_name", attempt_columns)
+            with storage.connect() as conn:
+                reminder_table = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'redpacket_daily_reminder'"
+                ).fetchone()
+            self.assertIsNotNone(reminder_table)
             self.assertEqual(storage.get_source_cache(1, "https://example.com/source")["content"], "缓存正文")
 
 
@@ -299,6 +325,118 @@ class StorageFlowTest(unittest.TestCase):
             submission_token=f"token-{user_id}",
             reservation_seconds=300,
         )
+
+    def test_hard_expiration_caps_ttl_without_extending_shorter_ttl(self) -> None:
+        created_at = datetime.fromisoformat("2026-07-14T20:00:00+08:00").timestamp()
+        next_morning = datetime.fromisoformat("2026-07-15T08:30:00+08:00").timestamp()
+        with patch.object(storage_module.time, "time", return_value=created_at):
+            capped = self.storage.create_redpacket(
+                redpacket_id="hard-expiration",
+                account_id=1,
+                chat_id=-1001,
+                creator_id=99,
+                bank_id="bank",
+                total_amount=10,
+                rewards=[10],
+                ttl_seconds=86_400,
+                hard_expires_at=next_morning,
+            )
+            shorter = self.storage.create_redpacket(
+                redpacket_id="short-expiration",
+                account_id=1,
+                chat_id=-1001,
+                creator_id=99,
+                bank_id="bank",
+                total_amount=10,
+                rewards=[10],
+                ttl_seconds=3_600,
+                hard_expires_at=next_morning,
+            )
+
+        self.assertEqual(capped["expires_at"], next_morning)
+        self.assertEqual(shorter["expires_at"], created_at + 3_600)
+
+    def test_existing_expiration_can_only_be_shortened(self) -> None:
+        created_at = datetime.fromisoformat("2026-07-14T10:00:00+08:00").timestamp()
+        with patch.object(storage_module.time, "time", return_value=created_at):
+            self._create_packet("shorten-expiration", 1)
+        original = self.storage.get_redpacket("shorten-expiration")["expires_at"]
+
+        self.storage.shorten_redpacket_expiration(1, "shorten-expiration", original + 10_000)
+        self.assertEqual(self.storage.get_redpacket("shorten-expiration")["expires_at"], original)
+        self.storage.shorten_redpacket_expiration(1, "shorten-expiration", original - 1_000)
+        self.assertEqual(self.storage.get_redpacket("shorten-expiration")["expires_at"], original - 1_000)
+
+    def test_unfinished_yesterday_packets_are_filtered_and_aggregated(self) -> None:
+        yesterday = datetime.fromisoformat("2026-07-14T12:00:00+08:00").timestamp()
+        today = datetime.fromisoformat("2026-07-15T01:00:00+08:00").timestamp()
+        fired_at = datetime.fromisoformat("2026-07-15T08:00:00+08:00").timestamp()
+        with patch.object(storage_module.time, "time", return_value=yesterday):
+            for packet_id in ("unfinished-yesterday", "finished-yesterday", "empty-yesterday"):
+                self.storage.create_redpacket(
+                    redpacket_id=packet_id,
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=99,
+                    bank_id="bank",
+                    total_amount=20,
+                    rewards=[10, 10],
+                    ttl_seconds=100_000,
+                )
+            self.storage.create_redpacket(
+                redpacket_id="expired-yesterday",
+                account_id=1,
+                chat_id=-1001,
+                creator_id=99,
+                bank_id="bank",
+                total_amount=10,
+                rewards=[10],
+                ttl_seconds=60,
+            )
+        with patch.object(storage_module.time, "time", return_value=today):
+            self.storage.create_redpacket(
+                redpacket_id="unfinished-today",
+                account_id=1,
+                chat_id=-1001,
+                creator_id=99,
+                bank_id="bank",
+                total_amount=10,
+                rewards=[10],
+                ttl_seconds=100_000,
+            )
+        with self.storage.transaction() as conn:
+            conn.execute("UPDATE redpacket SET status = 'finished' WHERE id = 'finished-yesterday'")
+            conn.execute("UPDATE redpacket SET remaining_amount = 0 WHERE id = 'empty-yesterday'")
+            conn.execute("UPDATE redpacket SET remaining_amount = 10 WHERE id = 'unfinished-yesterday'")
+            conn.execute(
+                """
+                UPDATE redpacket_question SET claimed_by = 501
+                WHERE id = (
+                    SELECT MIN(id) FROM redpacket_question WHERE redpacket_id = 'unfinished-yesterday'
+                )
+                """
+            )
+
+        packets = self.storage.unfinished_redpackets_created_between(
+            1,
+            datetime.fromisoformat("2026-07-14T00:00:00+08:00").timestamp(),
+            datetime.fromisoformat("2026-07-15T00:00:00+08:00").timestamp(),
+            now=fired_at,
+        )
+
+        self.assertEqual([packet["id"] for packet in packets], ["unfinished-yesterday"])
+        self.assertEqual(packets[0]["claimed_count"], 1)
+        self.assertEqual(packets[0]["claimed_amount"], 10)
+        self.assertEqual(self.storage.get_redpacket("expired-yesterday")["status"], "expired")
+
+    def test_daily_reminder_mark_is_idempotent(self) -> None:
+        self.assertFalse(self.storage.daily_reminder_published(1, -1001, "2026-07-14"))
+        self.storage.mark_daily_reminder_published(1, -1001, "2026-07-14", published_at=1.0)
+        self.storage.mark_daily_reminder_published(1, -1001, "2026-07-14", published_at=2.0)
+        self.assertTrue(self.storage.daily_reminder_published(1, -1001, "2026-07-14"))
+        with self.storage.connect() as conn:
+            count = conn.execute("SELECT COUNT(*) AS count FROM redpacket_daily_reminder").fetchone()["count"]
+        self.assertEqual(count, 1)
 
     def test_wrong_answer_retries_once_then_ends_day(self) -> None:
         self._create_packet()
@@ -478,6 +616,54 @@ class StorageFlowTest(unittest.TestCase):
         self.assertFalse(results[1]["finished"])
         self.assertTrue(results[2]["finished"])
         self.assertEqual(results[2]["max_attempts"], 3)
+
+    def test_answer_click_cooldown_does_not_consume_retry(self) -> None:
+        self._create_packet("cooldown-packet", 1)
+        attempt = self.storage.reserve_question(
+            attempt_id="cooldown-attempt",
+            account_id=1,
+            user_id=159,
+            chat_id=-1001,
+            redpacket_id="cooldown-packet",
+            date="2026-07-14",
+            submission_token="cooldown-token",
+            reservation_seconds=300,
+        )
+        wrong = (int(attempt["answer_index"]) + 1) % 3
+        first = self.storage.submit_answer(
+            attempt_id="cooldown-attempt",
+            account_id=1,
+            user_id=159,
+            chat_id=-1001,
+            redpacket_id="cooldown-packet",
+            option_index=wrong,
+            submission_token="cooldown-token",
+            submission_key="cooldown-first",
+            retry_count=1,
+            answer_cooldown_seconds=2,
+        )
+
+        with self.assertRaisesRegex(storage_module.StorageError, "点击太快"):
+            self.storage.submit_answer(
+                attempt_id="cooldown-attempt",
+                account_id=1,
+                user_id=159,
+                chat_id=-1001,
+                redpacket_id="cooldown-packet",
+                option_index=wrong,
+                submission_token=str(first["submission_token"]),
+                submission_key="cooldown-second-too-fast",
+                retry_count=1,
+                answer_cooldown_seconds=2,
+            )
+
+        with self.storage.connect() as conn:
+            row = conn.execute(
+                "SELECT attempts, submission_token FROM redpacket_attempt WHERE id = ?",
+                ("cooldown-attempt",),
+            ).fetchone()
+        self.assertEqual(row["attempts"], 1)
+        self.assertEqual(row["submission_token"], first["submission_token"])
 
     def test_admin_reset_preserves_history_and_allows_new_daily_attempt(self) -> None:
         self._create_packet("reset-one", 1)
@@ -1300,32 +1486,189 @@ class PluginActionTest(unittest.TestCase):
         self.assertIn("周榜 AI 红包本周排行榜", weekly)
         self.assertEqual(weekly.count("本周期暂无成功答题记录。"), 2)
 
-    def test_startup_registers_settlement_and_sunday_ten_jobs(self) -> None:
+    def test_startup_registers_settlement_daily_reminder_and_sunday_ten_jobs(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                jobs = {}
+                unregistered = []
+
+                class Scheduler:
+                    def register(self, job_id, schedule, callback, **kwargs):
+                        jobs[job_id] = schedule
+
+                    def unregister_all(self):
+                        unregistered.append(True)
+
+                class Context:
+                    account_id = 1
+                    config = {"command": "airp"}
+                    account_config = {}
+                    scheduler = Scheduler()
+                    data_dir = Path(tempdir)
+                    log = None
+
+                await plugin.on_startup(Context())
+                self.assertEqual(jobs["redpacket_settlement_scan"], {"kind": "interval", "interval_sec": 30})
+                self.assertEqual(jobs["weekly_leaderboard"], {"kind": "cron", "cron": "0 10 * * 0"})
+                self.assertEqual(jobs["unfinished_redpacket_reminder"], {"kind": "cron", "cron": "0 8 * * *"})
+                self.assertIn("airp-7", plugin.commands)
+                await plugin.on_shutdown(Context())
+                self.assertEqual(unregistered, [True])
+
+        asyncio.run(run_case())
+
+    def test_startup_shortens_existing_packet_to_next_day_eight_thirty(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+
+                class Context:
+                    account_id = 1
+                    config = {"timezone": "Asia/Shanghai"}
+                    account_config = {}
+                    scheduler = None
+                    data_dir = Path(tempdir)
+                    log = None
+
+                plugin._ensure_storage(Context())
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                created_at = datetime.fromisoformat("2026-07-14T20:00:00+08:00").timestamp()
+                with patch.object(storage_module.time, "time", return_value=created_at):
+                    plugin.storage.create_redpacket(
+                        redpacket_id="legacy-active",
+                        account_id=1,
+                        chat_id=-1001,
+                        creator_id=1,
+                        bank_id="bank",
+                        total_amount=10,
+                        rewards=[10],
+                        ttl_seconds=200_000,
+                    )
+
+                await plugin.on_startup(Context())
+
+                packet = plugin.storage.get_redpacket("legacy-active")
+                expected = datetime.fromisoformat("2026-07-15T08:30:00+08:00").timestamp()
+                self.assertEqual(packet["expires_at"], expected)
+
+        asyncio.run(run_case())
+
+    def test_daily_unfinished_reminder_groups_by_chat_and_publishes_once(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.AIRedpacketPlugin()
-            jobs = {}
-            unregistered = []
+            published = set()
+            queried = []
+            sent = []
 
-            class Scheduler:
-                def register(self, job_id, schedule, callback, **kwargs):
-                    jobs[job_id] = schedule
+            class Storage:
+                def unfinished_redpackets_created_between(self, account_id, start_at, end_at, now=None):
+                    queried.append((account_id, start_at, end_at, now))
+                    return [
+                        {
+                            "id": "yesterday-one",
+                            "chat_id": -1001,
+                            "question_count": 4,
+                            "claimed_count": 1,
+                            "total_amount": 100,
+                            "claimed_amount": 20,
+                        },
+                        {
+                            "id": "yesterday-two",
+                            "chat_id": -1001,
+                            "question_count": 2,
+                            "claimed_count": 0,
+                            "total_amount": 50,
+                            "claimed_amount": 0,
+                        },
+                        {
+                            "id": "another-chat",
+                            "chat_id": -1002,
+                            "question_count": 1,
+                            "claimed_count": 0,
+                            "total_amount": 10,
+                            "claimed_amount": 0,
+                        },
+                    ]
 
-                def unregister_all(self):
-                    unregistered.append(True)
+                def daily_reminder_published(self, account_id, chat_id, packet_date):
+                    return (account_id, chat_id, packet_date) in published
+
+                def mark_daily_reminder_published(self, account_id, chat_id, packet_date):
+                    published.add((account_id, chat_id, packet_date))
+
+            class Messages:
+                saved = {
+                    "ai_redpacket:packet:yesterday-one": 88,
+                    "ai_redpacket:packet:yesterday-two": 89,
+                    "ai_redpacket:packet:another-chat": 90,
+                }
+
+                async def send(self, **kwargs):
+                    sent.append(kwargs)
+                    self.saved[kwargs["save_message_id_key"]] = 123
+
+                async def read_saved_message_id(self, key):
+                    return self.saved.get(key)
 
             class Context:
                 account_id = 1
-                config = {"command": "airp"}
-                account_config = {}
-                scheduler = Scheduler()
+                config = {"timezone": "Asia/Shanghai"}
+                messages = Messages()
                 log = None
 
-            await plugin.on_startup(Context())
-            self.assertEqual(jobs["redpacket_settlement_scan"], {"kind": "interval", "interval_sec": 30})
-            self.assertEqual(jobs["weekly_leaderboard"], {"kind": "cron", "cron": "0 10 * * 0"})
-            self.assertIn("airp-7", plugin.commands)
-            await plugin.on_shutdown(Context())
-            self.assertEqual(unregistered, [True])
+            plugin.storage = Storage()
+            job = types.SimpleNamespace(fired_at=datetime.fromisoformat("2026-07-15T08:00:00+08:00"))
+            await plugin._run_unfinished_redpacket_reminder(Context(), job)
+            await plugin._run_unfinished_redpacket_reminder(Context(), job)
+
+            self.assertEqual(len(sent), 2)
+            chat_one = next(item for item in sent if item["chat_id"] == -1001)
+            self.assertIn("昨日雨露均沾即将到期", chat_one["text"])
+            self.assertIn("今日 08:30", chat_one["text"])
+            self.assertIn("yesterday-one", chat_one["text"])
+            self.assertIn("yesterday-two", chat_one["text"])
+            self.assertIn("https://t.me/c/1/88", chat_one["text"])
+            self.assertEqual(chat_one["save_message_id_key"], "ai_redpacket:unfinished-reminder:-1001:2026-07-14")
+            self.assertEqual(
+                queried[0][1:3],
+                (
+                    datetime.fromisoformat("2026-07-14T00:00:00+08:00").timestamp(),
+                    datetime.fromisoformat("2026-07-15T00:00:00+08:00").timestamp(),
+                ),
+            )
+            self.assertEqual(len(published), 2)
+
+        asyncio.run(run_case())
+
+    def test_unfinished_reminder_uses_configured_template(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.AIRedpacketPlugin()
+
+            class Context:
+                config = {
+                    "reminder_message_template": "提醒 {packet_date} {expire_time}\n{redpackets}",
+                }
+                messages = None
+
+            text = await plugin._render_unfinished_redpacket_reminder(
+                Context(),
+                -1001,
+                [
+                    {
+                        "id": "custom-reminder",
+                        "question_count": 2,
+                        "claimed_count": 1,
+                        "total_amount": 30,
+                        "claimed_amount": 10,
+                    }
+                ],
+                packet_date="2026-07-14",
+            )
+
+            self.assertTrue(text.startswith("提醒 2026-07-14 08:30"))
+            self.assertIn("custom-reminder", text)
+            self.assertIn("1/2", text)
 
         asyncio.run(run_case())
 
@@ -1539,11 +1882,71 @@ class PluginActionTest(unittest.TestCase):
                 self.assertIn("1/2", actions[0]["text"])
                 self.assertIn("10/20", actions[0]["text"])
                 self.assertIn("https://t.me/c/2090852236/1017939", actions[0]["text"])
+                self.assertIn("点击此处跳转，领取今日份雨露均沾", actions[0]["text"])
+                self.assertIn("红包开头：<b>今日份雨露均沾 - 第 ", actions[0]["text"])
                 self.assertEqual(
                     actions[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
                     "airp:repayme:active123456",
                 )
+                self.assertIn(
+                    "-雨露均沾 · 申请补发奖励",
+                    actions[0]["reply_markup"]["inline_keyboard"][0][0]["text"],
+                )
                 self.assertEqual(actions[1]["message_id"], 999)
+
+        asyncio.run(run_case())
+
+    def test_public_slash_list_is_read_only_and_does_not_delete_member_message(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="public-list",
+                    account_id=1,
+                    chat_id=-1002090852236,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        return 456
+
+                class Context:
+                    account_id = 1
+                    config = {"timezone": "Asia/Shanghai"}
+                    account_config = {}
+                    messages = Messages()
+                    log = None
+
+                payload = {
+                    "event_type": "message",
+                    "message": {
+                        "chat_id": -1002090852236,
+                        "message_id": 123,
+                        "text": "/airp list",
+                    },
+                    "sender": {"user_id": 999, "display_name": "群员"},
+                }
+                actions = await plugin.on_interaction(Context(), "ai_redpacket_claim", payload)
+
+                self.assertEqual([action["type"] for action in actions], ["send_message"])
+                self.assertEqual(actions[0]["send_via"], "interaction_bot")
+                self.assertIn("public-list", actions[0]["text"])
+                self.assertNotIn("reply_to_message_id", actions[0])
+                self.assertEqual(
+                    await plugin.on_interaction(
+                        Context(),
+                        "ai_redpacket_claim",
+                        {**payload, "message": {**payload["message"], "text": "/airp reset all"}},
+                    ),
+                    [],
+                )
 
         asyncio.run(run_case())
 
@@ -2164,11 +2567,17 @@ class PluginActionTest(unittest.TestCase):
                     account_config = {}
                     log = None
 
-                actions = await plugin._create_packet(Context(), -1001, 99, 1, ["10"])
+                created_at = datetime.fromisoformat("2026-07-14T20:00:00+08:00").timestamp()
+                with patch.object(plugin_module.time, "time", return_value=created_at):
+                    actions = await plugin._create_packet(Context(), -1001, 99, 1, ["10"])
                 self.assertEqual(actions[0]["send_via"], "interaction_bot")
                 self.assertEqual(actions[0]["text"], "日期 2026-07-14 限制 3/2")
                 packets = plugin.storage.list_redpackets(1, -1001)
                 self.assertEqual(packets[0]["bank_id"], "default-bank")
+                self.assertEqual(
+                    packets[0]["expires_at"],
+                    datetime.fromisoformat("2026-07-15T08:30:00+08:00").timestamp(),
+                )
 
         asyncio.run(run_case())
 
@@ -2271,10 +2680,18 @@ class PluginActionTest(unittest.TestCase):
                     reservation_seconds=300,
                 )
 
+                class Client:
+                    def iter_messages(self, chat_id, *, from_user=None, limit=None):
+                        async def stream():
+                            yield types.SimpleNamespace(id=777, sender_id=77)
+
+                        return stream()
+
                 class Context:
                     account_id = 1
                     config = {}
                     account_config = {}
+                    client = Client()
                     log = None
 
                 actions = await plugin._submit_attempt(
@@ -2321,10 +2738,18 @@ class PluginActionTest(unittest.TestCase):
                     user_display_name="张三",
                 )
 
+                class Client:
+                    def iter_messages(self, chat_id, *, from_user=None, limit=None):
+                        async def stream():
+                            yield types.SimpleNamespace(id=777, sender_id=77)
+
+                        return stream()
+
                 class Context:
                     account_id = 1
                     config = {}
                     account_config = {}
+                    client = Client()
                     log = None
 
                 payload = {
@@ -2352,7 +2777,7 @@ class PluginActionTest(unittest.TestCase):
                 payout = next(action for action in actions if action["type"] == "payout")
                 edit = next(action for action in actions if action["type"] == "edit_message")
                 buttons = edit["reply_markup"]["inline_keyboard"]
-                self.assertEqual(buttons[0][0]["text"], "申请补发奖励")
+                self.assertEqual(buttons[0][0]["text"], "2026-07-13-雨露均沾 · 申请补发奖励")
                 self.assertEqual(buttons[0][0]["callback_data"], "airp:repay:rp1:a1")
                 self.assertEqual(buttons[1][0]["text"], "我也要雨露均沾")
                 self.assertIn("答题者：张三", edit["text"])
@@ -2371,10 +2796,12 @@ class PluginActionTest(unittest.TestCase):
                 retry_actions = await plugin._handle_callback(
                     Context(), retry_payload, "retry-payout", "airp:repay:rp1:a1"
                 )
-                self.assertIn("未发放将补发", retry_actions[0]["text"])
+                self.assertIn("已找到你的近期发言", retry_actions[0]["text"])
+                self.assertIn("+10", retry_actions[0]["text"])
                 retry_payout = next(action for action in retry_actions if action["type"] == "payout")
                 self.assertEqual(retry_payout["payout_key"], payout["payout_key"])
                 self.assertEqual(retry_payout["amount"], 10)
+                self.assertEqual(retry_payout["reply_to_message_id"], 777)
                 self.assertEqual(plugin.storage.get_redpacket("rp1")["remaining_amount"], 0)
 
                 center_actions = await plugin._handle_callback(
@@ -2408,6 +2835,75 @@ class PluginActionTest(unittest.TestCase):
                 replay = next(action for action in replay_actions if action["type"] == "payout")
                 self.assertEqual(replay["payout_key"], payout["payout_key"])
                 self.assertEqual(plugin.storage.get_redpacket("rp1")["remaining_amount"], 0)
+
+        asyncio.run(run_case())
+
+    def test_payout_retry_without_recent_message_only_shows_alert(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="no-speech",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                attempt = plugin.storage.reserve_question(
+                    attempt_id="no-speech-attempt",
+                    account_id=1,
+                    user_id=77,
+                    chat_id=-1001,
+                    redpacket_id="no-speech",
+                    date="2026-07-14",
+                    submission_token="token",
+                    reservation_seconds=300,
+                )
+                plugin.storage.submit_answer(
+                    attempt_id="no-speech-attempt",
+                    account_id=1,
+                    user_id=77,
+                    chat_id=-1001,
+                    redpacket_id="no-speech",
+                    option_index=int(attempt["answer_index"]),
+                    submission_token="token",
+                    submission_key="submit",
+                    retry_count=1,
+                )
+
+                class EmptyClient:
+                    def iter_messages(self, chat_id, **kwargs):
+                        async def stream():
+                            if False:
+                                yield None
+
+                        return stream()
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    client = EmptyClient()
+                    log = None
+
+                actions = await plugin._request_payout_retry(
+                    Context(),
+                    callback_id="retry",
+                    chat_id=-1001,
+                    user_id=77,
+                    redpacket_id="no-speech",
+                    attempt_id="no-speech-attempt",
+                )
+
+                self.assertEqual([action["type"] for action in actions], ["answer_callback"])
+                self.assertTrue(actions[0]["show_alert"])
+                self.assertIn("以个人账号", actions[0]["text"])
+                self.assertIn("匿名管理员或频道身份", actions[0]["text"])
 
         asyncio.run(run_case())
 

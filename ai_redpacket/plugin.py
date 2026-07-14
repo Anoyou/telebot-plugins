@@ -24,13 +24,14 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.12"
+PLUGIN_VERSION = "0.1.13"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
 RESET_NOTICE_DELETE_SECONDS = 3
 QUESTION_TIMEOUT_DELETE_SECONDS = 5
 DEFAULT_ANSWER_TIMEOUT_SECONDS = 300
+ANSWER_CLICK_COOLDOWN_SECONDS = 2
 CALLBACK_PREFIX = "airp"
 ENTRY_KEY = "ai_redpacket_claim"
 DATA_PATH = Path(__file__).with_name("ai_redpacket.sqlite3")
@@ -78,6 +79,11 @@ SETTLEMENT_MESSAGE_TEMPLATE = (
     "运气王：<b>{luckiest_name}</b> · {luckiest_reward}\n"
     "倒霉蛋：<b>{unluckiest_name}</b> · {unluckiest_reward}\n\n"
     "{ranking}"
+)
+REMINDER_MESSAGE_TEMPLATE = (
+    "<b>昨日雨露均沾即将到期</b>\n\n"
+    "以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：\n"
+    "{redpackets}"
 )
 WEEKLY_MESSAGE_TEMPLATE = (
     "<b>{weekly_title}</b>\n"
@@ -317,7 +323,7 @@ def _sender(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _event_type(payload: dict[str, Any]) -> str:
     event = _event(payload)
-    return str(event.get("type") or _source(payload).get("type") or "").strip().lower()
+    return str(event.get("type") or event.get("event_type") or _source(payload).get("type") or "").strip().lower()
 
 
 def _chat_id(payload: dict[str, Any]) -> int:
@@ -444,6 +450,7 @@ class AIRedpacketPlugin(Plugin):
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._ensure_storage(ctx)
+        self._shorten_existing_redpacket_expirations(ctx)
         self.commands = {
             self._command(ctx): self._legacy_command,
             self._weekly_command(ctx): self._legacy_weekly_command,
@@ -459,6 +466,11 @@ class AIRedpacketPlugin(Plugin):
                 "weekly_leaderboard",
                 {"kind": "cron", "cron": "0 10 * * 0"},
                 lambda job: self._run_weekly_leaderboard(ctx, job),
+            )
+            scheduler.register(
+                "unfinished_redpacket_reminder",
+                {"kind": "cron", "cron": "0 8 * * *"},
+                lambda job: self._run_unfinished_redpacket_reminder(ctx, job),
             )
         await self._log(ctx, "info", "AI 答题红包插件已启动", version=PLUGIN_VERSION)
 
@@ -485,6 +497,8 @@ class AIRedpacketPlugin(Plugin):
             return await self._handle_callback(ctx, payload, callback_id, callback_data)
         if event_type == "command":
             return await self._handle_command_payload(ctx, payload)
+        if event_type == "message":
+            return await self._handle_public_list_payload(ctx, payload)
         if event_type in {"session_close", "session_expired"}:
             return [{"type": "end_session"}]
         return []
@@ -544,6 +558,26 @@ class AIRedpacketPlugin(Plugin):
         if args is None:
             return []
         return await self._handle_admin_command(ctx, chat_id, _user_id(payload), _message_id(payload), args)
+
+    async def _handle_public_list_payload(
+        self,
+        ctx: PluginContext,
+        payload: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        text = str(_message(payload).get("text") or "").strip()
+        parts = text.split()
+        if len(parts) != 2 or parts[0].casefold() != f"/{DEFAULT_COMMAND}" or parts[1].casefold() != "list":
+            return []
+        chat_id = _chat_id(payload)
+        if not chat_id:
+            return []
+        return await self._handle_admin_command(
+            ctx,
+            chat_id,
+            _user_id(payload),
+            None,
+            ["list"],
+        )
 
     async def _legacy_command(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
         chat_id = int(getattr(event, "chat_id", 0) or 0)
@@ -661,7 +695,7 @@ class AIRedpacketPlugin(Plugin):
                 _send(
                     await self._render_packets(ctx, chat_id, packets),
                     chat_id=chat_id,
-                    markup=self._payout_center_markup(packets),
+                    markup=self._payout_center_markup(ctx, packets),
                     via="interaction_bot",
                 )
             ]
@@ -1078,6 +1112,7 @@ class AIRedpacketPlugin(Plugin):
                 total_amount=total,
                 rewards=rewards,
                 ttl_seconds=self._int_config(ctx, "redpacket_ttl_seconds", 86_400, 60, 604_800),
+                hard_expires_at=self._next_morning_expiration(ctx, time.time()),
             )
         except (ValueError, StorageError) as exc:
             return [_send(f"红包创建失败：{html.escape(str(exc))}", chat_id=chat_id, reply_to=reply_to)]
@@ -1264,6 +1299,7 @@ class AIRedpacketPlugin(Plugin):
                 retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
                 daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
                 reservation_seconds=timeout_seconds,
+                answer_cooldown_seconds=ANSWER_CLICK_COOLDOWN_SECONDS,
             )
         except StorageError as exc:
             return [_ack(callback_id, str(exc), alert=True)]
@@ -1281,7 +1317,7 @@ class AIRedpacketPlugin(Plugin):
                 message_id,
                 self._render_result(ctx, result, correct=True),
                 chat_id=chat_id,
-                markup=self._success_markup(redpacket_id, attempt_id),
+                markup=self._success_markup(redpacket_id, attempt_id, str(result.get("date") or self._today(ctx))),
             )
             payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
             actions: list[dict[str, Any]] = [_ack(callback_id, f"答对了，获得 {reward}")]
@@ -1350,6 +1386,16 @@ class AIRedpacketPlugin(Plugin):
             )
         except StorageError as exc:
             return [_ack(callback_id, str(exc), alert=True)]
+        reply_to_message_id = await self._find_recent_user_message_id(ctx, chat_id, user_id)
+        if reply_to_message_id is None:
+            return [
+                _ack(
+                    callback_id,
+                    "没有查询到你以个人账号在本群发送的近期消息。请确认没有使用匿名管理员或频道身份，"
+                    "再发送一条消息并重新点击补发按钮。",
+                    alert=True,
+                )
+            ]
         payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
         await self._log(
             ctx,
@@ -1362,8 +1408,20 @@ class AIRedpacketPlugin(Plugin):
             payout_key=payout_key,
         )
         return [
-            _ack(callback_id, "正在核验发放记录；未发放将补发，已发放不会重复。", alert=True),
-            self._payout_action(ctx, chat_id, user_id, redpacket_id, result),
+            _ack(
+                callback_id,
+                f"已找到你的近期发言，正在核验并补发 {int(result['reward'])}。"
+                f"成功后 UserBot 会回复该消息“+{int(result['reward'])}”；已发放则不会重复。",
+                alert=True,
+            ),
+            self._payout_action(
+                ctx,
+                chat_id,
+                user_id,
+                redpacket_id,
+                result,
+                reply_to_message_id=reply_to_message_id,
+            ),
         ]
 
     async def _request_user_payout_retry(
@@ -1403,10 +1461,12 @@ class AIRedpacketPlugin(Plugin):
         user_id: int,
         redpacket_id: str,
         result: dict[str, Any],
+        *,
+        reply_to_message_id: int | None = None,
     ) -> dict[str, Any]:
         reward = int(result["reward"])
         payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
-        return {
+        action = {
             "type": "payout",
             "chat_id": chat_id,
             "amount": reward,
@@ -1422,6 +1482,39 @@ class AIRedpacketPlugin(Plugin):
             "payout_key": payout_key,
             "payout_probe_fingerprint": payout_key,
         }
+        if reply_to_message_id is not None:
+            action["reply_to_message_id"] = int(reply_to_message_id)
+        return action
+
+    async def _find_recent_user_message_id(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        user_id: int,
+        limit: int = 200,
+    ) -> int | None:
+        client = getattr(ctx, "client", None)
+        iter_messages = getattr(client, "iter_messages", None) if client is not None else None
+        if not callable(iter_messages):
+            return None
+        try:
+            async for message in iter_messages(chat_id, from_user=user_id, limit=limit):
+                message_id = int(getattr(message, "id", 0) or getattr(message, "message_id", 0) or 0)
+                if message_id > 0:
+                    return message_id
+        except Exception:
+            pass
+        try:
+            async for message in iter_messages(chat_id, limit=limit):
+                sender_id = int(getattr(message, "sender_id", 0) or 0)
+                if sender_id != user_id:
+                    continue
+                message_id = int(getattr(message, "id", 0) or getattr(message, "message_id", 0) or 0)
+                if message_id > 0:
+                    return message_id
+        except Exception:
+            pass
+        return None
 
     def _render_question(self, ctx: PluginContext, attempt: dict[str, Any]) -> str:
         source_options = json.loads(str(attempt["source_options_json"]))
@@ -1511,12 +1604,12 @@ class AIRedpacketPlugin(Plugin):
             ]
         }
 
-    def _success_markup(self, redpacket_id: str, attempt_id: str) -> dict[str, Any]:
+    def _success_markup(self, redpacket_id: str, attempt_id: str, date: str) -> dict[str, Any]:
         return {
             "inline_keyboard": [
                 [
                     {
-                        "text": "申请补发奖励",
+                        "text": f"{date}-雨露均沾 · 申请补发奖励",
                         "callback_data": f"{CALLBACK_PREFIX}:repay:{redpacket_id}:{attempt_id}",
                     }
                 ],
@@ -1529,11 +1622,11 @@ class AIRedpacketPlugin(Plugin):
             ]
         }
 
-    def _payout_center_markup(self, packets: list[dict[str, Any]]) -> dict[str, Any] | None:
+    def _payout_center_markup(self, ctx: PluginContext, packets: list[dict[str, Any]]) -> dict[str, Any] | None:
         rows = [
             [
                 {
-                    "text": f"{str(packet['id'])[:6]} · 申请补发奖励",
+                    "text": f"{self._date_for_timestamp(ctx, packet['created_at'])}-雨露均沾 · 申请补发奖励",
                     "callback_data": f"{CALLBACK_PREFIX}:repayme:{packet['id']}",
                 }
             ]
@@ -1564,13 +1657,19 @@ class AIRedpacketPlugin(Plugin):
         lines = ["<b>正在进行的 AI 红包</b>"]
         read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
         for packet in packets:
+            packet_date = self._date_for_timestamp(ctx, packet["created_at"])
             message_id = None
             if callable(read_message_id):
                 message_id = await read_message_id(f"ai_redpacket:packet:{packet['id']}")
             message_link = self._telegram_message_link(chat_id, message_id)
-            opening = f'<a href="{message_link}">打开开题消息</a>' if message_link else "开题消息暂不可用"
+            opening = (
+                f'<a href="{message_link}">点击此处跳转，领取今日份雨露均沾</a>'
+                if message_link
+                else "开题消息暂不可用"
+            )
             lines.append(
                 f"- <code>{packet['id']}</code>\n"
+                f"  红包开头：<b>今日份雨露均沾 - 第 {packet_date} 期</b>\n"
                 f"  领取进度：<code>{int(packet['claimed_count'])}/{int(packet['question_count'])}</code> 题，"
                 f"<code>{int(packet['claimed_amount'])}/{int(packet['total_amount'])}</code> 金额\n"
                 f"  {opening}"
@@ -1814,6 +1913,86 @@ class AIRedpacketPlugin(Plugin):
                     **{"红包ID": packet["id"], "错误类型": type(exc).__name__},
                 )
 
+    async def _run_unfinished_redpacket_reminder(self, ctx: PluginContext, job: Any) -> None:
+        fired_at = self._local_datetime(ctx, getattr(job, "fired_at", None))
+        today_start = fired_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_start = today_start - timedelta(days=1)
+        packet_date = yesterday_start.date().isoformat()
+        packets = self.storage.unfinished_redpackets_created_between(
+            ctx.account_id,
+            yesterday_start.timestamp(),
+            today_start.timestamp(),
+            now=fired_at.timestamp(),
+        )
+        grouped: dict[int, list[dict[str, Any]]] = {}
+        for packet in packets:
+            grouped.setdefault(int(packet["chat_id"]), []).append(packet)
+        for chat_id, chat_packets in grouped.items():
+            if self.storage.daily_reminder_published(ctx.account_id, chat_id, packet_date):
+                continue
+            try:
+                text = await self._render_unfinished_redpacket_reminder(
+                    ctx,
+                    chat_id,
+                    chat_packets,
+                    packet_date=packet_date,
+                )
+                await self._send_background_message(
+                    ctx,
+                    chat_id,
+                    text,
+                    delivery_key=f"ai_redpacket:unfinished-reminder:{chat_id}:{packet_date}",
+                )
+                self.storage.mark_daily_reminder_published(ctx.account_id, chat_id, packet_date)
+                await self._log(
+                    ctx,
+                    "info",
+                    "昨日未领完红包提醒已发布",
+                    **{"聊天ID": chat_id, "红包日期": packet_date, "红包数量": len(chat_packets)},
+                )
+            except Exception as exc:
+                await self._log(
+                    ctx,
+                    "error",
+                    "昨日未领完红包提醒发布失败",
+                    **{"聊天ID": chat_id, "红包日期": packet_date, "错误类型": type(exc).__name__},
+                )
+
+    async def _render_unfinished_redpacket_reminder(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        packets: list[dict[str, Any]],
+        *,
+        packet_date: str,
+    ) -> str:
+        entries: list[str] = []
+        read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
+        for packet in packets:
+            message_id = None
+            if callable(read_message_id):
+                message_id = await read_message_id(f"ai_redpacket:packet:{packet['id']}")
+            message_link = self._telegram_message_link(chat_id, message_id)
+            opening = (
+                f'<a href="{message_link}">点击此处跳转，领取今日份雨露均沾</a>'
+                if message_link
+                else "开题消息暂不可用"
+            )
+            entries.append(
+                f"- <code>{html.escape(str(packet['id']))}</code>\n"
+                f"  已领取：<code>{int(packet['claimed_count'])}/{int(packet['question_count'])}</code> 题，"
+                f"<code>{int(packet['claimed_amount'])}/{int(packet['total_amount'])}</code> 金额\n"
+                f"  {opening}"
+            )
+        return self._render_template(
+            ctx,
+            "reminder_message_template",
+            REMINDER_MESSAGE_TEMPLATE,
+            packet_date=packet_date,
+            expire_time="08:30",
+            redpackets="\n\n".join(entries),
+        )
+
     def _render_redpacket_settlement(self, ctx: PluginContext, packet: dict[str, Any]) -> list[str]:
         rows = self.storage.get_redpacket_settlement(ctx.account_id, str(packet["id"]))
         claimed_amount = int(packet["total_amount"]) - int(packet["remaining_amount"])
@@ -2046,11 +2225,14 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{base} reset all</code> 重置当天所有人的参与限制\n"
             f"<code>{self._prefix(ctx)}{self._weekly_command(ctx)}</code> 查看本周排行榜\n"
             f"<code>{base} list</code> 查看进行中红包、领取进度和开题消息，并提供补发入口\n"
+            "<code>/airp list</code> 普通群员自助查询同一列表\n"
             f"<code>{base} close 红包ID</code> 关闭红包\n"
             "创建、重置或关闭成功后自动删除原命令消息；失败时保留。\n"
             "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。\n"
             "答题结果会显示答题者姓名；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
-            "list 原命令会自动删除，列表回执保留；已完结红包不会出现在列表中。"
+            "list 原命令会自动删除，列表回执保留；已完结红包不会出现在列表中。\n"
+            "答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n"
+            "红包最晚于创建日次日 08:30 到期；如昨日红包未领完，今日 08:00 会发送一次提醒。"
         )
 
     def _command_args(self, ctx: PluginContext, text: str, *, command_confirmed: bool = False) -> list[str] | None:
@@ -2089,11 +2271,59 @@ class AIRedpacketPlugin(Plugin):
         return str(config.get("question_source_url") or nested.get("url") or "").strip()
 
     def _today(self, ctx: PluginContext) -> str:
+        return datetime.now(self._timezone(ctx)).date().isoformat()
+
+    def _timezone(self, ctx: PluginContext) -> ZoneInfo:
         timezone = str((ctx.config or {}).get("timezone") or "Asia/Shanghai")
         try:
-            return datetime.now(ZoneInfo(timezone)).date().isoformat()
+            return ZoneInfo(timezone)
         except Exception:
-            return datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+            return ZoneInfo("Asia/Shanghai")
+
+    def _local_datetime(self, ctx: PluginContext, value: Any = None) -> datetime:
+        timezone = self._timezone(ctx)
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone)
+            return value.astimezone(timezone)
+        if isinstance(value, str):
+            try:
+                return self._local_datetime(ctx, datetime.fromisoformat(value))
+            except ValueError:
+                pass
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.fromtimestamp(float(value), timezone)
+            except (ValueError, OverflowError, OSError):
+                pass
+        return datetime.now(timezone)
+
+    def _next_morning_expiration(self, ctx: PluginContext, created_at: Any) -> float:
+        created = self._local_datetime(ctx, created_at)
+        next_day = created.date() + timedelta(days=1)
+        deadline = datetime(
+            next_day.year,
+            next_day.month,
+            next_day.day,
+            8,
+            30,
+            tzinfo=self._timezone(ctx),
+        )
+        return deadline.timestamp()
+
+    def _shorten_existing_redpacket_expirations(self, ctx: PluginContext) -> None:
+        for packet in self.storage.list_active_redpackets_for_account(ctx.account_id):
+            self.storage.shorten_redpacket_expiration(
+                ctx.account_id,
+                str(packet["id"]),
+                self._next_morning_expiration(ctx, packet["created_at"]),
+            )
+
+    def _date_for_timestamp(self, ctx: PluginContext, timestamp: Any) -> str:
+        try:
+            return datetime.fromtimestamp(float(timestamp), self._timezone(ctx)).date().isoformat()
+        except (TypeError, ValueError, OverflowError):
+            return self._today(ctx)
 
     def _int_config(self, ctx: PluginContext, key: str, default: int, minimum: int, maximum: int) -> int:
         value = (ctx.config or {}).get(key, default)
