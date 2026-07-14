@@ -17,6 +17,7 @@ def _install_telepilot_stubs() -> None:
     app = sys.modules.setdefault("app", types.ModuleType("app"))
     worker = sys.modules.setdefault("app.worker", types.ModuleType("app.worker"))
     plugins = sys.modules.setdefault("app.worker.plugins", types.ModuleType("app.worker.plugins"))
+    command = types.ModuleType("app.worker.command")
     base = types.ModuleType("app.worker.plugins.base")
     manifest = types.ModuleType("app.worker.plugins.manifest")
 
@@ -33,9 +34,14 @@ def _install_telepilot_stubs() -> None:
     def register(cls):
         return cls
 
+    def current_command_prefix(*, fallback=None):
+        return "。"
+
     base.Plugin = Plugin
     base.PluginContext = PluginContext
     base.register = register
+    command.current_command_prefix = current_command_prefix
+    sys.modules["app.worker.command"] = command
     manifest.Manifest = Manifest
     sys.modules["app.worker.plugins.base"] = base
     sys.modules["app.worker.plugins.manifest"] = manifest
@@ -87,6 +93,8 @@ class RewardAllocationTest(unittest.TestCase):
 class QuestionGenerationTest(unittest.TestCase):
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.6")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.58.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -104,6 +112,22 @@ class QuestionGenerationTest(unittest.TestCase):
         self.assertEqual(properties["retry_count"]["maximum"], 10)
         self.assertNotIn("readOnly", properties["question_bank_id"])
         self.assertNotIn("x-ui-hidden", properties["question_bank_id"])
+        self.assertEqual(properties["question_bank_id"]["x-ui-widget"], "dynamic-select")
+        self.assertEqual(properties["question_bank_id"]["x-ui-options-field"], "question_bank_options")
+        self.assertTrue(properties["question_bank_options"]["x-ui-hidden"])
+        self.assertTrue(properties["question_generation_prompt"]["x-ui-placeholder"].startswith("你是 TelePilot"))
+        self.assertIn("reset [用户ID]", manifest_module.USAGE)
+        for preview_key in (
+            "packet_message_preview",
+            "question_message_preview",
+            "success_message_preview",
+            "failed_message_preview",
+            "settlement_message_preview",
+            "weekly_message_preview",
+        ):
+            self.assertIn(preview_key, properties)
+        self.assertIn("weekly_message_template", properties)
+        self.assertIn("settlement_message_template", properties)
 
     def test_config_fields_are_grouped_into_one_and_two_column_sections(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
@@ -716,6 +740,60 @@ class PluginActionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不得包含小数点"):
             plugin._amount_config(Context(), "reward_min", 1)
 
+    def test_usage_uses_live_system_command_prefix(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+
+        class Context:
+            config = {"command": "airp"}
+            account_config = {"command_prefix": ","}
+
+        usage = plugin._usage(Context())
+        self.assertIn("。airp reset [用户ID]", usage)
+        self.assertIn("。airp-7", usage)
+        self.assertNotIn(",airp", usage)
+
+    def test_create_auto_adjusts_incompatible_reward_bounds_from_command(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(
+                    account_id=1,
+                    bank_id="0e90376c7a2b",
+                    title="命令题库",
+                    questions=_questions(5),
+                )
+
+                class Context:
+                    account_id = 1
+                    config = {"reward_min": 123, "reward_max": 13579}
+                    account_config = {}
+                    log = None
+
+                actions = await plugin._create_packet(
+                    Context(),
+                    -1001,
+                    77,
+                    1,
+                    ["200", "2", "0e90376c7a2b"],
+                )
+                self.assertNotIn("红包创建失败", actions[0]["text"])
+                packet = plugin.storage.list_redpackets(1, -1001)[0]
+                with plugin.storage.connect() as conn:
+                    rewards = [
+                        int(row["reward"])
+                        for row in conn.execute(
+                            "SELECT reward FROM redpacket_question WHERE redpacket_id = ?",
+                            (packet["id"],),
+                        ).fetchall()
+                    ]
+                self.assertEqual(sum(rewards), 200)
+                self.assertEqual(len(rewards), 2)
+                self.assertNotEqual(rewards[0], rewards[1])
+                self.assertGreaterEqual(min(rewards), 1)
+
+        asyncio.run(run_case())
+
     def test_weekly_period_runs_from_sunday_ten_to_next_sunday_ten(self) -> None:
         plugin = plugin_module.AIRedpacketPlugin()
 
@@ -899,6 +977,39 @@ class PluginActionTest(unittest.TestCase):
         count_section, reward_section = text.split("<b>获得奖金 TOP 5</b>")
         self.assertLess(count_section.index("答题王"), count_section.index("奖金王"))
         self.assertLess(reward_section.index("奖金王"), reward_section.index("答题王"))
+
+    def test_settlement_and_weekly_templates_are_used_at_runtime(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+
+        class Storage:
+            def get_redpacket_settlement(self, account_id, redpacket_id):
+                return []
+
+            def weekly_leaderboard(self, account_id, chat_id, start_at, end_at):
+                return []
+
+        class Context:
+            account_id = 1
+            config = {
+                "timezone": "Asia/Shanghai",
+                "settlement_message_template": "结算 {redpacket_id} {status} {ranking}",
+                "weekly_message_template": "周榜 {weekly_title} {period_start} {period_end} {count_ranking} / {reward_ranking}",
+            }
+
+        plugin.storage = Storage()
+        settlement = plugin._render_redpacket_settlement(
+            Context(),
+            {"id": "custom", "status": "expired", "total_amount": 100, "remaining_amount": 100},
+        )
+        self.assertEqual(settlement, ["结算 custom 已到期 本次无人成功领取。"])
+        weekly = plugin._render_weekly_leaderboard(
+            Context(),
+            -1001,
+            completed=False,
+            now=datetime.fromisoformat("2026-07-15T12:00:00+08:00"),
+        )
+        self.assertIn("周榜 AI 红包本周排行榜", weekly)
+        self.assertEqual(weekly.count("本周期暂无成功答题记录。"), 2)
 
     def test_startup_registers_settlement_and_sunday_ten_jobs(self) -> None:
         async def run_case() -> None:
@@ -1141,6 +1252,15 @@ class PluginActionTest(unittest.TestCase):
                 )
                 self.assertIn("题库生成完成", action_result["message"])
                 self.assertEqual(action_result["config_patch"]["question_bank_count"], 100)
+                self.assertEqual(
+                    action_result["config_patch"]["question_bank_options"],
+                    [
+                        {
+                            "value": action_result["config_patch"]["question_bank_id"],
+                            "label": "测试题库（100 题）",
+                        }
+                    ],
+                )
                 self.assertEqual(ai.calls, 9)
                 self.assertEqual(ctx.http.calls, 1)
                 self.assertEqual(ai.kwargs[0]["route"], "auto")

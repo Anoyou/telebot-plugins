@@ -18,12 +18,13 @@ from typing import Any
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 from .storage import AIStorage, StorageError
 
 
-PLUGIN_VERSION = "0.1.5"
+PLUGIN_VERSION = "0.1.6"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -73,6 +74,24 @@ FAILED_MESSAGE_TEMPLATE = (
     "<b>AI 红包答题结果</b>\n{question}\n\n"
     "结果：<b>答题机会已用完，今天的挑战已结束</b>\n"
     "正确答案：{answer}\n解析：{explanation}\n来源：{source}"
+)
+SETTLEMENT_MESSAGE_TEMPLATE = (
+    "<b>AI 红包每日结算</b>\n"
+    "红包 ID：<code>{redpacket_id}</code>\n"
+    "状态：{status}\n"
+    "已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code>\n"
+    "领取人数：<code>{claim_count}</code>\n\n"
+    "运气王：<b>{luckiest_name}</b> · {luckiest_reward}\n"
+    "倒霉蛋：<b>{unluckiest_name}</b> · {unluckiest_reward}\n\n"
+    "{ranking}"
+)
+WEEKLY_MESSAGE_TEMPLATE = (
+    "<b>{weekly_title}</b>\n"
+    "周期：<code>{period_start}</code> 至 <code>{period_end}</code>\n\n"
+    "<blockquote expandable><b>答对次数 TOP 5</b>\n"
+    "{count_ranking}\n\n"
+    "<b>获得奖金 TOP 5</b>\n"
+    "{reward_ranking}</blockquote>"
 )
 
 
@@ -411,13 +430,13 @@ class AIRedpacketPlugin(Plugin):
             None,
         )
         if existing and int(existing.get("question_count") or 0) >= target_count:
-            return self._question_bank_action_result(existing, generated=False, target_count=target_count)
+            return self._question_bank_action_result(ctx, existing, generated=False, target_count=target_count)
         try:
             bank = await self._generate_bank(ctx, url, existing_bank=existing, target_count=target_count)
         except Exception as exc:
             await self._log(ctx, "error", "AI 题库生成或补齐失败", error=type(exc).__name__, host=urlparse(url).hostname or "")
             raise RuntimeError(f"题库生成失败：{str(exc)[:300]}") from exc
-        return self._question_bank_action_result(bank, generated=True, target_count=target_count)
+        return self._question_bank_action_result(ctx, bank, generated=True, target_count=target_count)
 
     async def _handle_command_payload(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
         chat_id = _chat_id(payload)
@@ -699,6 +718,7 @@ class AIRedpacketPlugin(Plugin):
 
     def _question_bank_action_result(
         self,
+        ctx: PluginContext,
         bank: dict[str, Any],
         *,
         generated: bool,
@@ -723,6 +743,13 @@ class AIRedpacketPlugin(Plugin):
                 "question_bank_id": bank_id,
                 "question_bank_count": count,
                 "question_bank_generated_at": datetime.fromtimestamp(created_at, ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
+                "question_bank_options": [
+                    {
+                        "value": str(item["bank_id"]),
+                        "label": f"{item['bank_title']}（{int(item['question_count'])} 题）",
+                    }
+                    for item in self.storage.list_banks(ctx.account_id)
+                ],
             },
         }
 
@@ -744,8 +771,14 @@ class AIRedpacketPlugin(Plugin):
         if not bank_id:
             return [_send("题库为空，请先执行题库更新。", chat_id=chat_id, reply_to=reply_to)]
         try:
-            minimum = self._amount_config(ctx, "reward_min", 1)
-            maximum = self._amount_config(ctx, "reward_max", 10_000)
+            configured_minimum = self._amount_config(ctx, "reward_min", 1)
+            configured_maximum = self._amount_config(ctx, "reward_max", 10_000)
+            minimum, maximum = self._effective_reward_bounds(
+                total,
+                count,
+                configured_minimum,
+                configured_maximum,
+            )
             if maximum < minimum:
                 raise ValueError("单题最高金额不得低于最低金额")
             rewards = allocate_rewards(total, count, minimum, maximum)
@@ -774,7 +807,17 @@ class AIRedpacketPlugin(Plugin):
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
         markup = {"inline_keyboard": [[{"text": "领取答题红包", "callback_data": f"{CALLBACK_PREFIX}:start:{packet_id}"}]]}
-        await self._log(ctx, "info", "AI 红包已创建", redpacket_id=packet_id, chat_id=chat_id, total=total, count=count)
+        await self._log(
+            ctx,
+            "info",
+            "AI 红包已创建",
+            redpacket_id=packet_id,
+            chat_id=chat_id,
+            total=total,
+            count=count,
+            reward_min=minimum,
+            reward_max=maximum,
+        )
         return [_send(text, chat_id=chat_id, reply_to=reply_to, markup=markup, via="interaction_bot"), {"type": "end_session"}]
 
     async def _handle_callback(
@@ -1073,33 +1116,33 @@ class AIRedpacketPlugin(Plugin):
         rows = self.storage.get_redpacket_settlement(ctx.account_id, str(packet["id"]))
         claimed_amount = int(packet["total_amount"]) - int(packet["remaining_amount"])
         status = "已全部领完" if packet["status"] == "finished" else "已到期"
-        lines = [
-            "<b>AI 红包每日结算</b>",
-            f"红包 ID：<code>{html.escape(str(packet['id']))}</code>",
-            f"状态：{status}",
-            f"已领取：<code>{claimed_amount}</code> / <code>{int(packet['total_amount'])}</code>",
-            f"领取人数：<code>{len(rows)}</code>",
-        ]
         if not rows:
-            lines.append("\n本次无人成功领取。")
-            return ["\n".join(lines)]
+            return [
+                self._render_template(
+                    ctx,
+                    "settlement_message_template",
+                    SETTLEMENT_MESSAGE_TEMPLATE,
+                    redpacket_id=html.escape(str(packet["id"])),
+                    status=status,
+                    claimed_amount=claimed_amount,
+                    total_amount=int(packet["total_amount"]),
+                    claim_count=0,
+                    luckiest_name="无",
+                    luckiest_reward=0,
+                    unluckiest_name="无",
+                    unluckiest_reward=0,
+                    ranking="本次无人成功领取。",
+                )
+            ]
         luckiest = rows[0]
         unluckiest = min(rows, key=lambda item: (int(item["reward"]), float(item["updated_at"]), int(item["user_id"])))
-        lines.extend(
-            [
-                "",
-                f"运气王：<b>{html.escape(truncate_display_name(luckiest['user_display_name']))}</b> · {int(luckiest['reward'])}",
-                f"倒霉蛋：<b>{html.escape(truncate_display_name(unluckiest['user_display_name']))}</b> · {int(unluckiest['reward'])}",
-            ]
-        )
         ranking = list(
             f"{index}. {html.escape(truncate_display_name(row['user_display_name']))} · {int(row['reward'])}"
             for index, row in enumerate(rows, 1)
         )
-        header = "\n".join(lines)
         chunks: list[list[str]] = []
         current: list[str] = []
-        first_budget = 3400 - len(header)
+        first_budget = 2800
         budget = max(1000, first_budget)
         for item in ranking:
             projected = len("\n".join([*current, item]))
@@ -1116,7 +1159,26 @@ class AIRedpacketPlugin(Plugin):
             title = "<b>领取总名单（金额降序）</b>" if index == 0 else "<b>领取总名单（续）</b>"
             chunk_text = "\n".join(chunk)
             block = f"<blockquote expandable>{title}\n{chunk_text}</blockquote>"
-            messages.append(f"{header}\n\n{block}" if index == 0 else block)
+            if index == 0:
+                messages.append(
+                    self._render_template(
+                        ctx,
+                        "settlement_message_template",
+                        SETTLEMENT_MESSAGE_TEMPLATE,
+                        redpacket_id=html.escape(str(packet["id"])),
+                        status=status,
+                        claimed_amount=claimed_amount,
+                        total_amount=int(packet["total_amount"]),
+                        claim_count=len(rows),
+                        luckiest_name=html.escape(truncate_display_name(luckiest["user_display_name"])),
+                        luckiest_reward=int(luckiest["reward"]),
+                        unluckiest_name=html.escape(truncate_display_name(unluckiest["user_display_name"])),
+                        unluckiest_reward=int(unluckiest["reward"]),
+                        ranking=block,
+                    )
+                )
+            else:
+                messages.append(block)
         return messages
 
     def _weekly_period(
@@ -1151,13 +1213,17 @@ class AIRedpacketPlugin(Plugin):
         start, end = self._weekly_period(ctx, now=now, completed=completed)
         rows = self.storage.weekly_leaderboard(ctx.account_id, chat_id, start.timestamp(), end.timestamp())
         title = "AI 红包周榜结算" if completed else "AI 红包本周排行榜"
-        lines = [
-            f"<b>{title}</b>",
-            f"周期：<code>{start.strftime('%Y-%m-%d %H:%M')}</code> 至 <code>{end.strftime('%Y-%m-%d %H:%M')}</code>",
-        ]
         if not rows:
-            lines.append("\n本周期暂无成功答题记录。")
-            return "\n".join(lines)
+            return self._render_template(
+                ctx,
+                "weekly_message_template",
+                WEEKLY_MESSAGE_TEMPLATE,
+                weekly_title=title,
+                period_start=start.strftime("%Y-%m-%d %H:%M"),
+                period_end=end.strftime("%Y-%m-%d %H:%M"),
+                count_ranking="本周期暂无成功答题记录。",
+                reward_ranking="本周期暂无成功答题记录。",
+            )
         by_count = sorted(
             rows,
             key=lambda item: (-int(item["success_count"]), -int(item["total_reward"]), int(item["user_id"])),
@@ -1166,19 +1232,24 @@ class AIRedpacketPlugin(Plugin):
             rows,
             key=lambda item: (-int(item["total_reward"]), -int(item["success_count"]), int(item["user_id"])),
         )[:5]
-        ranking = ["<b>答对次数 TOP 5</b>"]
-        ranking.extend(
+        count_ranking = "\n".join(
             f"{index}. {html.escape(truncate_display_name(row['user_display_name']))} · {int(row['success_count'])} 次"
             for index, row in enumerate(by_count, 1)
         )
-        ranking.extend(["", "<b>获得奖金 TOP 5</b>"])
-        ranking.extend(
+        reward_ranking = "\n".join(
             f"{index}. {html.escape(truncate_display_name(row['user_display_name']))} · {int(row['total_reward'])}"
             for index, row in enumerate(by_reward, 1)
         )
-        ranking_text = "\n".join(ranking)
-        lines.extend(["", f"<blockquote expandable>{ranking_text}</blockquote>"])
-        return "\n".join(lines)
+        return self._render_template(
+            ctx,
+            "weekly_message_template",
+            WEEKLY_MESSAGE_TEMPLATE,
+            weekly_title=title,
+            period_start=start.strftime("%Y-%m-%d %H:%M"),
+            period_end=end.strftime("%Y-%m-%d %H:%M"),
+            count_ranking=count_ranking,
+            reward_ranking=reward_ranking,
+        )
 
     async def _run_weekly_leaderboard(self, ctx: PluginContext, job: Any) -> None:
         if not self._bool_config(ctx, "weekly_auto_publish", True):
@@ -1303,7 +1374,7 @@ class AIRedpacketPlugin(Plugin):
         return f"{self._command(ctx)}-7"
 
     def _prefix(self, ctx: PluginContext) -> str:
-        return str((ctx.account_config or {}).get("command_prefix") or ",")
+        return str(current_command_prefix(fallback=",") or ",")
 
     def _source_url(self, ctx: PluginContext) -> str:
         config = ctx.config or {}
@@ -1337,6 +1408,21 @@ class AIRedpacketPlugin(Plugin):
             raise ValueError("红包金额配置必须是大于等于 1 的整数，不得包含小数点")
         return min(int(value), 1_000_000_000)
 
+    def _effective_reward_bounds(
+        self,
+        total: int,
+        count: int,
+        configured_minimum: int,
+        configured_maximum: int,
+    ) -> tuple[int, int]:
+        if count <= 0:
+            return configured_minimum, configured_maximum
+        if count == 1:
+            return min(configured_minimum, total), max(configured_maximum, total)
+        minimum = min(configured_minimum, max(1, (total - 1) // count))
+        maximum = max(configured_maximum, math.ceil((total + 1) / count))
+        return minimum, maximum
+
     def _bool_config(self, ctx: PluginContext, key: str, default: bool) -> bool:
         value = (ctx.config or {}).get(key, default)
         if isinstance(value, str):
@@ -1344,7 +1430,7 @@ class AIRedpacketPlugin(Plugin):
         return bool(value)
 
     def _render_template(self, ctx: PluginContext, key: str, default: str, **values: Any) -> str:
-        template = str((ctx.config or {}).get(key) or default)
+        template = str((getattr(ctx, "config", None) or {}).get(key) or default)
         try:
             return template.format_map(values)
         except (KeyError, ValueError):

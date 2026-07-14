@@ -5,12 +5,17 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.5"
+PLUGIN_VERSION = "0.1.6"
+QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
+只依据网页正文生成三选一选择题，并输出严格 JSON，不要 Markdown。
+每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
+题目必须能从正文中直接得到答案，不要编造，不要出主观题。"""
 USAGE = (
-    "管理员在插件配置页填写题库来源 URL，选择 Provider 和模型后点击“生成/补齐题库”；网页正文会缓存，已有题目会保留并补齐到目标题数。"
-    "直接发送 {prefix}{command} 按默认总金额、份数和题库创建红包；也可使用 {prefix}{command} create 总金额 [题目数] [题库ID]。用户通过交互 Bot 按钮答题，"
-    "答对后的整数金额由平台 payout 交给 userbot 发放。红包领完或到期后自动发布折叠结算；"
-    "{prefix}{command}-7 可查询周日 10:00 起算的本周排行榜，每周日 10:00 默认自动发布上一完整周期。"
+    "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。"
+    "命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；"
+    "{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；"
+    "{prefix}{command} reset [用户ID] 重置当天领取与答题限制；{prefix}{command}-7 查询本周排行榜；"
+    "{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。"
 )
 
 CONFIG_SCHEMA = {
@@ -31,7 +36,9 @@ CONFIG_SCHEMA = {
                 "4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n"
                 "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n"
                 "6. 测试后可发送 {prefix}{command} reset 重置自己当天的领取与答题限制。\n"
-                "7. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。"
+                "7. 发送 {prefix}{command} bank list 查看题库，{prefix}{command} list 查看当前群红包。\n"
+                "8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n"
+                "9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。"
             ),
         },
         "command": {
@@ -126,8 +133,25 @@ CONFIG_SCHEMA = {
             "x-ui-section": "基础设置",
             "x-ui-columns": 2,
             "x-ui-order": 20,
+            "x-ui-widget": "dynamic-select",
+            "x-ui-options-field": "question_bank_options",
             "default": "",
-            "description": "生成或补齐题库后自动填入当前题库 ID；也可手动填写其它已有题库 ID。创建红包未指定题库时优先使用此项。",
+            "description": "选择创建红包时默认使用的题库；点击生成/补齐题库后会自动刷新选项。",
+        },
+        "question_bank_options": {
+            "type": "array",
+            "title": "题库选项",
+            "default": [],
+            "x-ui-hidden": True,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "value": {"type": "string"},
+                    "label": {"type": "string"},
+                },
+                "required": ["value", "label"],
+            },
         },
         "question_bank_count": {
             "type": "integer",
@@ -263,6 +287,7 @@ CONFIG_SCHEMA = {
             "x-ui-columns": 1,
             "x-ui-order": 300,
             "default": "",
+            "x-ui-placeholder": QUESTION_PROMPT_PLACEHOLDER,
             "description": "留空使用插件内置提示词；自定义时仍必须要求严格 JSON 和三选一题型。",
         },
         "packet_message_template": {
@@ -289,17 +314,59 @@ CONFIG_SCHEMA = {
             "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答题机会已用完，今天的挑战已结束</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
             "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}、{date}、{daily_limit}、{retry_count}。",
         },
+        "settlement_message_template": {
+            "type": "string",
+            "title": "红包结算模板",
+            "default": "<b>AI 红包每日结算</b>\n红包 ID：<code>{redpacket_id}</code>\n状态：{status}\n已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code>\n领取人数：<code>{claim_count}</code>\n\n运气王：<b>{luckiest_name}</b> · {luckiest_reward}\n倒霉蛋：<b>{unluckiest_name}</b> · {unluckiest_reward}\n\n{ranking}",
+            "description": "占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}。",
+        },
+        "weekly_message_template": {
+            "type": "string",
+            "title": "每周榜单模板",
+            "default": "<b>{weekly_title}</b>\n周期：<code>{period_start}</code> 至 <code>{period_end}</code>\n\n<blockquote expandable><b>答对次数 TOP 5</b>\n{count_ranking}\n\n<b>获得奖金 TOP 5</b>\n{reward_ranking}</blockquote>",
+            "description": "占位符：{weekly_title}、{period_start}、{period_end}、{count_ranking}、{reward_ranking}。",
+        },
         "template_placeholders": {
             "type": "string",
             "title": "模板占位符（只读）",
             "readOnly": True,
-            "default": "通用：{date} {daily_limit} {retry_count}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}",
+            "default": "通用：{date} {daily_limit} {retry_count}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}",
         },
-        "template_preview": {
+        "packet_message_preview": {
             "type": "string",
-            "title": "红包消息预览",
+            "title": "红包开场预览",
             "readOnly": True,
-            "default": "<b>AI 答题红包</b>\n总金额：<code>150000</code>\n题目数量：<code>40</code>\n\n今日日期：<code>2026-07-14</code>\n每人每天最多成功领取 1 次；每题答错后可重试 1 次。",
+            "default": "",
+        },
+        "question_message_preview": {
+            "type": "string",
+            "title": "答题题面预览",
+            "readOnly": True,
+            "default": "",
+        },
+        "success_message_preview": {
+            "type": "string",
+            "title": "答对结果预览",
+            "readOnly": True,
+            "default": "",
+        },
+        "failed_message_preview": {
+            "type": "string",
+            "title": "挑战失败预览",
+            "readOnly": True,
+            "default": "",
+        },
+        "settlement_message_preview": {
+            "type": "string",
+            "title": "红包结算预览",
+            "readOnly": True,
+            "default": "",
+        },
+        "weekly_message_preview": {
+            "type": "string",
+            "title": "每周榜单预览",
+            "readOnly": True,
+            "default": "",
         },
     },
     "required": [
@@ -407,7 +474,7 @@ MANIFEST = Manifest(
     key="ai_redpacket",
     display_name="AI 答题红包",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.33.0",
+    min_telepilot_version="0.58.2",
     author="Anoyou",
     description="从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
     usage=USAGE,
