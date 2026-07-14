@@ -16,7 +16,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.1"
+PLUGIN_VERSION = "1.5.2"
 
 DEFAULT_START_COMMAND = "福利开启"
 DEFAULT_STOP_COMMAND = "福利暂停"
@@ -240,6 +240,22 @@ def _payload_actor_is_bot(payload: Mapping[str, Any]) -> bool:
     return False
 
 
+def _payload_actor_has_bot_username(payload: Mapping[str, Any]) -> bool:
+    for key in ("sender", "actor", "source_actor", "player"):
+        actor = _as_mapping(payload.get(key))
+        username = str(actor.get("username") or "").strip().lstrip("@").casefold()
+        if username.endswith("bot"):
+            return True
+    return False
+
+
+def _entity_is_bot(entity: Any) -> bool:
+    if bool(getattr(entity, "bot", False) or getattr(entity, "is_bot", False)):
+        return True
+    username = str(getattr(entity, "username", None) or "").strip().lstrip("@").casefold()
+    return username.endswith("bot")
+
+
 def _payload_is_self_actor(payload: Mapping[str, Any], me_id: int | None) -> bool:
     sender_id = _payload_sender_id(payload)
     if sender_id is None:
@@ -358,7 +374,7 @@ async def _event_actor_is_bot(event: Any) -> bool:
         sender = await event.get_sender()
     except Exception:
         sender = None
-    return bool(getattr(sender, "bot", False) or getattr(sender, "is_bot", False))
+    return _entity_is_bot(sender)
 
 
 @register
@@ -382,6 +398,7 @@ class RandomBenefitPlugin(Plugin):
         self._user_cooldown_seconds = DEFAULT_USER_COOLDOWN_SECONDS
         self._default_enabled = True
         self._me_id: int | None = None
+        self._sender_bot_cache: dict[int, bool] = {}
         self._active_fallback: dict[tuple[int, int], bool] = {}
         self._cooldown_fallback: dict[str, float] = {}
         self.commands = {
@@ -402,6 +419,7 @@ class RandomBenefitPlugin(Plugin):
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         self._me_id = None
+        self._sender_bot_cache.clear()
         self._active_fallback.clear()
         self._cooldown_fallback.clear()
 
@@ -496,8 +514,8 @@ class RandomBenefitPlugin(Plugin):
             return []
         if (
             _payload_is_outgoing(payload)
-            or _payload_actor_is_bot(payload)
             or _payload_is_self_actor(payload, self._me_id)
+            or _payload_actor_is_bot(payload)
         ):
             return []
 
@@ -508,6 +526,8 @@ class RandomBenefitPlugin(Plugin):
         if await self._in_reply_cooldown(ctx, chat_id, sender_id):
             return []
         if random.random() >= self._probability:
+            return []
+        if await self._payload_sender_is_bot(ctx, payload):
             return []
 
         reply_text = self._render_reply(
@@ -571,6 +591,27 @@ class RandomBenefitPlugin(Plugin):
         except Exception:
             return
         self._me_id = _int_from_any(getattr(me, "id", None))
+
+    async def _payload_sender_is_bot(self, ctx: PluginContext, payload: Mapping[str, Any]) -> bool:
+        if _payload_actor_is_bot(payload):
+            return True
+
+        sender_id = _payload_sender_id(payload)
+        if sender_id is not None and sender_id in self._sender_bot_cache:
+            return self._sender_bot_cache[sender_id]
+
+        client = getattr(ctx, "client", None)
+        if sender_id is not None and client is not None:
+            try:
+                sender = await client.get_entity(sender_id)
+            except Exception:
+                sender = None
+            if sender is not None:
+                is_bot = _entity_is_bot(sender)
+                self._sender_bot_cache[sender_id] = is_bot
+                return is_bot
+
+        return _payload_actor_has_bot_username(payload)
 
     def _chat_configured(self, chat_id: int) -> bool:
         return int(chat_id) in self._allowed_chat_ids

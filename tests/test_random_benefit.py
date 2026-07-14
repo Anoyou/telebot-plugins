@@ -70,13 +70,19 @@ def _message_payload(
     message_id: int = 55,
     sender_id: int = 42,
     sender_is_bot: bool = False,
+    sender_username: str = "",
     outgoing: bool = False,
     userbot_user_id: int | None = None,
 ):
     payload = {
         "type": "message",
         "message": {"text": text, "chat_id": chat_id, "message_id": message_id, "outgoing": outgoing},
-        "sender": {"user_id": sender_id, "display_name": "小明", "is_bot": sender_is_bot},
+        "sender": {
+            "user_id": sender_id,
+            "display_name": "小明",
+            "username": sender_username,
+            "is_bot": sender_is_bot,
+        },
     }
     if userbot_user_id is not None:
         payload["userbot_user_id"] = userbot_user_id
@@ -125,11 +131,17 @@ class FakeCommandEvent(FakeDirectEvent):
 
 
 class FakeClient:
-    def __init__(self, *, me_id: int) -> None:
+    def __init__(self, *, me_id: int, entities: dict[int, object] | None = None) -> None:
         self.me_id = me_id
+        self.entities = entities or {}
+        self.get_entity_calls: list[int] = []
 
     async def get_me(self):
         return types.SimpleNamespace(id=self.me_id)
+
+    async def get_entity(self, sender_id: int):
+        self.get_entity_calls.append(sender_id)
+        return self.entities[sender_id]
 
 
 class RandomBenefitPluginTest(unittest.TestCase):
@@ -150,7 +162,7 @@ class RandomBenefitPluginTest(unittest.TestCase):
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.5.1")
+        self.assertEqual(manifest["version"], "1.5.2")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertEqual(properties["start_command"]["default"], "福利开启")
@@ -244,6 +256,86 @@ class RandomBenefitPluginTest(unittest.TestCase):
             self.assertEqual(self_actions, [])
             self.assertEqual(bot_actions, [])
             self.assertEqual(account_bot_actions, [])
+
+        asyncio.run(run_case())
+
+    def test_event_bus_resolves_bot_when_envelope_omits_bot_flag(self) -> None:
+        async def run_case() -> None:
+            client = FakeClient(
+                me_id=42,
+                entities={77: types.SimpleNamespace(id=77, username="benefit_helper_bot", bot=True)},
+            )
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx(client=client, chat_cooldown_seconds=0, user_cooldown_seconds=0)
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                first_actions = await plugin.on_event(
+                    ctx,
+                    _message_payload(
+                        sender_id=77,
+                        sender_username="benefit_helper_bot",
+                        message_id=304,
+                    ),
+                )
+                second_actions = await plugin.on_event(
+                    ctx,
+                    _message_payload(
+                        sender_id=77,
+                        sender_username="benefit_helper_bot",
+                        message_id=305,
+                    ),
+                )
+
+            self.assertEqual(first_actions, [])
+            self.assertEqual(second_actions, [])
+            self.assertEqual(client.get_entity_calls, [77])
+
+        asyncio.run(run_case())
+
+    def test_event_bus_uses_bot_username_when_entity_lookup_is_unavailable(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx(chat_cooldown_seconds=0, user_cooldown_seconds=0)
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                actions = await plugin.on_event(
+                    ctx,
+                    _message_payload(
+                        sender_id=78,
+                        sender_username="fallback_helper_bot",
+                        message_id=306,
+                    ),
+                )
+
+            self.assertEqual(actions, [])
+
+        asyncio.run(run_case())
+
+    def test_blocked_bot_message_does_not_consume_reply_cooldown(self) -> None:
+        async def run_case() -> None:
+            client = FakeClient(
+                me_id=999,
+                entities={77: types.SimpleNamespace(id=77, username="benefit_helper_bot", bot=True)},
+            )
+            plugin = plugin_module.RandomBenefitPlugin()
+            ctx = self._ctx(client=client, chat_cooldown_seconds=30, user_cooldown_seconds=120)
+
+            with patch.object(plugin_module.random, "random", return_value=0):
+                bot_actions = await plugin.on_event(
+                    ctx,
+                    _message_payload(
+                        sender_id=77,
+                        sender_username="benefit_helper_bot",
+                        message_id=307,
+                    ),
+                )
+                human_actions = await plugin.on_event(
+                    ctx,
+                    _message_payload(sender_id=79, message_id=308),
+                )
+
+            self.assertEqual(bot_actions, [])
+            self.assertEqual(len(human_actions), 1)
 
         asyncio.run(run_case())
 
