@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.4.4"
+PLUGIN_VERSION = "1.4.5"
 LEGACY_DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 # 测试和显式嵌入场景可以覆盖；生产实例会在 on_startup 绑定 ctx.data_dir。
 DATA_PATH = LEGACY_DATA_PATH
@@ -46,7 +46,6 @@ DEFAULT_SETTLEMENT_POINT_MULTIPLIER = 666
 DEFAULT_SETTLEMENT_BASE_POINTS = 4
 DEFAULT_CLEANUP_DELAY_SECONDS = 120
 DEFAULT_PAYOUT_INTERVAL_SECONDS = 2
-DEFAULT_FREE_JOIN_KEYWORD = "报名"
 DEFAULT_MAX_QUESTIONS_PER_GAME = 50
 DEFAULT_QUESTION_TIMEOUT_SECONDS = 45
 DEFAULT_SELECTION_TIMEOUT_SECONDS = 120
@@ -149,7 +148,6 @@ class QuickQAGame:
     selection_timeout_seconds: int
     host_user_id: int
     host_name: str
-    free_join_keyword: str = DEFAULT_FREE_JOIN_KEYWORD
     phase: str = "lobby"
     players: dict[int, Player] = field(default_factory=dict)
     selector_user_id: int = 0
@@ -505,6 +503,27 @@ def _answer_action(payload: dict[str, Any], text: str, *, show_alert: bool = Fal
         "callback_query_id": _callback_query_id(payload),
         "text": text,
         "show_alert": show_alert,
+    }
+
+
+def _session_sync_action(game: QuickQAGame, payload: dict[str, Any]) -> dict[str, Any]:
+    participant_ids = sorted(int(user_id) for user_id in game.players if int(user_id) > 0)
+    return {
+        "type": "start_session",
+        "chat_id": game.chat_id,
+        "entry_key": ENTRY_KEY,
+        "event_type": _event_type(payload) or "callback_query",
+        "started_by_user_id": game.host_user_id or (participant_ids[0] if participant_ids else None),
+        "started_by_message_id": _message_id(payload),
+        "participant_policy": "paid_pool",
+        "participant_user_ids": participant_ids,
+        "data": {
+            "quick_qa": {
+                "game_id": game.game_id,
+                "phase": game.phase,
+                "participant_user_ids": participant_ids,
+            }
+        },
     }
 
 
@@ -1025,8 +1044,6 @@ class QuickQAPlugin(Plugin):
             text = (event.message.text or "").strip() or _message_text(payload)
             if self._looks_like_admin_text(text):
                 return []
-            if self._should_join_free_game(ctx, payload, text):
-                return await self._handle_free_join(ctx, payload, chat_id)
             if self._should_create_lobby_from_keyword(ctx, payload, text, event_type):
                 return await self._create_lobby(ctx, payload, chat_id, self._cfg_entry_fee(ctx, payload))
             return []
@@ -1110,10 +1127,6 @@ class QuickQAPlugin(Plugin):
             return True
         return False
 
-    def _should_join_free_game(self, ctx: PluginContext, payload: dict[str, Any], text: str) -> bool:
-        keyword = self._cfg_free_join_keyword(ctx, payload)
-        return bool(keyword) and text.strip() == keyword
-
     async def _handle_callback(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         data = _callback_data(payload)
         parts = data.split(":")
@@ -1132,6 +1145,8 @@ class QuickQAPlugin(Plugin):
             game = self._find_game(parts[2] if len(parts) > 2 else "", chat_id)
             if game is None:
                 return [_answer_action(payload, "游戏已结束或不存在", show_alert=True)]
+            if action == "join":
+                return await self._join_free_game_from_callback_locked(ctx, payload, game)
             if action == "start":
                 return await self._begin_selection_locked(ctx, payload, game)
             if action == "kb" and len(parts) >= 4:
@@ -1150,15 +1165,39 @@ class QuickQAPlugin(Plugin):
             return None
         return game
 
-    async def _handle_free_join(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
-        async with self._lock(chat_id):
-            game = self._games.get(chat_id)
-            if game is None or game.phase == "finished":
-                return []
-            if game.entry_fee > 0:
-                return []
-            user_id, name = _actor_id_name(payload)
-            return await self._join_game_locked(ctx, game, user_id, name, _message_id(payload))
+    async def _join_free_game_from_callback_locked(
+        self,
+        ctx: PluginContext,
+        payload: dict[str, Any],
+        game: QuickQAGame,
+    ) -> list[dict[str, Any]]:
+        if game.entry_fee > 0:
+            return [_answer_action(payload, "本局需要通过转账报名。", show_alert=True)]
+        if game.phase != "lobby":
+            return [_answer_action(payload, "报名已经结束。", show_alert=True)]
+        user_id, name = _actor_id_name(payload)
+        if not user_id:
+            return [_answer_action(payload, "没有识别到你的 Telegram 身份。", show_alert=True)]
+        if user_id in game.players:
+            return [
+                _answer_action(payload, "你已经加入本局。"),
+                _session_sync_action(game, payload),
+            ]
+        if len(game.players) >= game.max_players:
+            return [_answer_action(payload, "本局人数已满。", show_alert=True)]
+        lobby_message_id = _message_id(payload)
+        if lobby_message_id:
+            game.lobby_message_id = lobby_message_id
+            self._track_message_id(game, lobby_message_id)
+        actions = await self._join_game_locked(
+            ctx,
+            game,
+            user_id,
+            name,
+            None,
+            payload=payload,
+        )
+        return [_answer_action(payload, "加入成功"), *actions]
 
     async def _handle_payment(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         amount = _payment_amount(payload)
@@ -1185,7 +1224,14 @@ class QuickQAPlugin(Plugin):
                     )
                 ]
             user_id, name = _actor_id_name(payload, prefer_payment=True)
-            return await self._join_game_locked(ctx, game, user_id, name, _message_id(payload), paid=True)
+            return await self._join_game_locked(
+                ctx,
+                game,
+                user_id,
+                name,
+                _message_id(payload),
+                payload=payload,
+            )
 
     async def _join_game_locked(
         self,
@@ -1195,7 +1241,7 @@ class QuickQAPlugin(Plugin):
         name: str,
         message_id: int | None,
         *,
-        paid: bool = False,
+        payload: dict[str, Any],
     ) -> list[dict[str, Any]]:
         if not user_id:
             return [self._send_game_action(game, "没有识别到玩家，无法报名。", reply_to_message_id=message_id, label="join_error")]
@@ -1205,6 +1251,7 @@ class QuickQAPlugin(Plugin):
             if message_id and player.join_message_id is None:
                 player.join_message_id = message_id
             return [
+                _session_sync_action(game, payload),
                 self._send_game_action(
                     game,
                     f"{_html(player.name)} 已在本局中。",
@@ -1222,8 +1269,12 @@ class QuickQAPlugin(Plugin):
             join_message_id=message_id,
         )
         if game.phase == "lobby":
-            return [await self._lobby_action(ctx, game, reply_to_message_id=message_id)]
+            return [
+                _session_sync_action(game, payload),
+                await self._lobby_action(ctx, game, reply_to_message_id=message_id),
+            ]
         return [
+            _session_sync_action(game, payload),
             self._send_game_action(
                 game,
                 f"{_html(name)} 报名成功，初始积分 {_code(game.initial_points)}。",
@@ -1263,7 +1314,6 @@ class QuickQAPlugin(Plugin):
         correct_points = _clamp_int(cfg.get("correct_points"), DEFAULT_CORRECT_POINTS, 0, 1000)
         wrong_points = _clamp_int(cfg.get("wrong_points"), DEFAULT_WRONG_POINTS, 1, 1000)
         reward_ratio = min(max(_float(cfg.get("reward_ratio"), DEFAULT_REWARD_RATIO), 0.01), 1.0)
-        source_channel = _source_channel(payload)
         return QuickQAGame(
             game_id=secrets.token_hex(4),
             account_id=ctx.account_id,
@@ -1322,7 +1372,6 @@ class QuickQAPlugin(Plugin):
             ),
             host_user_id=host_user_id,
             host_name=host_name,
-            free_join_keyword=str(cfg.get("free_join_keyword") or DEFAULT_FREE_JOIN_KEYWORD).strip() or DEFAULT_FREE_JOIN_KEYWORD,
         )
 
     async def _begin_selection(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
@@ -1346,7 +1395,7 @@ class QuickQAPlugin(Plugin):
         actor_id, _ = _actor_id_name(payload)
         if _callback_query_id(payload) and actor_id not in game.players:
             if game.entry_fee <= 0:
-                tip = f"你还没有报名，请先发送“{game.free_join_keyword}”参与本局。"
+                tip = "你还没有加入本局，请先点击大厅里的“加入游戏”。"
             else:
                 tip = "你还没有报名，请先完成转账报名。"
             return [_answer_action(payload, tip, show_alert=True)]
@@ -1447,7 +1496,7 @@ class QuickQAPlugin(Plugin):
         player = game.players.get(actor_id)
         if player is None or not player.active:
             if game.entry_fee <= 0:
-                tip = f"你还没有报名，请先发送“{game.free_join_keyword}”参与本局。"
+                tip = "你还没有加入本局，请先点击大厅里的“加入游戏”。"
             else:
                 tip = "你还没有报名，请先完成转账报名。"
             return [_answer_action(payload, tip, show_alert=True)]
@@ -1602,7 +1651,7 @@ class QuickQAPlugin(Plugin):
         await self._cleanup_game_messages(ctx, game)
 
     async def _send_payouts(self, ctx: PluginContext, game: QuickQAGame, settlements: list[SettlementItem]) -> None:
-        payable = [item for item in settlements if item.amount > 0 and item.join_message_id]
+        payable = [item for item in settlements if item.amount > 0]
         if not payable:
             await _progress_log(ctx, "info", "快问快答没有可自动发放的奖励", game_id=game.game_id)
             return
@@ -1610,19 +1659,19 @@ class QuickQAPlugin(Plugin):
         for index, item in enumerate(payable):
             if index > 0 and game.payout_interval_seconds > 0:
                 await asyncio.sleep(game.payout_interval_seconds)
-            await self._emit_actions(
-                ctx,
-                [
-                    {
-                        "type": "payout",
-                        "chat_id": game.chat_id,
-                        "amount": item.amount,
-                        "text": f"+{item.amount}",
-                        "parse_mode": "plain",
-                        "reply_to_message_id": item.join_message_id,
-                    }
-                ],
-            )
+            payout_action: dict[str, Any] = {
+                "type": "payout",
+                "chat_id": game.chat_id,
+                "amount": item.amount,
+                "text": f"+{item.amount}",
+                "parse_mode": "plain",
+                "reply_to_user_id": item.user_id,
+                "reply_to_search_limit": 200,
+                "reply_anchor_missing_text": "未找到玩家（{user_id}）的近期消息，本次奖励需要人工补发。",
+            }
+            if item.join_message_id:
+                payout_action["reply_to_message_id"] = item.join_message_id
+            await self._emit_actions(ctx, [payout_action])
             await _progress_log(
                 ctx,
                 "info",
@@ -1631,6 +1680,7 @@ class QuickQAPlugin(Plugin):
                 user_id=item.user_id,
                 amount=item.amount,
                 reply_to_message_id=item.join_message_id,
+                reply_to_user_id=item.user_id,
             )
 
     async def _cleanup_game_messages(self, ctx: PluginContext, game: QuickQAGame) -> None:
@@ -2027,7 +2077,7 @@ class QuickQAPlugin(Plugin):
 
     def _render_lobby(self, game: QuickQAGame) -> str:
         if game.entry_fee <= 0:
-            join_text = f"参与方式：发送 {_code(game.free_join_keyword)} 参与本局，系统会记录你的报名消息用于结算发奖。"
+            join_text = "参与方式：点击下方“加入游戏”按钮。"
             fee_text = "免费"
         else:
             join_text = "参与方式：对收款人的消息转账门槛金额，到账后自动报名。"
@@ -2054,7 +2104,11 @@ class QuickQAPlugin(Plugin):
         return "\n".join(lines)
 
     def _lobby_markup(self, game: QuickQAGame) -> dict[str, Any]:
-        return {"inline_keyboard": [[{"text": "开始选择题库", "callback_data": f"{CALLBACK_PREFIX}:start:{game.game_id}"}]]}
+        rows: list[list[dict[str, str]]] = []
+        if game.entry_fee <= 0:
+            rows.append([{"text": "加入游戏", "callback_data": f"{CALLBACK_PREFIX}:join:{game.game_id}"}])
+        rows.append([{"text": "开始选择题库", "callback_data": f"{CALLBACK_PREFIX}:start:{game.game_id}"}])
+        return {"inline_keyboard": rows}
 
     def _render_kb_selection(self, game: QuickQAGame, kbs: list[KnowledgeBase]) -> str:
         selector = game.players.get(game.selector_user_id)
@@ -2192,8 +2246,7 @@ class QuickQAPlugin(Plugin):
             "<b>发奖列表</b>",
         ]
         for item in settlements:
-            msg = item.join_message_id if item.join_message_id else "无"
-            lines.append(f"- {_html(item.name)}：{item.points} 分 → {item.amount}（消息 ID：{msg}）")
+            lines.append(f"- {_html(item.name)}：{item.points} 分 → {item.amount}")
         lines.extend([
             "",
             self._scoreboard(game, include_out=True, include_answer_stats=True),
@@ -2242,7 +2295,7 @@ class QuickQAPlugin(Plugin):
         return (
             "<b>快问快答</b>\n"
             "题库：在 TelePilot Web 配置页添加 URL，获取并整理后保存配置\n"
-            f"{_code(prefix + self._command + ' 0')} 创建免费报名大厅，玩家发送“报名”参与\n"
+            f"{_code(prefix + self._command + ' 0')} 创建免费大厅，玩家点击“加入游戏”参与\n"
             f"{_code(prefix + self._command + ' 100')} 创建转账报名大厅\n"
             f"{_code(prefix + self._command + ' 100 20')} 创建本局最多 20 题的报名大厅\n"
             f"{_code(prefix + self._command + ' start')} 达到人数后开始选择题库\n"
@@ -2253,10 +2306,6 @@ class QuickQAPlugin(Plugin):
     def _cfg_start_keyword(self, ctx: PluginContext, payload: dict[str, Any]) -> str:
         module_config = _dict(payload.get("module_config"))
         return str(module_config.get("start_keyword") or (ctx.config or {}).get("start_keyword") or DEFAULT_START_KEYWORD).strip()
-
-    def _cfg_free_join_keyword(self, ctx: PluginContext, payload: dict[str, Any]) -> str:
-        module_config = _dict(payload.get("module_config"))
-        return str(module_config.get("free_join_keyword") or (ctx.config or {}).get("free_join_keyword") or DEFAULT_FREE_JOIN_KEYWORD).strip()
 
     def _cfg_payout_mode(self, ctx: PluginContext) -> str:
         mode = str((ctx.config or {}).get("payout_mode") or "auto").strip().lower()

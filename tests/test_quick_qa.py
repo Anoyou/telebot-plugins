@@ -302,9 +302,13 @@ class QuickQATest(unittest.TestCase):
         properties = data["config_schema"]["properties"]
         timeout_schema = properties["ai_timeout_seconds"]
         entry_fee_schema = properties["entry_fee"]
+        interaction_entry = data["interaction_entries"][0]
 
         self.assertLessEqual(timeout_schema["minimum"], 90)
         self.assertEqual(entry_fee_schema["minimum"], 0)
+        self.assertTrue(properties["free_join_keyword"]["x-ui-hidden"])
+        self.assertNotIn("message", interaction_entry["events"])
+        self.assertIn("start_session", interaction_entry["result_contract"]["actions"])
         self.assertEqual(properties["reward_ratio"]["title"], "可发奖金比例")
         self.assertEqual(properties["settlement_base_amount"]["title"], "基础奖池单价 / 单人保底奖金")
         self.assertIn("单人奖金 =", properties["settlement_formula_preview"]["default"])
@@ -535,7 +539,7 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_free_registration_edits_saved_lobby_message(self) -> None:
+    def test_free_join_button_edits_saved_lobby_and_syncs_participants(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.QuickQAPlugin()
             redis = FakeRedis()
@@ -558,25 +562,42 @@ class QuickQATest(unittest.TestCase):
                 game = plugin._games[-100123]
                 lobby_key = plugin._lobby_message_key(game)
                 self.assertEqual(start_actions[0].get("save_message_id_key"), lobby_key)
+                self.assertEqual(
+                    start_actions[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+                    f"qqa:join:{game.game_id}",
+                )
+                ignored_text_join = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("报名", 111, "玩家A", message_id=701),
+                )
+                self.assertEqual(ignored_text_join, [])
+                self.assertEqual(game.players, {})
                 redis.store[lobby_key] = "900"
 
                 join_actions = await plugin.on_interaction(
                     ctx,
                     "join_quick_qa",
-                    message_payload("报名", 111, "玩家A", message_id=701),
+                    callback_payload(f"qqa:join:{game.game_id}", 111, "玩家A", message_id=900),
                 )
 
-                self.assertEqual([action.get("type") for action in join_actions], ["edit_message"])
-                self.assertEqual(join_actions[0].get("message_id"), 900)
-                self.assertEqual(join_actions[0].get("chat_id"), -100123)
-                self.assertIn("玩家A：20 分", join_actions[0].get("text", ""))
-                self.assertNotIn("报名成功", join_actions[0].get("text", ""))
+                self.assertEqual(
+                    [action.get("type") for action in join_actions],
+                    ["answer_callback", "start_session", "edit_message"],
+                )
+                self.assertEqual(join_actions[0].get("text"), "加入成功")
+                self.assertEqual(join_actions[1].get("participant_user_ids"), [111])
+                self.assertEqual(join_actions[1]["data"]["quick_qa"]["participant_user_ids"], [111])
+                self.assertEqual(join_actions[2].get("message_id"), 900)
+                self.assertEqual(join_actions[2].get("chat_id"), -100123)
+                self.assertIn("玩家A：20 分", join_actions[2].get("text", ""))
+                self.assertIsNone(game.players[111].join_message_id)
             finally:
                 await plugin.on_shutdown(ctx)
 
         asyncio.run(scenario())
 
-    def test_free_registration_without_saved_lobby_sends_single_lobby_message(self) -> None:
+    def test_free_join_button_uses_callback_lobby_message_without_redis_key(self) -> None:
         async def scenario() -> None:
             plugin = plugin_module.QuickQAPlugin()
             ctx = PluginContext(
@@ -593,17 +614,20 @@ class QuickQATest(unittest.TestCase):
                     "join_quick_qa",
                     message_payload("开始答题", 999, "主持人", message_id=700),
                 )
+                game = plugin._games[-100123]
                 join_actions = await plugin.on_interaction(
                     ctx,
                     "join_quick_qa",
-                    message_payload("报名", 111, "玩家A", message_id=701),
+                    callback_payload(f"qqa:join:{game.game_id}", 111, "玩家A", message_id=800),
                 )
 
-                self.assertEqual(len(join_actions), 1)
-                self.assertEqual(join_actions[0].get("type"), "send_message")
-                self.assertIn("快问快答报名中", join_actions[0].get("text", ""))
-                self.assertIn("玩家A：20 分", join_actions[0].get("text", ""))
-                self.assertNotIn("报名成功", join_actions[0].get("text", ""))
+                self.assertEqual(
+                    [action.get("type") for action in join_actions],
+                    ["answer_callback", "start_session", "edit_message"],
+                )
+                self.assertEqual(join_actions[2].get("message_id"), 800)
+                self.assertIn("快问快答报名中", join_actions[2].get("text", ""))
+                self.assertIn("玩家A：20 分", join_actions[2].get("text", ""))
             finally:
                 await plugin.on_shutdown(ctx)
 
@@ -625,9 +649,9 @@ class QuickQATest(unittest.TestCase):
             await plugin.on_startup(ctx)
             try:
                 await plugin.on_interaction(ctx, "join_quick_qa", message_payload("开始答题", 999, "主持人", message_id=700))
-                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 111, "玩家A", message_id=701))
-                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 222, "玩家B", message_id=702))
                 game = plugin._games[-100123]
+                await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:join:{game.game_id}", 111, "玩家A", message_id=800))
+                await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:join:{game.game_id}", 222, "玩家B", message_id=800))
 
                 first = await plugin.on_interaction(
                     ctx,
@@ -653,7 +677,7 @@ class QuickQATest(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_free_game_allows_midgame_registration_and_blocks_unregistered_answers(self) -> None:
+    def test_free_game_closes_button_registration_after_questions_start(self) -> None:
         self._seed_kb()
 
         async def scenario() -> None:
@@ -672,18 +696,22 @@ class QuickQATest(unittest.TestCase):
             await plugin.on_startup(ctx)
             try:
                 await plugin.on_interaction(ctx, "join_quick_qa", message_payload("开始答题", 999, "主持人", message_id=700))
-                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 111, "玩家A", message_id=701))
-                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 222, "玩家B", message_id=702))
                 game = plugin._games[-100123]
+                await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:join:{game.game_id}", 111, "玩家A", message_id=800))
+                await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:join:{game.game_id}", 222, "玩家B", message_id=800))
                 self.assertEqual(game.entry_fee, 0)
-                self.assertEqual(game.players[111].join_message_id, 701)
+                self.assertIsNone(game.players[111].join_message_id)
 
                 await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:start:{game.game_id}", 111, "玩家A"))
                 await plugin.on_interaction(ctx, "join_quick_qa", callback_payload(f"qqa:go:{game.game_id}", 111, "玩家A"))
-                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("报名", 333, "玩家C", message_id=703))
+                late_join = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    callback_payload(f"qqa:join:{game.game_id}", 333, "玩家C", message_id=800),
+                )
 
-                self.assertIn(333, game.players)
-                self.assertEqual(game.players[333].join_message_id, 703)
+                self.assertNotIn(333, game.players)
+                self.assertEqual(late_join[0].get("text"), "报名已经结束。")
 
                 question_id = game.current_question.question_id
                 blocked = await plugin.on_interaction(
@@ -691,13 +719,13 @@ class QuickQATest(unittest.TestCase):
                     "join_quick_qa",
                     callback_payload(f"qqa:ans:{game.game_id}:{question_id}:0", 444, "未报名", message_id=704),
                 )
-                self.assertTrue(any("还没有报名" in action.get("text", "") for action in blocked))
+                self.assertTrue(any("还没有加入本局" in action.get("text", "") for action in blocked))
             finally:
                 await plugin.on_shutdown(ctx)
 
         asyncio.run(scenario())
 
-    def test_auto_payout_uses_registration_message_ids(self) -> None:
+    def test_auto_payout_uses_user_id_and_prefers_existing_message_anchor(self) -> None:
         class FakeMessages:
             def __init__(self):
                 self.applied = []
@@ -732,6 +760,7 @@ class QuickQATest(unittest.TestCase):
                     111: plugin_module.Player(user_id=111, name="玩家A", points=5, join_message_id=701),
                     222: plugin_module.Player(user_id=222, name="玩家B", points=4, join_message_id=702),
                     333: plugin_module.Player(user_id=333, name="玩家C", points=0),
+                    444: plugin_module.Player(user_id=444, name="玩家D", points=5),
                 },
             )
             messages = FakeMessages()
@@ -746,10 +775,12 @@ class QuickQATest(unittest.TestCase):
                 for action in batch["actions"]
                 if action.get("type") == "payout"
             ]
-            self.assertEqual(
-                [(item["chat_id"], item["amount"], item["text"], item["reply_to_message_id"]) for item in payout_actions],
-                [(-100123, 1666, "+1666", 701), (-100123, 1000, "+1000", 702)],
-            )
+            by_user = {item["reply_to_user_id"]: item for item in payout_actions}
+            self.assertEqual(set(by_user), {111, 222, 444})
+            self.assertEqual(by_user[111]["reply_to_message_id"], 701)
+            self.assertEqual(by_user[222]["reply_to_message_id"], 702)
+            self.assertNotIn("reply_to_message_id", by_user[444])
+            self.assertEqual(by_user[444]["reply_to_search_limit"], 200)
 
         asyncio.run(scenario())
 
@@ -769,7 +800,18 @@ class QuickQATest(unittest.TestCase):
             )
             await plugin.on_startup(ctx)
             try:
-                await plugin.on_interaction(ctx, "join_quick_qa", message_payload("开始答题", 999, "主持人"))
+                lobby_actions = await plugin.on_interaction(
+                    ctx,
+                    "join_quick_qa",
+                    message_payload("开始答题", 999, "主持人"),
+                )
+                self.assertFalse(
+                    any(
+                        button.get("callback_data", "").startswith("qqa:join:")
+                        for row in lobby_actions[0]["reply_markup"]["inline_keyboard"]
+                        for button in row
+                    )
+                )
                 await plugin.on_interaction(ctx, "join_quick_qa", payment_payload(111, "玩家A"))
                 await plugin.on_interaction(ctx, "join_quick_qa", payment_payload(222, "玩家B"))
                 game = plugin._games[-100123]

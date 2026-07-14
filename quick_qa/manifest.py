@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.4.4"
+PLUGIN_VERSION = "1.4.5"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -56,7 +56,7 @@ AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手�
 6. 正确答案不要固定放在第一个选项，A/B/C 三个位置应尽量均匀分布。"""
 
 
-USAGE = '管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家发送“报名”参与并记录消息 ID；付费局通过转账报名。普通回复继承 TelePilot 当前会话通道；结束后按每位玩家积分余额生成发奖列表，并通过 `payout` 由 userbot 逐条回复报名消息自动发奖。'
+USAGE = '管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家点击大厅里的“加入游戏”参与；付费局通过转账报名。结束后按每位玩家积分余额生成发奖列表，并通过 `payout.reply_to_user_id` 由 userbot 定位玩家近期发言后自动发奖。'
 EVENT_SUBSCRIPTIONS = [
     {
         "events": ["payment_confirmed"],
@@ -70,7 +70,7 @@ EVENT_SUBSCRIPTIONS = [
         "source": ["interaction_bot"],
         "scope": "all_allowed_chats",
         "entry_key": "join_quick_qa",
-        "description": "交互 Bot 承接题库选择、三选一抢答和题库草稿保存按钮；开局消息由规则关键词路由。",
+        "description": "交互 Bot 承接免费局按钮加入、题库选择、三选一抢答和题库草稿保存按钮；开局消息由规则关键词路由。",
     },
     {
         "events": ["command"],
@@ -102,7 +102,7 @@ CONFIG_SCHEMA = {
             "readOnly": True,
             "default": (
                 "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n"
-                "{prefix}quickqa 0 创建免费报名大厅，玩家发送“报名”参与\n"
+                "{prefix}quickqa 0 创建免费大厅，玩家点击“加入游戏”参与\n"
                 "{prefix}quickqa 100 创建转账报名大厅\n"
                 "{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n"
                 "报名大厅下方按钮开始选择题库\n"
@@ -243,10 +243,11 @@ CONFIG_SCHEMA = {
         },
         "free_join_keyword": {
             "type": "string",
-            "title": "免费局报名关键词",
+            "title": "旧版免费局报名关键词",
             "default": DEFAULT_FREE_JOIN_KEYWORD,
             "minLength": 1,
             "maxLength": 16,
+            "x-ui-hidden": True,
         },
         "allowed_source_hosts": {
             "type": "string",
@@ -507,18 +508,18 @@ MANIFEST = Manifest(
         {
             "key": "join_quick_qa",
             "title": "快问快答报名与抢答",
-            "description": "玩家转账或发送免费报名关键词参与，达到人数后通过按钮选择题库并进行三选一抢答。",
+            "description": "免费局玩家点击按钮加入，付费局玩家转账报名；达到人数后通过按钮选择题库并进行三选一抢答。",
             "interaction_profile": "session_game",
             "launch_mode": "bridge",
             "session_scope": "chat",
-            "events": ["payment_confirmed", "keyword", "message", "callback_query", "session_close"],
+            "events": ["payment_confirmed", "keyword", "callback_query", "session_close"],
             "preserve_command_trigger": True,
             "payload_contract": {
                 "required_envelope": ["source", "actor", "trigger", "session"],
                 "required_event_fields": ["type", "chat_id"],
             },
             "result_contract": {
-                "actions": ["send_message", "edit_message", "delete_message", "answer_callback", "payout", "end_session", "result", "settlement"],
+                "actions": ["start_session", "send_message", "edit_message", "delete_message", "answer_callback", "payout", "end_session", "result", "settlement"],
             },
             "settlement": {
                 "mode": "auto",

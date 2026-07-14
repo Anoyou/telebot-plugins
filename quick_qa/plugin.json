@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "entry": "plugin.py",
   "min_telepilot_version": "0.59.1",
   "category": "interactive",
@@ -50,7 +50,7 @@
     "**.hk",
     "**.tw"
   ],
-  "usage": "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家发送“报名”参与并记录消息 ID；付费局通过转账报名。普通回复继承 TelePilot 当前会话通道；结束后按每位玩家积分余额生成发奖列表，并通过 `payout` 由 userbot 逐条回复报名消息自动发奖。",
+  "usage": "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家点击大厅里的“加入游戏”参与；付费局通过转账报名。结束后按每位玩家积分余额生成发奖列表，并通过 `payout.reply_to_user_id` 由 userbot 定位玩家近期发言后自动发奖。",
   "config_actions": [
     {
       "key": "generate_knowledge_base",
@@ -130,7 +130,7 @@
       ],
       "scope": "all_allowed_chats",
       "entry_key": "join_quick_qa",
-      "description": "交互 Bot 承接题库选择、三选一抢答和题库草稿保存按钮；开局消息由规则关键词路由。"
+      "description": "交互 Bot 承接免费局按钮加入、题库选择、三选一抢答和题库草稿保存按钮；开局消息由规则关键词路由。"
     },
     {
       "events": [
@@ -149,14 +149,13 @@
     {
       "key": "join_quick_qa",
       "title": "快问快答报名与抢答",
-      "description": "玩家转账或发送免费报名关键词参与，达到人数后通过按钮选择题库并进行三选一抢答。",
+      "description": "免费局玩家点击按钮加入，付费局玩家转账报名；达到人数后通过按钮选择题库并进行三选一抢答。",
       "interaction_profile": "session_game",
       "launch_mode": "bridge",
       "session_scope": "chat",
       "events": [
         "payment_confirmed",
         "keyword",
-        "message",
         "callback_query",
         "session_close"
       ],
@@ -175,6 +174,7 @@
       },
       "result_contract": {
         "actions": [
+          "start_session",
           "send_message",
           "edit_message",
           "delete_message",
@@ -243,7 +243,7 @@
     "type": "object",
     "x-ui-mode": "single",
     "x-category": "interactive",
-    "x-usage-guide": "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家发送“报名”参与并记录消息 ID；付费局通过转账报名。每人默认 20 积分，答对加分、答错扣分，扣完出局；结束后按每位玩家积分余额生成发奖列表，可由 userbot 逐条回复报名消息自动发奖。",
+    "x-usage-guide": "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家点击大厅里的“加入游戏”参与；付费局通过转账报名。每人默认 20 积分，答对加分、答错扣分，扣完出局；结束后按每位玩家积分余额生成发奖列表，可由 userbot 按玩家 Telegram ID 定位近期发言后自动发奖。",
     "additionalProperties": false,
     "properties": {
       "command": {
@@ -259,7 +259,7 @@
         "type": "string",
         "title": "使用说明（只读）",
         "readOnly": true,
-        "default": "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n{prefix}quickqa 0 创建免费报名大厅，玩家发送“报名”参与\n{prefix}quickqa 100 创建转账报名大厅\n{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n报名大厅下方按钮开始选择题库\n{prefix}quickqa kb list 查看题库"
+        "default": "题库：在 Web 配置页添加 URL，点击获取并整理为题库后保存配置\n{prefix}quickqa 0 创建免费大厅，玩家点击“加入游戏”参与\n{prefix}quickqa 100 创建转账报名大厅\n{prefix}quickqa 100 20 创建本局最多 20 题的报名大厅\n报名大厅下方按钮开始选择题库\n{prefix}quickqa kb list 查看题库"
       },
       "entry_fee": {
         "type": "integer",
@@ -398,10 +398,11 @@
       },
       "free_join_keyword": {
         "type": "string",
-        "title": "免费局报名关键词",
+        "title": "旧版免费局报名关键词",
         "default": "报名",
         "minLength": 1,
-        "maxLength": 16
+        "maxLength": 16,
+        "x-ui-hidden": true
       },
       "allowed_source_hosts": {
         "type": "string",
