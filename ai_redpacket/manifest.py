@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.11"
+PLUGIN_VERSION = "0.1.12"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -19,6 +19,8 @@ USAGE = (
     "{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。"
     "管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。"
     "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。"
+    "答对结果会显示答题者姓名；未收到奖励时先在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。"
+    "{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。"
 )
 
 CONFIG_SCHEMA = {
@@ -39,11 +41,12 @@ CONFIG_SCHEMA = {
                 "4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n"
                 "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n"
                 "6. 测试后可发送 {prefix}{command} reset 重置自己，或发送 {prefix}{command} reset all 重置当天所有人的参与限制。\n"
-                "7. 发送 {prefix}{command} bank list 查看题库，{prefix}{command} list 查看当前群红包。\n"
+                "7. 发送 {prefix}{command} bank list 查看题库；{prefix}{command} list 仅查看进行中红包的领取进度、开题消息链接和补发入口，原命令自动删除但列表回执保留。\n"
                 "8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n"
                 "9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。\n"
                 "10. 管理员创建、重置或关闭红包成功后会自动删除原命令消息；参数错误或操作失败时保留。\n"
-                "11. 重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。"
+                "11. 重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。\n"
+                "12. 答题结果显示答题者姓名；未收到奖励时先在群里发言，再点击“申请补发奖励”，平台会校验状态且不会重复发放。"
             ),
         },
         "command": {

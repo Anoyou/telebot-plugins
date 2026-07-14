@@ -416,6 +416,69 @@ class AIStorage:
                 "question_slot_id": int(row["question_slot_id"]),
             }
 
+    def get_successful_attempt_for_payout(
+        self,
+        *,
+        account_id: int,
+        chat_id: int,
+        redpacket_id: str,
+        attempt_id: str,
+        user_id: int,
+    ) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT a.*, rq.reward AS slot_reward, rq.claimed_by,
+                       q.question, q.options_json AS source_options_json,
+                       q.explanation, q.source
+                FROM redpacket_attempt a
+                JOIN redpacket_question rq ON rq.id = a.question_slot_id
+                JOIN question_bank q ON q.id = rq.question_bank_id
+                WHERE a.id = ? AND a.account_id = ?
+                  AND a.chat_id = ? AND a.redpacket_id = ?
+                """,
+                (attempt_id, account_id, chat_id, redpacket_id),
+            ).fetchone()
+        if row is None:
+            raise StorageError("奖励记录不存在或已经失效")
+        if int(row["user_id"]) != user_id:
+            raise StorageError("点点点，不是你的奖励你也点！")
+        if not bool(row["success"]) or int(row["claimed_by"] or 0) != user_id or int(row["reward"] or 0) <= 0:
+            raise StorageError("这道题还没有可申请补发的奖励")
+        result = dict(row)
+        result["reward"] = int(row["slot_reward"])
+        return result
+
+    def get_user_successful_attempt_for_payout(
+        self,
+        *,
+        account_id: int,
+        chat_id: int,
+        redpacket_id: str,
+        user_id: int,
+    ) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM redpacket_attempt
+                WHERE account_id = ? AND chat_id = ? AND redpacket_id = ?
+                  AND user_id = ? AND success = 1 AND reward > 0
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (account_id, chat_id, redpacket_id, user_id),
+            ).fetchone()
+        if row is None:
+            raise StorageError("你在这个红包中没有可申请补发的成功奖励")
+        return self.get_successful_attempt_for_payout(
+            account_id=account_id,
+            chat_id=chat_id,
+            redpacket_id=redpacket_id,
+            attempt_id=str(row["id"]),
+            user_id=user_id,
+        )
+
     def create_redpacket(
         self,
         *,
@@ -480,6 +543,41 @@ class AIStorage:
                 ORDER BY created_at DESC LIMIT ?
                 """,
                 (account_id, chat_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_active_redpackets(
+        self,
+        account_id: int,
+        chat_id: int,
+        limit: int = 10,
+        now: float | None = None,
+    ) -> list[dict[str, Any]]:
+        current = time.time() if now is None else float(now)
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE redpacket
+                SET status = 'expired'
+                WHERE account_id = ? AND chat_id = ?
+                  AND status = 'active' AND expires_at <= ?
+                """,
+                (account_id, chat_id, current),
+            )
+            rows = conn.execute(
+                """
+                SELECT p.*,
+                       COUNT(CASE WHEN rq.claimed_by IS NOT NULL THEN 1 END) AS claimed_count,
+                       COALESCE(SUM(CASE WHEN rq.claimed_by IS NOT NULL THEN rq.reward ELSE 0 END), 0) AS claimed_amount
+                FROM redpacket p
+                LEFT JOIN redpacket_question rq ON rq.redpacket_id = p.id
+                WHERE p.account_id = ? AND p.chat_id = ?
+                  AND p.status = 'active' AND p.expires_at > ?
+                GROUP BY p.id
+                ORDER BY p.created_at DESC
+                LIMIT ?
+                """,
+                (account_id, chat_id, current, limit),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -697,6 +795,7 @@ class AIStorage:
                     reserved_until = float(existing["reserved_until"])
                 existing_result = dict(existing)
                 existing_result["reserved_until"] = reserved_until
+                existing_result["reused"] = True
                 if user_display_name:
                     existing_result["user_display_name"] = user_display_name
                 return existing_result
@@ -786,6 +885,7 @@ class AIStorage:
                 "answer_index": answer_index,
                 "submission_token": submission_token,
                 "reserved_until": reserved_until,
+                "reused": False,
             }
 
     def submit_answer(

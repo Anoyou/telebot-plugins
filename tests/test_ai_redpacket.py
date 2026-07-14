@@ -95,7 +95,7 @@ class RewardAllocationTest(unittest.TestCase):
 class QuestionGenerationTest(unittest.TestCase):
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.11")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.12")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -640,6 +640,34 @@ class StorageFlowTest(unittest.TestCase):
         self._reserve(201)
         with self.assertRaisesRegex(storage_module.StorageError, "暂时没有可领取"):
             self._reserve(202)
+
+    def test_active_packet_list_excludes_completed_and_reports_claim_progress(self) -> None:
+        self._create_packet("active-list", 2)
+        attempt = self._reserve(203, "active-list")
+        self.storage.submit_answer(
+            attempt_id="attempt-203",
+            account_id=1,
+            user_id=203,
+            chat_id=-1001,
+            redpacket_id="active-list",
+            option_index=int(attempt["answer_index"]),
+            submission_token="token-203",
+            submission_key="active-list-success",
+            retry_count=1,
+        )
+        self._create_packet("closed-list", 1)
+        self.assertTrue(self.storage.close_redpacket(1, -1001, "closed-list"))
+        self._create_packet("expired-list", 1)
+        with self.storage.transaction() as conn:
+            conn.execute("UPDATE redpacket SET expires_at = ? WHERE id = ?", (1.0, "expired-list"))
+
+        packets = self.storage.list_active_redpackets(1, -1001, now=2.0)
+
+        self.assertEqual([packet["id"] for packet in packets], ["active-list"])
+        self.assertEqual(packets[0]["claimed_count"], 1)
+        self.assertEqual(packets[0]["claimed_amount"], 10)
+        self.assertEqual(packets[0]["remaining_amount"], 10)
+        self.assertEqual(self.storage.get_redpacket("expired-list")["status"], "expired")
 
     def test_finished_packet_settlement_is_sorted_and_marked_once(self) -> None:
         self.storage.create_redpacket(
@@ -1439,6 +1467,86 @@ class PluginActionTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_list_command_deletes_only_command_and_keeps_active_progress_with_opening_link(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions(3))
+                plugin.storage.create_redpacket(
+                    redpacket_id="active123456",
+                    account_id=1,
+                    chat_id=-1002090852236,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=20,
+                    rewards=[10, 10],
+                    ttl_seconds=3600,
+                )
+                attempt = plugin.storage.reserve_question(
+                    attempt_id="list-attempt",
+                    account_id=1,
+                    user_id=77,
+                    chat_id=-1002090852236,
+                    redpacket_id="active123456",
+                    date="2026-07-14",
+                    submission_token="list-token",
+                    reservation_seconds=300,
+                )
+                plugin.storage.submit_answer(
+                    attempt_id="list-attempt",
+                    account_id=1,
+                    user_id=77,
+                    chat_id=-1002090852236,
+                    redpacket_id="active123456",
+                    option_index=int(attempt["answer_index"]),
+                    submission_token="list-token",
+                    submission_key="list-submit",
+                    retry_count=1,
+                )
+                plugin.storage.create_redpacket(
+                    redpacket_id="closed123456",
+                    account_id=1,
+                    chat_id=-1002090852236,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                plugin.storage.close_redpacket(1, -1002090852236, "closed123456")
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        return 1017939 if key == "ai_redpacket:packet:active123456" else None
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    messages = Messages()
+                    log = None
+
+                actions = await plugin._handle_admin_command(
+                    Context(), -1002090852236, 1, 999, ["list"]
+                )
+
+                self.assertEqual([action["type"] for action in actions], ["send_message", "delete_message"])
+                self.assertEqual(actions[0]["send_via"], "interaction_bot")
+                self.assertNotIn("reply_to_message_id", actions[0])
+                self.assertIn("active123456", actions[0]["text"])
+                self.assertNotIn("closed123456", actions[0]["text"])
+                self.assertIn("1/2", actions[0]["text"])
+                self.assertIn("10/20", actions[0]["text"])
+                self.assertIn("https://t.me/c/2090852236/1017939", actions[0]["text"])
+                self.assertEqual(
+                    actions[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+                    "airp:repayme:active123456",
+                )
+                self.assertEqual(actions[1]["message_id"], 999)
+
+        asyncio.run(run_case())
+
     def test_admin_reset_command_defaults_to_sender(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
@@ -2085,10 +2193,17 @@ class PluginActionTest(unittest.TestCase):
             "reward": 10,
             "explanation": "解析",
             "source": "https://example.com/source",
+            "user_id": 77,
+            "user_display_name": "张三",
         }
         self.assertIn("题面 2026-07-14 3/2", plugin._render_question(Context(), payload))
-        self.assertIn("成功 2026-07-14 3/2", plugin._render_result(Context(), payload, correct=True))
-        self.assertIn("失败 2026-07-14 3/2", plugin._render_result(Context(), payload, correct=False))
+        success = plugin._render_result(Context(), payload, correct=True)
+        failed = plugin._render_result(Context(), payload, correct=False)
+        self.assertIn("答题者：张三", success)
+        self.assertIn("成功 2026-07-14 3/2", success)
+        self.assertIn("申请补发奖励", success)
+        self.assertIn("答题者：张三", failed)
+        self.assertIn("失败 2026-07-14 3/2", failed)
 
     def test_question_and_result_messages_keep_public_claim_button_and_owner_label(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -2118,6 +2233,16 @@ class PluginActionTest(unittest.TestCase):
                 question["reply_markup"]["inline_keyboard"][1][0]["callback_data"],
                 "airp:start:public-entry",
             )
+            repeated = plugin._start_attempt(Context(), "callback-2", -1001, 77, "@alice", "public-entry")
+            self.assertEqual([action["type"] for action in repeated], ["answer_callback"])
+            self.assertTrue(repeated[0]["show_alert"])
+            self.assertIn("已有一道进行中", repeated[0]["text"])
+            with plugin.storage.connect() as conn:
+                attempt_count = conn.execute(
+                    "SELECT COUNT(*) AS count FROM redpacket_attempt WHERE user_id = ?",
+                    (77,),
+                ).fetchone()["count"]
+            self.assertEqual(attempt_count, 1)
 
     def test_other_user_answer_button_shows_owner_warning_alert(self) -> None:
         async def run_case() -> None:
@@ -2193,6 +2318,7 @@ class PluginActionTest(unittest.TestCase):
                     date="2026-07-13",
                     submission_token="tok",
                     reservation_seconds=300,
+                    user_display_name="张三",
                 )
 
                 class Context:
@@ -2206,6 +2332,12 @@ class PluginActionTest(unittest.TestCase):
                     "message": {"chat_id": -1001, "message_id": 88},
                     "sender": {"user_id": 77},
                 }
+                premature = await plugin._handle_callback(
+                    Context(), payload, "premature-retry", "airp:repay:rp1:a1"
+                )
+                self.assertEqual(premature[0]["text"], "这道题还没有可申请补发的奖励")
+                self.assertEqual([action["type"] for action in premature], ["answer_callback"])
+
                 actions = await plugin._submit_attempt(
                     Context(),
                     payload,
@@ -2219,11 +2351,48 @@ class PluginActionTest(unittest.TestCase):
                 )
                 payout = next(action for action in actions if action["type"] == "payout")
                 edit = next(action for action in actions if action["type"] == "edit_message")
-                self.assertEqual(edit["reply_markup"]["inline_keyboard"][0][0]["text"], "我也要雨露均沾")
+                buttons = edit["reply_markup"]["inline_keyboard"]
+                self.assertEqual(buttons[0][0]["text"], "申请补发奖励")
+                self.assertEqual(buttons[0][0]["callback_data"], "airp:repay:rp1:a1")
+                self.assertEqual(buttons[1][0]["text"], "我也要雨露均沾")
+                self.assertIn("答题者：张三", edit["text"])
+                self.assertIn("已发放的奖励不会重复发放", edit["text"])
                 self.assertEqual(payout["amount"], 10)
                 self.assertIsInstance(payout["amount"], int)
                 self.assertEqual(payout["payout_key"], "ai_redpacket:1:rp1:1:77")
                 self.assertEqual(payout["reply_to_user_id"], 77)
+                self.assertIn("先在群里发送一条消息", payout["reply_anchor_missing_text"])
+
+                retry_payload = {
+                    "source": {"type": "callback_query"},
+                    "message": {"chat_id": -1001, "message_id": 88},
+                    "sender": {"user_id": 77, "display_name": "张三"},
+                }
+                retry_actions = await plugin._handle_callback(
+                    Context(), retry_payload, "retry-payout", "airp:repay:rp1:a1"
+                )
+                self.assertIn("未发放将补发", retry_actions[0]["text"])
+                retry_payout = next(action for action in retry_actions if action["type"] == "payout")
+                self.assertEqual(retry_payout["payout_key"], payout["payout_key"])
+                self.assertEqual(retry_payout["amount"], 10)
+                self.assertEqual(plugin.storage.get_redpacket("rp1")["remaining_amount"], 0)
+
+                center_actions = await plugin._handle_callback(
+                    Context(), retry_payload, "center-retry", "airp:repayme:rp1"
+                )
+                center_payout = next(action for action in center_actions if action["type"] == "payout")
+                self.assertEqual(center_payout["payout_key"], payout["payout_key"])
+
+                other_payload = {
+                    "source": {"type": "callback_query"},
+                    "message": {"chat_id": -1001, "message_id": 88},
+                    "sender": {"user_id": 999, "display_name": "路人"},
+                }
+                denied = await plugin._handle_callback(
+                    Context(), other_payload, "other-retry", "airp:repay:rp1:a1"
+                )
+                self.assertEqual(denied[0]["text"], "点点点，不是你的奖励你也点！")
+                self.assertTrue(denied[0]["show_alert"])
 
                 replay_actions = await plugin._submit_attempt(
                     Context(),

@@ -24,7 +24,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.11"
+PLUGIN_VERSION = "0.1.12"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -656,7 +656,19 @@ class AIRedpacketPlugin(Plugin):
                 actions.append(delete_action)
             return actions
         if action == "list":
-            return [_send(self._render_packets(ctx, chat_id), chat_id=chat_id, reply_to=reply_to)]
+            packets = self.storage.list_active_redpackets(ctx.account_id, chat_id)
+            actions = [
+                _send(
+                    await self._render_packets(ctx, chat_id, packets),
+                    chat_id=chat_id,
+                    markup=self._payout_center_markup(packets),
+                    via="interaction_bot",
+                )
+            ]
+            delete_action = _delete_command(reply_to, chat_id=chat_id)
+            if delete_action:
+                actions.append(delete_action)
+            return actions
         if action in {"close", "off"} and len(args) >= 2:
             closed = self.storage.close_redpacket(ctx.account_id, chat_id, args[1])
             text = "红包已关闭。" if closed else "没有找到可关闭的红包。"
@@ -1135,6 +1147,23 @@ class AIRedpacketPlugin(Plugin):
             except ValueError:
                 return [_ack(callback_id, "答案参数无效", alert=True)]
             return await self._submit_attempt(ctx, payload, callback_id, chat_id, user_id, parts[2], parts[3], option_index, parts[5])
+        if len(parts) == 4 and parts[1] == "repay":
+            return await self._request_payout_retry(
+                ctx,
+                callback_id=callback_id,
+                chat_id=chat_id,
+                user_id=user_id,
+                redpacket_id=parts[2],
+                attempt_id=parts[3],
+            )
+        if len(parts) == 3 and parts[1] == "repayme":
+            return await self._request_user_payout_retry(
+                ctx,
+                callback_id=callback_id,
+                chat_id=chat_id,
+                user_id=user_id,
+                redpacket_id=parts[2],
+            )
         return [_ack(callback_id, "按钮已经失效", alert=True)]
 
     def _start_attempt(
@@ -1187,6 +1216,8 @@ class AIRedpacketPlugin(Plugin):
             message_key=question_message_key,
             timeout_seconds=timeout_seconds,
         )
+        if bool(attempt.get("reused")):
+            return [_ack(callback_id, "你已有一道进行中的专属题，请在原题继续作答。", alert=True)]
         return [
             _ack(callback_id, "题目已发出"),
             _send(
@@ -1250,7 +1281,7 @@ class AIRedpacketPlugin(Plugin):
                 message_id,
                 self._render_result(ctx, result, correct=True),
                 chat_id=chat_id,
-                markup=self._join_markup(redpacket_id),
+                markup=self._success_markup(redpacket_id, attempt_id),
             )
             payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
             actions: list[dict[str, Any]] = [_ack(callback_id, f"答对了，获得 {reward}")]
@@ -1299,6 +1330,69 @@ class AIRedpacketPlugin(Plugin):
         )
         return actions
 
+    async def _request_payout_retry(
+        self,
+        ctx: PluginContext,
+        *,
+        callback_id: str,
+        chat_id: int,
+        user_id: int,
+        redpacket_id: str,
+        attempt_id: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            result = self.storage.get_successful_attempt_for_payout(
+                account_id=ctx.account_id,
+                chat_id=chat_id,
+                redpacket_id=redpacket_id,
+                attempt_id=attempt_id,
+                user_id=user_id,
+            )
+        except StorageError as exc:
+            return [_ack(callback_id, str(exc), alert=True)]
+        payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
+        await self._log(
+            ctx,
+            "info",
+            "用户申请核验并补发 AI 红包奖励",
+            redpacket_id=redpacket_id,
+            attempt_id=attempt_id,
+            user_id=user_id,
+            reward=int(result["reward"]),
+            payout_key=payout_key,
+        )
+        return [
+            _ack(callback_id, "正在核验发放记录；未发放将补发，已发放不会重复。", alert=True),
+            self._payout_action(ctx, chat_id, user_id, redpacket_id, result),
+        ]
+
+    async def _request_user_payout_retry(
+        self,
+        ctx: PluginContext,
+        *,
+        callback_id: str,
+        chat_id: int,
+        user_id: int,
+        redpacket_id: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            result = self.storage.get_user_successful_attempt_for_payout(
+                account_id=ctx.account_id,
+                chat_id=chat_id,
+                redpacket_id=redpacket_id,
+                user_id=user_id,
+            )
+        except StorageError as exc:
+            return [_ack(callback_id, str(exc), alert=True)]
+        return await self._request_payout_retry(
+            ctx,
+            callback_id=callback_id,
+            chat_id=chat_id,
+            user_id=user_id,
+            redpacket_id=redpacket_id,
+            attempt_id=str(result["id"]),
+        )
+
     def _payout_key(self, ctx: PluginContext, redpacket_id: str, question_slot_id: int, user_id: int) -> str:
         return f"ai_redpacket:{ctx.account_id}:{redpacket_id}:{question_slot_id}:{user_id}"
 
@@ -1320,7 +1414,11 @@ class AIRedpacketPlugin(Plugin):
             "parse_mode": "plain",
             "reply_to_user_id": user_id,
             "reply_to_search_limit": 200,
-            "reply_anchor_missing_text": "未找到用户（{user_id}）近期发言，本次奖励需要人工补发。",
+            "reply_anchor_missing_text": (
+                "未找到用户（{user_id}）近期发言，暂时无法核验或补发奖励。若尚未收到奖励，"
+                f"请先在群里发送一条消息，再点击答题结果下方或“{self._prefix(ctx)}{self._command(ctx)} list”"
+                "回执中的“申请补发奖励”。"
+            ),
             "payout_key": payout_key,
             "payout_probe_fingerprint": payout_key,
         }
@@ -1348,7 +1446,7 @@ class AIRedpacketPlugin(Plugin):
         order = json.loads(str(result["option_order_json"]))
         options = [source_options[index] for index in order]
         answer_index = int(result["answer_index"])
-        return self._render_template(
+        body = self._render_template(
             ctx,
             "success_message_template" if correct else "failed_message_template",
             SUCCESS_MESSAGE_TEMPLATE if correct else FAILED_MESSAGE_TEMPLATE,
@@ -1361,6 +1459,14 @@ class AIRedpacketPlugin(Plugin):
             daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
+        owner = html.escape(str(result.get("user_display_name") or f"用户{result.get('user_id') or ''}"))
+        text = f"<b>答题者：{owner}</b>\n{body}"
+        if correct:
+            text += (
+                "\n\n<i>若未收到奖励，请先在群里发言一次，再点击下方“申请补发奖励”。"
+                "系统会核验发放状态，已发放的奖励不会重复发放。</i>"
+            )
+        return text
 
     def _answer_markup(self, redpacket_id: str, attempt_id: str, token: str, attempt: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -1405,6 +1511,36 @@ class AIRedpacketPlugin(Plugin):
             ]
         }
 
+    def _success_markup(self, redpacket_id: str, attempt_id: str) -> dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "申请补发奖励",
+                        "callback_data": f"{CALLBACK_PREFIX}:repay:{redpacket_id}:{attempt_id}",
+                    }
+                ],
+                [
+                    {
+                        "text": "我也要雨露均沾",
+                        "callback_data": f"{CALLBACK_PREFIX}:start:{redpacket_id}",
+                    }
+                ],
+            ]
+        }
+
+    def _payout_center_markup(self, packets: list[dict[str, Any]]) -> dict[str, Any] | None:
+        rows = [
+            [
+                {
+                    "text": f"{str(packet['id'])[:6]} · 申请补发奖励",
+                    "callback_data": f"{CALLBACK_PREFIX}:repayme:{packet['id']}",
+                }
+            ]
+            for packet in packets
+        ]
+        return {"inline_keyboard": rows} if rows else None
+
     def _render_banks(self, ctx: PluginContext) -> str:
         banks = self.storage.list_banks(ctx.account_id)
         if not banks:
@@ -1416,14 +1552,43 @@ class AIRedpacketPlugin(Plugin):
             lines.append(f"- <code>{html.escape(str(bank['bank_id']))}</code> {html.escape(str(bank['bank_title']))}（{bank['question_count']} 题）{marker}")
         return "\n".join(lines)
 
-    def _render_packets(self, ctx: PluginContext, chat_id: int) -> str:
-        packets = self.storage.list_redpackets(ctx.account_id, chat_id)
+    async def _render_packets(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        packets: list[dict[str, Any]] | None = None,
+    ) -> str:
+        packets = packets if packets is not None else self.storage.list_active_redpackets(ctx.account_id, chat_id)
         if not packets:
-            return "当前聊天还没有 AI 红包。"
-        lines = ["<b>最近的 AI 红包</b>"]
+            return "当前聊天没有正在进行的 AI 红包。"
+        lines = ["<b>正在进行的 AI 红包</b>"]
+        read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
         for packet in packets:
-            lines.append(f"- <code>{packet['id']}</code> {packet['status']}，剩余 {packet['remaining_amount']}/{packet['total_amount']}，{packet['question_count']} 题")
+            message_id = None
+            if callable(read_message_id):
+                message_id = await read_message_id(f"ai_redpacket:packet:{packet['id']}")
+            message_link = self._telegram_message_link(chat_id, message_id)
+            opening = f'<a href="{message_link}">打开开题消息</a>' if message_link else "开题消息暂不可用"
+            lines.append(
+                f"- <code>{packet['id']}</code>\n"
+                f"  领取进度：<code>{int(packet['claimed_count'])}/{int(packet['question_count'])}</code> 题，"
+                f"<code>{int(packet['claimed_amount'])}/{int(packet['total_amount'])}</code> 金额\n"
+                f"  {opening}"
+            )
+        lines.append("\n未收到奖励：请先在群里发言，再点击下方对应红包的“申请补发奖励”。")
         return "\n".join(lines)
+
+    def _telegram_message_link(self, chat_id: int, message_id: Any) -> str | None:
+        chat_value = str(chat_id)
+        if not chat_value.startswith("-100"):
+            return None
+        try:
+            parsed_message_id = int(message_id)
+        except (TypeError, ValueError):
+            return None
+        if parsed_message_id <= 0:
+            return None
+        return f"https://t.me/c/{chat_value[4:]}/{parsed_message_id}"
 
     def _schedule_saved_message_delete(
         self,
@@ -1880,10 +2045,12 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{base} reset [用户ID]</code> 重置当天领取与答题限制\n"
             f"<code>{base} reset all</code> 重置当天所有人的参与限制\n"
             f"<code>{self._prefix(ctx)}{self._weekly_command(ctx)}</code> 查看本周排行榜\n"
-            f"<code>{base} list</code> 查看当前聊天红包\n"
+            f"<code>{base} list</code> 查看进行中红包、领取进度和开题消息，并提供补发入口\n"
             f"<code>{base} close 红包ID</code> 关闭红包\n"
             "创建、重置或关闭成功后自动删除原命令消息；失败时保留。\n"
-            "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。"
+            "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。\n"
+            "答题结果会显示答题者姓名；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
+            "list 原命令会自动删除，列表回执保留；已完结红包不会出现在列表中。"
         )
 
     def _command_args(self, ctx: PluginContext, text: str, *, command_confirmed: bool = False) -> list[str] | None:
