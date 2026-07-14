@@ -24,7 +24,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 from .storage import AIStorage, StorageError
 
 
-PLUGIN_VERSION = "0.1.6"
+PLUGIN_VERSION = "0.1.7"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -102,6 +102,9 @@ def truncate_display_name(value: Any, limit: int = 10) -> str:
 
 def sender_display_name(payload: dict[str, Any], user_id: int) -> str:
     sender = _sender(payload)
+    username = str(sender.get("username") or "").strip().lstrip("@")
+    if username:
+        return f"@{username[:32]}"
     name = str(sender.get("display_name") or sender.get("name") or "").strip()
     if not name:
         name = " ".join(
@@ -320,7 +323,16 @@ def _callback(payload: dict[str, Any]) -> tuple[str, str]:
     return str(callback.get("id") or payload.get("callback_query_id") or ""), str(callback.get("data") or payload.get("callback_data") or "")
 
 
-def _send(text: str, *, chat_id: int | None = None, reply_to: int | None = None, markup: dict[str, Any] | None = None, via: str | None = None) -> dict[str, Any]:
+def _send(
+    text: str,
+    *,
+    chat_id: int | None = None,
+    reply_to: int | None = None,
+    markup: dict[str, Any] | None = None,
+    via: str | None = None,
+    pin: bool = False,
+    save_message_id_key: str | None = None,
+) -> dict[str, Any]:
     action: dict[str, Any] = {"type": "send_message", "text": text, "parse_mode": "html"}
     if chat_id:
         action["chat_id"] = chat_id
@@ -330,6 +342,10 @@ def _send(text: str, *, chat_id: int | None = None, reply_to: int | None = None,
         action["reply_markup"] = markup
     if via:
         action["send_via"] = via
+    if pin:
+        action["pin"] = True
+    if save_message_id_key:
+        action["save_message_id_key"] = save_message_id_key
     return action
 
 
@@ -598,6 +614,67 @@ class AIRedpacketPlugin(Plugin):
         previous_question_count = len(questions)
         batch_index = 0
         last_batch_error: Exception | None = None
+        effective_concurrency = generation_concurrency
+        progress_log_lock = asyncio.Lock()
+
+        async def generate_text(ai_kwargs: dict[str, Any], index: int) -> str:
+            stream_complete = getattr(ctx.ai, "stream_complete", None)
+            if callable(stream_complete):
+                chunks: list[str] = []
+                received = 0
+                reported = 0
+                last_report_at = time.monotonic()
+                try:
+                    async for delta in stream_complete(**ai_kwargs):
+                        text = str(delta or "")
+                        if not text:
+                            continue
+                        chunks.append(text)
+                        received += len(text)
+                        now = time.monotonic()
+                        if received > reported and (received - reported >= 800 or now - last_report_at >= 3):
+                            async with progress_log_lock:
+                                await self._log(
+                                    ctx,
+                                    "info",
+                                    "AI 题库流式生成中",
+                                    **{
+                                        "批次": index + 1,
+                                        "已接收字符数": received,
+                                        "目标题数": count,
+                                        "实时片段": "".join(chunks)[-160:],
+                                    },
+                                )
+                            reported = received
+                            last_report_at = now
+                    if received > reported:
+                        async with progress_log_lock:
+                            await self._log(
+                                ctx,
+                                "info",
+                                "AI 题库流式生成中",
+                                **{
+                                    "批次": index + 1,
+                                    "已接收字符数": received,
+                                    "目标题数": count,
+                                    "实时片段": "".join(chunks)[-160:],
+                                },
+                            )
+                    return "".join(chunks)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if chunks or "暂不支持 streaming" not in str(exc):
+                        raise
+                    async with progress_log_lock:
+                        await self._log(
+                            ctx,
+                            "info",
+                            "当前 Provider 不支持流式输出，已自动改用普通生成",
+                            **{"批次": index + 1},
+                        )
+            result = await ctx.ai.complete(**ai_kwargs)
+            return str(getattr(result, "text", "") or "")
 
         async def generate_batch(index: int, requested: int) -> tuple[int, dict[str, Any], list[dict[str, Any]], int]:
             excerpt = source_excerpt_for_batch(source, index % planned_batches, planned_batches)
@@ -624,23 +701,42 @@ class AIRedpacketPlugin(Plugin):
                     if model:
                         ai_kwargs["model"] = model
                 try:
-                    result = await ctx.ai.complete(**ai_kwargs)
-                    data = extract_json_object(str(getattr(result, "text", "") or ""))
+                    raw_text = await generate_text(ai_kwargs, index)
+                    data = extract_json_object(raw_text)
                     normalized = normalize_questions(data, url, requested)
                     if not normalized:
                         raise ValueError("AI 本批没有返回新的有效题目")
                     return index, data, normalized, retries
-                except (json.JSONDecodeError, ValueError) as exc:
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
                     last_error = exc
                     retries = attempt
-            raise RuntimeError(f"第 {index + 1} 批题目生成失败：{str(last_error or '未知错误')[:200]}")
+                    if attempt < GENERATION_BATCH_RETRIES:
+                        await asyncio.sleep(attempt)
+            if isinstance(last_error, (json.JSONDecodeError, ValueError)):
+                raise RuntimeError(f"第 {index + 1} 批题目生成失败：{str(last_error or '未知错误')[:200]}")
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError(f"第 {index + 1} 批题目生成失败：未知错误")
+
+        async def generate_batch_outcome(
+            index: int,
+            requested: int,
+        ) -> tuple[int, tuple[int, dict[str, Any], list[dict[str, Any]], int] | Exception]:
+            try:
+                return index, await generate_batch(index, requested)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return index, exc
 
         while len(questions) < count and batch_index < maximum_batches:
             remaining = count - len(questions)
             wave: list[tuple[int, int]] = []
             wave_remaining = remaining
             while (
-                len(wave) < generation_concurrency
+                len(wave) < effective_concurrency
                 and batch_index + len(wave) < maximum_batches
                 and wave_remaining > 0
             ):
@@ -648,49 +744,92 @@ class AIRedpacketPlugin(Plugin):
                 wave.append((batch_index + len(wave), requested))
                 wave_remaining -= min(GENERATION_BATCH_SIZE, wave_remaining)
 
-            results = await asyncio.gather(
-                *(generate_batch(index, requested) for index, requested in wave),
-                return_exceptions=True,
-            )
-            for result in results:
-                batch_index += 1
-                if isinstance(result, Exception):
-                    last_batch_error = result
-                    await self._log(
-                        ctx,
-                        "warn",
-                        "AI 题库分批生成失败，继续尝试后续批次",
-                        **{"批次": batch_index, "错误类型": type(result).__name__},
-                    )
-                    continue
-                completed_index, data, batch_questions, retries = result
-                if retries:
-                    await self._log(
-                        ctx,
-                        "warn",
-                        "AI 题库分批结果无效，重试后成功",
-                        **{"批次": completed_index + 1, "重试次数": retries},
-                    )
-                if not title:
-                    title = re.sub(r"\s+", " ", str(data.get("title") or parsed.hostname)).strip()[:80]
-                for item in batch_questions:
-                    key = str(item["question"]).casefold()
-                    if key in seen_questions:
+            tasks = [
+                asyncio.create_task(generate_batch_outcome(index, requested))
+                for index, requested in wave
+            ]
+            batch_index += len(wave)
+            wave_failures = 0
+            try:
+                for completed in asyncio.as_completed(tasks):
+                    scheduled_index, result = await completed
+                    if isinstance(result, Exception):
+                        wave_failures += 1
+                        last_batch_error = result
+                        await self._log(
+                            ctx,
+                            "warn",
+                            "AI 题库分批生成失败，继续尝试后续批次",
+                            **{
+                                "批次": scheduled_index + 1,
+                                "错误类型": type(result).__name__,
+                                "错误": str(result)[:300],
+                            },
+                        )
                         continue
-                    seen_questions.add(key)
-                    questions.append(item)
-                    if len(questions) >= count:
-                        break
+                    completed_index, data, batch_questions, retries = result
+                    if retries:
+                        await self._log(
+                            ctx,
+                            "warn",
+                            "AI 题库分批结果无效，重试后成功",
+                            **{"批次": completed_index + 1, "重试次数": retries},
+                        )
+                    if not title:
+                        title = re.sub(r"\s+", " ", str(data.get("title") or parsed.hostname)).strip()[:80]
+                    for item in batch_questions:
+                        key = str(item["question"]).casefold()
+                        if key in seen_questions:
+                            continue
+                        seen_questions.add(key)
+                        questions.append(item)
+                        if len(questions) >= count:
+                            break
+                    saved = self.storage.replace_bank(
+                        account_id=ctx.account_id,
+                        bank_id=bank_id,
+                        title=title or str(parsed.hostname),
+                        questions=questions,
+                    )
+                    await self._log(
+                        ctx,
+                        "info",
+                        "AI 题库生成进度",
+                        **{
+                            "批次": completed_index + 1,
+                            "目标题数": count,
+                            "已生成题数": len(questions),
+                            "已保存题数": saved,
+                        },
+                    )
+            except asyncio.CancelledError:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
+            if wave_failures and effective_concurrency > 1:
+                effective_concurrency -= 1
                 await self._log(
                     ctx,
-                    "info",
-                    "AI 题库生成进度",
-                    **{"批次": completed_index + 1, "目标题数": count, "已生成题数": len(questions)},
+                    "warn",
+                    "AI Provider 出现批次失败，已自动降低并发",
+                    **{"后续并发批次数": effective_concurrency, "本轮失败批次": wave_failures},
                 )
 
         if len(questions) < count:
             detail = f"；最后错误：{last_batch_error}" if last_batch_error else ""
-            raise RuntimeError(f"AI 仅生成 {len(questions)} 道不重复的有效题目，未达到目标 {count} 道{detail}")
+            if not questions:
+                raise RuntimeError(f"AI 没有生成有效题目，未达到目标 {count} 道{detail}")
+            return {
+                "bank_id": bank_id,
+                "bank_title": title or str(parsed.hostname),
+                "question_count": len(questions),
+                "previous_question_count": previous_question_count,
+                "created_at": time.time(),
+                "source": url,
+                "incomplete": True,
+                "last_error": str(last_batch_error or "")[:300],
+            }
         title = title or str(parsed.hostname)
         saved = self.storage.replace_bank(
             account_id=ctx.account_id,
@@ -730,7 +869,12 @@ class AIRedpacketPlugin(Plugin):
         created_at = float(bank.get("created_at") or time.time())
         status = f"已生成：{title}（{count} 题）；默认题库 ID：{bank_id}"
         previous = int(bank.get("previous_question_count") or 0)
-        if generated and previous:
+        if bank.get("incomplete"):
+            message = (
+                f"题库阶段性结果已保存：{title}，当前 {count} 道，目标 {target_count} 道。"
+                "可切换 Provider 或模型后再次点击“继续生成/补齐题库”。"
+            )
+        elif generated and previous:
             message = f"题库补齐完成：{title}，已从 {previous} 道增加到 {count} 道。后续创建红包会直接复用。"
         elif generated:
             message = f"题库生成完成：{title}，共 {count} 道题。后续创建红包会直接复用。"
@@ -806,7 +950,7 @@ class AIRedpacketPlugin(Plugin):
             daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
-        markup = {"inline_keyboard": [[{"text": "领取答题红包", "callback_data": f"{CALLBACK_PREFIX}:start:{packet_id}"}]]}
+        markup = self._claim_markup(packet_id)
         await self._log(
             ctx,
             "info",
@@ -818,7 +962,18 @@ class AIRedpacketPlugin(Plugin):
             reward_min=minimum,
             reward_max=maximum,
         )
-        return [_send(text, chat_id=chat_id, reply_to=reply_to, markup=markup, via="interaction_bot"), {"type": "end_session"}]
+        return [
+            _send(
+                text,
+                chat_id=chat_id,
+                reply_to=reply_to,
+                markup=markup,
+                via="interaction_bot",
+                pin=self._bool_config(ctx, "pin_packet_message", True),
+                save_message_id_key=f"ai_redpacket:packet:{packet_id}",
+            ),
+            {"type": "end_session"},
+        ]
 
     async def _handle_callback(
         self,
@@ -931,7 +1086,12 @@ class AIRedpacketPlugin(Plugin):
         message_id = _message_id(payload)
         if result["correct"]:
             reward = int(result["reward"])
-            edit = _edit(message_id, self._render_result(ctx, result, correct=True), chat_id=chat_id, markup=None)
+            edit = _edit(
+                message_id,
+                self._render_result(ctx, result, correct=True),
+                chat_id=chat_id,
+                markup=self._join_markup(redpacket_id),
+            )
             payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
             actions: list[dict[str, Any]] = [_ack(callback_id, f"答对了，获得 {reward}")]
             if edit:
@@ -941,14 +1101,33 @@ class AIRedpacketPlugin(Plugin):
             return actions
 
         if result["finished"]:
-            edit = _edit(message_id, self._render_result(ctx, result, correct=False), chat_id=chat_id, markup=None)
+            edit = _edit(
+                message_id,
+                self._render_result(ctx, result, correct=False),
+                chat_id=chat_id,
+                markup=self._join_markup(redpacket_id),
+            )
             actions = [_ack(callback_id, "答题机会已用完，今天的挑战已结束", alert=True)]
             if edit:
                 actions.append(edit)
                 self._schedule_failed_message_delete(ctx, chat_id, message_id, attempt_id)
             return actions
         remaining = max(0, int(result["max_attempts"]) - int(result["attempts"]))
-        return [_ack(callback_id, f"答错了，还有 {remaining} 次机会", alert=True)]
+        edit = _edit(
+            message_id,
+            self._render_question(ctx, result),
+            chat_id=chat_id,
+            markup=self._answer_markup(
+                redpacket_id,
+                attempt_id,
+                str(result["submission_token"]),
+                result,
+            ),
+        )
+        actions = [_ack(callback_id, f"答错了，还有 {remaining} 次机会", alert=True)]
+        if edit:
+            actions.append(edit)
+        return actions
 
     def _payout_key(self, ctx: PluginContext, redpacket_id: str, question_slot_id: int, user_id: int) -> str:
         return f"ai_redpacket:{ctx.account_id}:{redpacket_id}:{question_slot_id}:{user_id}"
@@ -981,7 +1160,7 @@ class AIRedpacketPlugin(Plugin):
         order = json.loads(str(attempt["option_order_json"]))
         options = [source_options[index] for index in order]
         option_text = "\n".join(f"{chr(65 + index)}. {html.escape(str(option))}" for index, option in enumerate(options))
-        return self._render_template(
+        body = self._render_template(
             ctx,
             "question_message_template",
             QUESTION_MESSAGE_TEMPLATE,
@@ -991,6 +1170,8 @@ class AIRedpacketPlugin(Plugin):
             daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
+        owner = html.escape(str(attempt.get("user_display_name") or f"用户{attempt.get('user_id') or ''}"))
+        return f"<b>{owner} 这是你的专属雨露</b>\n{body}"
 
     def _render_result(self, ctx: PluginContext, result: dict[str, Any], *, correct: bool) -> str:
         source_options = json.loads(str(result["source_options_json"]))
@@ -1020,6 +1201,36 @@ class AIRedpacketPlugin(Plugin):
                         "callback_data": f"{CALLBACK_PREFIX}:answer:{redpacket_id}:{attempt_id}:{index}:{token}",
                     }
                     for index, label in enumerate(("A", "B", "C"))
+                ],
+                [
+                    {
+                        "text": "我也要雨露均沾",
+                        "callback_data": f"{CALLBACK_PREFIX}:start:{redpacket_id}",
+                    }
+                ],
+            ]
+        }
+
+    def _claim_markup(self, redpacket_id: str) -> dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "领取我的雨露",
+                        "callback_data": f"{CALLBACK_PREFIX}:start:{redpacket_id}",
+                    }
+                ]
+            ]
+        }
+
+    def _join_markup(self, redpacket_id: str) -> dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "我也要雨露均沾",
+                        "callback_data": f"{CALLBACK_PREFIX}:start:{redpacket_id}",
+                    }
                 ]
             ]
         }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -581,7 +582,10 @@ class AIStorage:
                         "UPDATE redpacket_question SET reserved_by = ?, reserved_until = ? WHERE id = ? AND claimed_by IS NULL",
                         (user_id, now + reservation_seconds, existing["question_slot_id"]),
                     )
-                return dict(existing)
+                existing_result = dict(existing)
+                if user_display_name:
+                    existing_result["user_display_name"] = user_display_name
+                return existing_result
 
             expired_slots = conn.execute(
                 """
@@ -653,6 +657,8 @@ class AIStorage:
             )
             return {
                 "id": attempt_id,
+                "user_id": user_id,
+                "user_display_name": user_display_name,
                 "attempts": 0,
                 "success": 0,
                 "question": slot["question"],
@@ -799,13 +805,14 @@ class AIStorage:
                 )
             else:
                 finished = attempts >= max_attempts
+                next_submission_token = secrets.token_urlsafe(6)
                 conn.execute(
                     """
                     UPDATE redpacket_attempt
-                    SET attempts = ?, last_submission_key = ?, updated_at = ?
+                    SET attempts = ?, submission_token = ?, last_submission_key = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (attempts, submission_key, now, attempt_id),
+                    (attempts, next_submission_token, submission_key, now, attempt_id),
                 )
                 if finished:
                     conn.execute(
@@ -832,4 +839,5 @@ class AIStorage:
                 "finished": correct or attempts >= max_attempts,
                 "max_attempts": max_attempts,
                 "duplicate": False,
+                "submission_token": row["submission_token"] if correct else next_submission_token,
             }

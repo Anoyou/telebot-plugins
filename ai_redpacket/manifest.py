@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.6"
+PLUGIN_VERSION = "0.1.7"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并输出严格 JSON，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -188,6 +188,15 @@ CONFIG_SCHEMA = {
             "minimum": 0,
             "maximum": 10,
             "description": "每道题首次答错后还能重试多少次；设为 0 表示答错后立即结束当天挑战。",
+        },
+        "pin_packet_message": {
+            "type": "boolean",
+            "title": "自动置顶红包入口",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 425,
+            "default": True,
+            "description": "创建红包后由交互 Bot 置顶带领取按钮的原消息；需要 Bot 具备群管理置顶权限。",
         },
         "reward_min": {
             "type": "integer",
@@ -381,10 +390,10 @@ CONFIG_SCHEMA = {
 CONFIG_ACTIONS = [
     {
         "key": "generate_question_bank",
-        "title": "生成或补齐题库",
-        "description": "首次抓取并缓存上方 URL 正文；已有题库不足目标题数时保留原题并调用 AI 补齐。",
+        "title": "继续生成/补齐题库",
+        "description": "首次抓取并缓存上方 URL 正文；每批成功后立即保存。可在任务窗口中断或终止，切换 Provider/模型后从已有题目继续。",
         "placement": "field:question_source_url",
-        "submit_label": "生成/补齐题库",
+        "submit_label": "继续生成/补齐题库",
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -456,7 +465,7 @@ INTERACTION_ENTRIES = [
             "required_event_fields": ["type", "chat_id"],
         },
         "result_contract": {
-            "actions": ["send_message", "edit_message", "delete_message", "answer_callback", "payout", "end_session"],
+            "actions": ["send_message", "edit_message", "delete_message", "pin_message", "answer_callback", "payout", "end_session"],
         },
         "settlement": {
             "mode": "auto",
@@ -474,7 +483,7 @@ MANIFEST = Manifest(
     key="ai_redpacket",
     display_name="AI 答题红包",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.58.2",
+    min_telepilot_version="0.59.0",
     author="Anoyou",
     description="从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
     usage=USAGE,

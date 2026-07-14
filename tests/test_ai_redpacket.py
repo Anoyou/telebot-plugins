@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 import random
@@ -93,8 +94,8 @@ class RewardAllocationTest(unittest.TestCase):
 class QuestionGenerationTest(unittest.TestCase):
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.6")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.58.2")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.7")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.0")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -260,6 +261,18 @@ class StorageFlowTest(unittest.TestCase):
         )
         self.assertFalse(first["correct"])
         self.assertFalse(first["finished"])
+        with self.assertRaisesRegex(storage_module.StorageError, "答题按钮已经失效"):
+            self.storage.submit_answer(
+                attempt_id="attempt-101",
+                account_id=1,
+                user_id=101,
+                chat_id=-1001,
+                redpacket_id="packet",
+                option_index=wrong,
+                submission_token="token-101",
+                submission_key="double-click-with-new-callback-id",
+                retry_count=1,
+            )
         second = self.storage.submit_answer(
             attempt_id="attempt-101",
             account_id=1,
@@ -267,12 +280,13 @@ class StorageFlowTest(unittest.TestCase):
             chat_id=-1001,
             redpacket_id="packet",
             option_index=wrong,
-            submission_token="token-101",
+            submission_token=str(first["submission_token"]),
             submission_key="submit-2",
             retry_count=1,
         )
         self.assertFalse(second["correct"])
         self.assertTrue(second["finished"])
+        self.assertEqual(second["attempts"], 2)
         with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
             self.storage.reserve_question(
                 attempt_id="attempt-new",
@@ -382,21 +396,23 @@ class StorageFlowTest(unittest.TestCase):
             retry_count=2,
         )
         wrong = (int(attempt["answer_index"]) + 1) % 3
-        results = [
-            self.storage.submit_answer(
+        results = []
+        token = "retry-token"
+        for index in range(3):
+            result = self.storage.submit_answer(
                 attempt_id="retry-attempt",
                 account_id=1,
                 user_id=151,
                 chat_id=-1001,
                 redpacket_id="retry-packet",
                 option_index=wrong,
-                submission_token="retry-token",
+                submission_token=token,
                 submission_key=f"retry-submit-{index}",
                 retry_count=2,
                 daily_limit=1,
             )
-            for index in range(3)
-        ]
+            results.append(result)
+            token = str(result["submission_token"])
         self.assertFalse(results[0]["finished"])
         self.assertFalse(results[1]["finished"])
         self.assertTrue(results[2]["finished"])
@@ -1280,7 +1296,13 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(ai.calls, 9)
                 announcement = create_actions[0]
                 self.assertEqual(announcement["send_via"], "interaction_bot")
-                self.assertEqual(announcement["reply_markup"]["inline_keyboard"][0][0]["text"], "领取答题红包")
+                self.assertEqual(announcement["reply_markup"]["inline_keyboard"][0][0]["text"], "领取我的雨露")
+                self.assertTrue(announcement["pin"])
+                self.assertTrue(announcement["save_message_id_key"].startswith("ai_redpacket:packet:"))
+
+                ctx.config["pin_packet_message"] = False
+                unpinned_actions = await plugin._create_packet(ctx, -1001, 99, 13, ["30", "3"])
+                self.assertNotIn("pin", unpinned_actions[0])
 
         asyncio.run(run_case())
 
@@ -1409,6 +1431,106 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(result["config_patch"]["question_bank_count"], 100)
                 self.assertEqual(ctx.ai.max_active, 3)
                 self.assertEqual(ctx.ai.calls, 9)
+
+        asyncio.run(run_case())
+
+    def test_question_generation_streams_progress_and_does_not_call_complete(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                logs = []
+
+                class HTTP:
+                    async def get(self, url):
+                        return types.SimpleNamespace(status_code=200, text="流式生成网页正文。" * 200)
+
+                class AI:
+                    async def stream_complete(self, **kwargs):
+                        text = json.dumps(
+                            {"title": "流式题库", "questions": _questions(3)},
+                            ensure_ascii=False,
+                        )
+                        for start in range(0, len(text), 300):
+                            yield text[start : start + 300]
+
+                    async def complete(self, **kwargs):
+                        raise AssertionError("支持流式时不应调用 complete")
+
+                async def log(level, message, **detail):
+                    logs.append((level, message, detail))
+
+                class Context:
+                    account_id = 1
+                    config = {"question_source_url": "https://example.com/stream", "generation_concurrency": 1}
+                    account_config = {}
+                    http = HTTP()
+                    ai = AI()
+
+                ctx = Context()
+                ctx.log = log
+                result = await plugin._generate_bank(ctx, ctx.config["question_source_url"], target_count=3)
+                self.assertEqual(result["question_count"], 3)
+                self.assertTrue(any(message == "AI 题库流式生成中" for _, message, _ in logs))
+                self.assertTrue(any(detail.get("实时片段") for _, message, detail in logs if message == "AI 题库流式生成中"))
+
+        asyncio.run(run_case())
+
+    def test_cancelled_generation_keeps_last_completed_batch_for_resume(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+
+                class HTTP:
+                    async def get(self, url):
+                        return types.SimpleNamespace(status_code=200, text="可中断生成网页正文。" * 500)
+
+                class AI:
+                    def __init__(self):
+                        self.calls = 0
+                        self.second_started = asyncio.Event()
+
+                    async def stream_complete(self, **kwargs):
+                        self.calls += 1
+                        if self.calls == 1:
+                            yield json.dumps(
+                                {"title": "阶段题库", "questions": _questions(plugin_module.GENERATION_BATCH_SIZE)},
+                                ensure_ascii=False,
+                            )
+                            return
+                        self.second_started.set()
+                        await asyncio.Event().wait()
+                        yield ""
+
+                    async def complete(self, **kwargs):
+                        raise AssertionError("取消测试不应回退普通生成")
+
+                ai = AI()
+
+                class Context:
+                    account_id = 1
+                    config = {"question_source_url": "https://example.com/resume", "generation_concurrency": 2}
+                    account_config = {}
+                    log = None
+                    http = HTTP()
+
+                ctx = Context()
+                ctx.ai = ai
+                task = asyncio.create_task(
+                    plugin._generate_bank(ctx, ctx.config["question_source_url"], target_count=24)
+                )
+                await ai.second_started.wait()
+                bank_id = hashlib.sha256(ctx.config["question_source_url"].encode()).hexdigest()[:12]
+                for _ in range(100):
+                    if len(plugin.storage.get_bank_questions(1, bank_id)) == 12:
+                        break
+                    await asyncio.sleep(0)
+                self.assertEqual(len(plugin.storage.get_bank_questions(1, bank_id)), 12)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                self.assertEqual(len(plugin.storage.get_bank_questions(1, bank_id)), 12)
 
         asyncio.run(run_case())
 
@@ -1591,6 +1713,35 @@ class PluginActionTest(unittest.TestCase):
         self.assertIn("成功 2026-07-14 3/2", plugin._render_result(Context(), payload, correct=True))
         self.assertIn("失败 2026-07-14 3/2", plugin._render_result(Context(), payload, correct=False))
 
+    def test_question_and_result_messages_keep_public_claim_button_and_owner_label(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            plugin = plugin_module.AIRedpacketPlugin()
+            plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+            plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+            plugin.storage.create_redpacket(
+                redpacket_id="public-entry",
+                account_id=1,
+                chat_id=-1001,
+                creator_id=1,
+                bank_id="bank",
+                total_amount=10,
+                rewards=[10],
+                ttl_seconds=3600,
+            )
+
+            class Context:
+                account_id = 1
+                config = {}
+
+            actions = plugin._start_attempt(Context(), "callback", -1001, 77, "@alice", "public-entry")
+            question = actions[1]
+            self.assertTrue(question["text"].startswith("<b>@alice 这是你的专属雨露</b>"))
+            self.assertEqual(question["reply_markup"]["inline_keyboard"][1][0]["text"], "我也要雨露均沾")
+            self.assertEqual(
+                question["reply_markup"]["inline_keyboard"][1][0]["callback_data"],
+                "airp:start:public-entry",
+            )
+
     def test_other_user_answer_button_shows_owner_warning_alert(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
@@ -1690,6 +1841,8 @@ class PluginActionTest(unittest.TestCase):
                     "tok",
                 )
                 payout = next(action for action in actions if action["type"] == "payout")
+                edit = next(action for action in actions if action["type"] == "edit_message")
+                self.assertEqual(edit["reply_markup"]["inline_keyboard"][0][0]["text"], "我也要雨露均沾")
                 self.assertEqual(payout["amount"], 10)
                 self.assertIsInstance(payout["amount"], int)
                 self.assertEqual(payout["payout_key"], "ai_redpacket:1:rp1:1:77")
