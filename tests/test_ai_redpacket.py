@@ -95,7 +95,7 @@ class RewardAllocationTest(unittest.TestCase):
 class QuestionGenerationTest(unittest.TestCase):
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.8")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.9")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -103,6 +103,9 @@ class QuestionGenerationTest(unittest.TestCase):
         self.assertEqual(properties["generation_concurrency"]["default"], 3)
         self.assertEqual(properties["generation_concurrency"]["minimum"], 1)
         self.assertEqual(properties["generation_concurrency"]["maximum"], 5)
+        self.assertEqual(properties["generation_max_output_tokens"]["default"], 65536)
+        self.assertEqual(properties["generation_max_output_tokens"]["minimum"], 4096)
+        self.assertEqual(properties["generation_max_output_tokens"]["maximum"], 131072)
         self.assertEqual(properties["default_total_amount"]["default"], 150000)
         self.assertEqual(properties["default_questions"]["default"], 40)
         self.assertEqual(properties["reward_max"]["default"], 10000)
@@ -166,6 +169,7 @@ class QuestionGenerationTest(unittest.TestCase):
             "generation_count": ("AI 生成", 2),
             "max_source_chars": ("AI 生成", 2),
             "generation_concurrency": ("AI 生成", 2),
+            "generation_max_output_tokens": ("AI 生成", 2),
             "question_generation_prompt": ("AI 出题要求", 1),
             "default_questions": ("红包与答题", 2),
             "default_total_amount": ("红包与答题", 2),
@@ -212,6 +216,30 @@ class QuestionGenerationTest(unittest.TestCase):
     def test_extract_json_accepts_fenced_response(self) -> None:
         data = plugin_module.extract_json_object('```json\n{"title":"测试","questions":[]}\n```')
         self.assertEqual(data["title"], "测试")
+
+    def test_extract_question_batch_salvages_complete_jsonl_before_truncated_tail(self) -> None:
+        rows = [json.dumps({"title": "JSONL 题库"}, ensure_ascii=False)]
+        rows.extend(json.dumps(item, ensure_ascii=False) for item in _questions(2))
+        rows.append('{"question":"未完成')
+
+        data = plugin_module.extract_question_batch("\n".join(rows))
+
+        self.assertEqual(data["title"], "JSONL 题库")
+        self.assertEqual(len(data["questions"]), 2)
+
+    def test_source_excerpt_caps_single_context_and_shards_multiple_large_batches(self) -> None:
+        source = "".join(f"{index:06d}" for index in range(30_000))
+
+        single_excerpt = plugin_module.source_excerpt_for_batch(source, 0, 1)
+        self.assertLessEqual(len(single_excerpt), plugin_module.MAX_BATCH_SOURCE_CHARS)
+        self.assertTrue(single_excerpt.startswith(source[:100]))
+        self.assertTrue(single_excerpt.endswith(source[-100:]))
+        excerpts = [plugin_module.source_excerpt_for_batch(source, index, 3) for index in range(3)]
+
+        self.assertTrue(all(len(excerpt) < len(source) for excerpt in excerpts))
+        self.assertEqual(len(set(excerpts)), 3)
+        self.assertEqual(excerpts[0], source[: len(excerpts[0])])
+        self.assertEqual(excerpts[-1], source[-len(excerpts[-1]) :])
 
 
 class StorageMigrationTest(unittest.TestCase):
@@ -1301,7 +1329,7 @@ class PluginActionTest(unittest.TestCase):
                         }
                     ],
                 )
-                self.assertEqual(ai.calls, 9)
+                self.assertEqual(ai.calls, 1)
                 self.assertEqual(ctx.http.calls, 1)
                 self.assertEqual(ai.kwargs[0]["route"], "auto")
                 self.assertNotIn("provider_tag", ai.kwargs[0])
@@ -1313,11 +1341,11 @@ class PluginActionTest(unittest.TestCase):
                     {"config": dict(ctx.config)},
                 )
                 self.assertIn("已达到目标 100 道", repeated["message"])
-                self.assertEqual(ai.calls, 9)
+                self.assertEqual(ai.calls, 1)
                 self.assertEqual(ctx.http.calls, 1)
 
                 create_actions = await plugin._create_packet(ctx, -1001, 99, 12, ["30", "3"])
-                self.assertEqual(ai.calls, 9)
+                self.assertEqual(ai.calls, 1)
                 announcement = create_actions[0]
                 self.assertEqual(announcement["send_via"], "interaction_bot")
                 self.assertEqual(announcement["reply_markup"]["inline_keyboard"][0][0]["text"], "领取我的雨露")
@@ -1385,8 +1413,9 @@ class PluginActionTest(unittest.TestCase):
                 )
 
                 self.assertEqual(result["config_patch"]["question_bank_count"], 100)
-                self.assertEqual(ctx.ai.calls, 10)
-                self.assertTrue(all(call["max_tokens"] <= 4096 for call in ctx.ai.kwargs))
+                self.assertEqual(ctx.ai.calls, 2)
+                self.assertTrue(all(call["max_tokens"] <= 65536 for call in ctx.ai.kwargs))
+                self.assertTrue(any(call["max_tokens"] > 4096 for call in ctx.ai.kwargs))
                 self.assertTrue(all("本批只生成" in call["user"] for call in ctx.ai.kwargs))
                 self.assertTrue(any(message == "AI 题库分批结果无效，重试后成功" for _, message, _ in logs))
                 progress = [detail for _, message, detail in logs if message == "AI 题库生成进度"]
@@ -1438,7 +1467,7 @@ class PluginActionTest(unittest.TestCase):
                     account_id = 1
                     config = {
                         "question_source_url": "https://example.com/concurrent",
-                        "generation_count": 100,
+                        "generation_count": 500,
                         "generation_concurrency": 3,
                     }
                     account_config = {}
@@ -1452,9 +1481,59 @@ class PluginActionTest(unittest.TestCase):
                     "generate_question_bank",
                     {"config": dict(ctx.config)},
                 )
-                self.assertEqual(result["config_patch"]["question_bank_count"], 100)
+                self.assertEqual(result["config_patch"]["question_bank_count"], 500)
                 self.assertEqual(ctx.ai.max_active, 3)
-                self.assertEqual(ctx.ai.calls, 9)
+                self.assertEqual(ctx.ai.calls, 3)
+
+        asyncio.run(run_case())
+
+    def test_large_single_batch_keeps_filling_when_model_returns_partial_valid_results(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+
+                class HTTP:
+                    async def get(self, url):
+                        return types.SimpleNamespace(status_code=200, text="分次补齐使用的有效网页正文。" * 1000)
+
+                class AI:
+                    def __init__(self):
+                        self.calls = 0
+                        self.kwargs = []
+
+                    async def complete(self, **kwargs):
+                        self.kwargs.append(kwargs)
+                        start = self.calls * 50
+                        self.calls += 1
+                        return types.SimpleNamespace(
+                            text=json.dumps(
+                                {"title": "分次补齐题库", "questions": _questions(50, start=start)},
+                                ensure_ascii=False,
+                            )
+                        )
+
+                class Context:
+                    account_id = 1
+                    config = {
+                        "question_source_url": "https://example.com/partial",
+                        "generation_concurrency": 1,
+                    }
+                    account_config = {}
+                    log = None
+                    http = HTTP()
+                    ai = AI()
+
+                result = await plugin._generate_bank(
+                    Context(),
+                    Context.config["question_source_url"],
+                    target_count=200,
+                )
+
+                self.assertEqual(result["question_count"], 200)
+                self.assertEqual(Context.ai.calls, 4)
+                self.assertIn("已有题目题干如下", Context.ai.kwargs[1]["user"])
+                self.assertIn("问题 0", Context.ai.kwargs[1]["user"])
 
         asyncio.run(run_case())
 
@@ -1542,19 +1621,29 @@ class PluginActionTest(unittest.TestCase):
                 ctx = Context()
                 ctx.ai = ai
                 task = asyncio.create_task(
-                    plugin._generate_bank(ctx, ctx.config["question_source_url"], target_count=24)
+                    plugin._generate_bank(
+                        ctx,
+                        ctx.config["question_source_url"],
+                        target_count=plugin_module.GENERATION_BATCH_SIZE * 2,
+                    )
                 )
                 await ai.second_started.wait()
                 bank_id = hashlib.sha256(ctx.config["question_source_url"].encode()).hexdigest()[:12]
                 for _ in range(100):
-                    if len(plugin.storage.get_bank_questions(1, bank_id)) == 12:
+                    if len(plugin.storage.get_bank_questions(1, bank_id)) == plugin_module.GENERATION_BATCH_SIZE:
                         break
                     await asyncio.sleep(0)
-                self.assertEqual(len(plugin.storage.get_bank_questions(1, bank_id)), 12)
+                self.assertEqual(
+                    len(plugin.storage.get_bank_questions(1, bank_id)),
+                    plugin_module.GENERATION_BATCH_SIZE,
+                )
                 task.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await task
-                self.assertEqual(len(plugin.storage.get_bank_questions(1, bank_id)), 12)
+                self.assertEqual(
+                    len(plugin.storage.get_bank_questions(1, bank_id)),
+                    plugin_module.GENERATION_BATCH_SIZE,
+                )
 
         asyncio.run(run_case())
 
@@ -1609,7 +1698,7 @@ class PluginActionTest(unittest.TestCase):
                 )
 
                 self.assertIn("已从 5 道增加到 100 道", result["message"])
-                self.assertEqual(ctx.ai.calls, 8)
+                self.assertEqual(ctx.ai.calls, 1)
                 questions = plugin.storage.get_bank_questions(1, "190b4acf8d15")
                 self.assertEqual(len(questions), 100)
                 self.assertTrue(any(item["question"] == "问题 0" for item in questions))
@@ -1662,7 +1751,7 @@ class PluginActionTest(unittest.TestCase):
                 ctx = Context()
                 ctx.ai = ai
                 await plugin.on_config_action(ctx, "generate_question_bank", {"config": dict(ctx.config)})
-                self.assertEqual(len(ai.kwargs), 9)
+                self.assertEqual(len(ai.kwargs), 1)
                 self.assertTrue(all(item["route"] == "fixed" for item in ai.kwargs))
                 self.assertTrue(all(item["provider"] == "provider-1" for item in ai.kwargs))
                 self.assertTrue(all(item["model"] == "model-1" for item in ai.kwargs))

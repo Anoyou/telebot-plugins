@@ -5,9 +5,9 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.8"
+PLUGIN_VERSION = "0.1.9"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
-只依据网页正文生成三选一选择题，并输出严格 JSON，不要 Markdown。
+只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
 题目必须能从正文中直接得到答案，不要编造，不要出主观题。"""
 USAGE = (
@@ -287,7 +287,18 @@ CONFIG_SCHEMA = {
             "default": 3,
             "minimum": 1,
             "maximum": 5,
-            "description": "同时生成多少批题目。默认 3 可明显缩短等待时间；Provider 容易限流时可调低。",
+            "description": "仅在目标超过单次 200 题或需要补齐时生效。Provider 容易限流时可调低。",
+        },
+        "generation_max_output_tokens": {
+            "type": "integer",
+            "title": "单次最大输出 Token",
+            "x-ui-section": "AI 生成",
+            "x-ui-columns": 2,
+            "x-ui-order": 260,
+            "default": 65536,
+            "minimum": 4096,
+            "maximum": 131072,
+            "description": "题库属于长时间离线任务。默认允许一次输出完整 100-200 题；模型最大输出较小时可调低。",
         },
         "question_generation_prompt": {
             "type": "string",
@@ -297,7 +308,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 300,
             "default": "",
             "x-ui-placeholder": QUESTION_PROMPT_PLACEHOLDER,
-            "description": "留空使用插件内置提示词；自定义时仍必须要求严格 JSON 和三选一题型。",
+            "description": "留空使用插件内置提示词；自定义时仍必须要求 JSONL 和三选一题型。",
         },
         "packet_message_template": {
             "type": "string",
