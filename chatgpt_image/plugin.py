@@ -41,7 +41,7 @@ from .token_pool import (
     parse_token_lines,
 )
 
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.4"
 DEFAULT_MODELS = [
     "gpt-image-2",
     "codex-gpt-image-2",

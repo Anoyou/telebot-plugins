@@ -14,6 +14,7 @@ import inspect
 import json
 import os
 import random
+import secrets
 import shlex
 import string
 import tempfile
@@ -67,7 +68,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.0"
+PLUGIN_VERSION = "1.4.2"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -93,8 +94,8 @@ PASSWORD_CONFUSABLE_CHARS = str.maketrans({
 IMAGE_WIDTH = 980
 IMAGE_HEIGHT = 320
 PLUGIN_DIR = Path(__file__).resolve().parent
-STATE_DIR_ENV = "LUCKY_REDPACK_STATE_DIR"
-DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "telepilot_lucky_redpack_state"
+LEGACY_STATE_DIR_ENV = "LUCKY_REDPACK_STATE_DIR"
+LEGACY_DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "telepilot_lucky_redpack_state"
 SETTLEMENT_DELETE_DELAY_SECONDS = 60
 BUNDLED_FONT_CANDIDATES = [
     PLUGIN_DIR.parent / "redpack-byRBQ" / "assets" / "font.ttf",
@@ -941,6 +942,7 @@ class LuckyRedpackPlugin(Plugin):
         self._packs: dict[int, list[LuckyRedpack]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._data_dir: Path | None = None
 
     def _get_lock(self, chat_id: int) -> asyncio.Lock:
         if chat_id not in self._locks:
@@ -1005,19 +1007,59 @@ class LuckyRedpackPlugin(Plugin):
         del account_id
         return "packs:all"
 
-    def _state_dir(self) -> Path:
-        configured = str(os.environ.get(STATE_DIR_ENV) or "").strip()
-        return Path(configured).expanduser() if configured else DEFAULT_STATE_DIR
+    def _state_dir(self) -> Path | None:
+        return self._data_dir
 
-    def _state_file(self, account_id: int, chat_id: int) -> Path:
-        return self._state_dir() / f"{int(account_id)}_{int(chat_id)}.json"
+    @staticmethod
+    def _legacy_state_dir() -> Path:
+        configured = str(os.environ.get(LEGACY_STATE_DIR_ENV) or "").strip()
+        return Path(configured).expanduser() if configured else LEGACY_DEFAULT_STATE_DIR
 
-    def _account_state_file(self, account_id: int) -> Path:
-        return self._state_dir() / f"{int(account_id)}_all.json"
+    def _migrate_legacy_state_files(self, account_id: int) -> int:
+        target_dir = self._data_dir
+        if target_dir is None:
+            return 0
+        source_dir = self._legacy_state_dir()
+        try:
+            if source_dir.resolve() == target_dir.resolve() or not source_dir.is_dir():
+                return 0
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return 0
+
+        migrated = 0
+        for source in source_dir.glob(f"{int(account_id)}_*.json"):
+            target = target_dir / source.name
+            if target.exists() or not source.is_file():
+                continue
+            temporary = target.with_name(f".{target.name}.migrating-{secrets.token_hex(8)}")
+            try:
+                temporary.write_bytes(source.read_bytes())
+                temporary.replace(target)
+                migrated += 1
+            except OSError:
+                temporary.unlink(missing_ok=True)
+        return migrated
+
+    def _state_file(self, account_id: int, chat_id: int) -> Path | None:
+        state_dir = self._state_dir()
+        if state_dir is None:
+            return None
+        return state_dir / f"{int(account_id)}_{int(chat_id)}.json"
+
+    def _account_state_file(self, account_id: int) -> Path | None:
+        state_dir = self._state_dir()
+        if state_dir is None:
+            return None
+        return state_dir / f"{int(account_id)}_all.json"
 
     @contextmanager
     def _state_file_lock(self, account_id: int, chat_id: int):
-        lock_file = self._state_dir() / f"{int(account_id)}_{int(chat_id)}.lock"
+        state_dir = self._state_dir()
+        if state_dir is None:
+            yield
+            return
+        lock_file = state_dir / f"{int(account_id)}_{int(chat_id)}.lock"
         lock_handle = None
         try:
             lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1035,10 +1077,14 @@ class LuckyRedpackPlugin(Plugin):
 
     def _load_file_packs(self, account_id: int, chat_id: int) -> list[LuckyRedpack]:
         path = self._state_file(account_id, chat_id)
+        if path is None:
+            return []
         return self._load_file_packs_from(path)
 
     def _load_account_file_packs(self, account_id: int) -> list[LuckyRedpack]:
         path = self._account_state_file(account_id)
+        if path is None:
+            return []
         return self._load_file_packs_from(path)
 
     def _load_file_packs_from(self, path: Path) -> list[LuckyRedpack]:
@@ -1051,10 +1097,14 @@ class LuckyRedpackPlugin(Plugin):
 
     def _save_file_packs(self, account_id: int, chat_id: int, packs: list[LuckyRedpack]) -> None:
         path = self._state_file(account_id, chat_id)
+        if path is None:
+            return
         self._save_file_packs_to(path, packs)
 
     def _save_account_file_packs(self, account_id: int, packs: list[LuckyRedpack]) -> None:
         path = self._account_state_file(account_id)
+        if path is None:
+            return
         self._save_file_packs_to(path, packs)
 
     def _save_file_packs_to(self, path: Path, packs: list[LuckyRedpack]) -> None:
@@ -1249,6 +1299,9 @@ class LuckyRedpackPlugin(Plugin):
             self._packs.pop(chat_id, None)
 
     async def on_startup(self, ctx: PluginContext) -> None:
+        data_dir = getattr(ctx, "data_dir", None)
+        self._data_dir = Path(data_dir) if data_dir is not None else None
+        migrated_files = self._migrate_legacy_state_files(ctx.account_id)
         cfg = ctx.config or {}
         self._command = str(cfg.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
         self._default_amount = _clamp_int(cfg.get("default_amount"), DEFAULT_AMOUNT, 1, MAX_AMOUNT)
@@ -1262,11 +1315,13 @@ class LuckyRedpackPlugin(Plugin):
         self._allowed_chat_ids = _int_set(cfg.get("allowed_chat_ids"))
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
-            storage = "redis+file" if getattr(ctx, "redis", None) is not None else "file"
+            storage = "redis+data_dir" if getattr(ctx, "redis", None) is not None else "data_dir"
+            if self._data_dir is None:
+                storage = "redis" if getattr(ctx, "redis", None) is not None else "memory"
             whitelist = "不限制" if not self._allowed_chat_ids else f"{len(self._allowed_chat_ids)} 个群"
             await ctx.log(
                 "info",
-                f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}，状态存储：{storage}，群聊白名单：{whitelist}",
+                f"[lucky_redpack] v{PLUGIN_VERSION} 已启动，指令：{self._command}，状态存储：{storage}，迁移旧状态：{migrated_files} 个，群聊白名单：{whitelist}",
             )
 
     async def on_shutdown(self, ctx: PluginContext) -> None:

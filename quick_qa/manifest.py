@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.4.3"
+PLUGIN_VERSION = "1.4.4"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -468,7 +468,7 @@ MANIFEST = Manifest(
     key="quick_qa",
     display_name="快问快答",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.33.0",
+    min_telepilot_version="0.59.1",
     author="Anoyou",
     description="支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
     usage=USAGE,

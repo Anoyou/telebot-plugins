@@ -36,7 +36,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.28"
+PLUGIN_VERSION = "1.1.29"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -484,8 +484,6 @@ class DiceGridHuntPlugin(Plugin):
                 "filename": "dice_grid_hunt.png",
                 "caption": self._render_round_text(rd, include_guide=True),
                 "parse_mode": "html",
-                "send_via": "interaction_bot",
-                "send_via_options": ["interaction_bot", "userbot_reply"],
                 "reply_to_message_id": self._payload_message_id(payload),
                 "save_message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
             },
@@ -551,8 +549,6 @@ class DiceGridHuntPlugin(Plugin):
             "caption": success_caption,
             "text": success_caption,
             "parse_mode": "html",
-            "send_via": "interaction_bot",
-            "send_via_options": ["interaction_bot", "userbot_reply"],
         }
         payout_action: dict[str, Any] = {
             "type": "payout",

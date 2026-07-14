@@ -149,10 +149,10 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertEqual(start_actions[0]["chat_id"], -100123)
             self.assertEqual(start_actions[0]["filename"], "dice_grid_hunt.png")
             self.assertEqual(start_actions[0]["parse_mode"], "html")
-            self.assertEqual(start_actions[0]["send_via"], "interaction_bot")
-            self.assertEqual(start_actions[0]["send_via_options"], ["interaction_bot", "userbot_reply"])
+            self.assertNotIn("send_via", start_actions[0])
+            self.assertNotIn("send_via_options", start_actions[0])
             self.assertEqual(start_actions[0]["save_message_id_key"], "round:-100123")
-            self.assertIn("九宫格竞猜v1.1.28 开始", start_actions[0]["caption"])
+            self.assertIn("九宫格竞猜v1.1.29 开始", start_actions[0]["caption"])
             self.assertEqual(start_actions[1]["type"], "update_session")
             state = dict(start_actions[1]["data"])
 
@@ -168,8 +168,8 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertNotIn("edit_message_id", answer_actions[0])
             self.assertEqual(answer_actions[0]["message_id_key"], "round:-100123")
             self.assertEqual(answer_actions[0]["parse_mode"], "html")
-            self.assertEqual(answer_actions[0]["send_via"], "interaction_bot")
-            self.assertEqual(answer_actions[0]["send_via_options"], ["interaction_bot", "userbot_reply"])
+            self.assertNotIn("send_via", answer_actions[0])
+            self.assertNotIn("send_via_options", answer_actions[0])
             self.assertIn("九宫格竞猜", answer_actions[0]["caption"])
             self.assertEqual(answer_actions[0]["text"], answer_actions[0]["caption"])
             self.assertIn("恭喜 uhaveanswer 答对！", answer_actions[0]["caption"])
@@ -297,7 +297,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
         text = plugin._render_round_text(rd, include_guide=True)
 
-        self.assertIn("<b>九宫格竞猜v1.1.28 开始</b>", text)
+        self.assertIn("<b>九宫格竞猜v1.1.29 开始</b>", text)
         self.assertIn("竞猜目标：找出点数和为 21", text)
 
 

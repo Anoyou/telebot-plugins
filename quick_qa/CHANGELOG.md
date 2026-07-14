@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.4.4 (2026-07-14)
+- 题库 JSON 改写入 TelePilot `ctx.data_dir`，首次启动会复制插件目录中的旧题库文件，插件更新不再覆盖运行数据。
+- 每个账号实例独立持有题库路径，避免多账号同时运行时共用模块全局文件；最低 TelePilot 版本提升至 0.59.1。
+
 ## 1.4.3 (2026-07-10)
 - 按最新插件开发指南对齐：`_handle_interaction` 主路径改用标准事件信封 `event_from_interaction_payload(payload)` 读取事件类型、聊天 ID、消息文本与按钮回调，旧平铺 payload helper 保留为兜底。
 - 同步 `plugin.json` 与 `manifest.py` 版本号并递增至 1.4.3。

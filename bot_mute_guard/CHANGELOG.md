@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.8 (2026-07-14)
+- 修正运行时版本常量滞后于 `plugin.json` 与 `manifest.py` 的问题，三处版本统一为 `1.1.8`。
+
 ## 1.1.7 (2026-06-29)
 - 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
 - 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。

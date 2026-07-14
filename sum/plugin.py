@@ -14,6 +14,7 @@ import math
 import random
 import re
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -48,8 +49,9 @@ except ImportError:  # pragma: no cover - older TelePilot compatibility
         return str(fallback_id) if fallback_id not in (None, "") else default
 
 
-VERSION = "1.1.27"
-DB_PATH = Path(__file__).with_name("summary_config.json")
+VERSION = "1.1.33"
+DB_FILE_NAME = "summary_config.json"
+LEGACY_DB_PATH = Path(__file__).with_name(DB_FILE_NAME)
 URL_RE = re.compile(r"https?://[^\s\]）】>]+", re.IGNORECASE)
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
 WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_+-]{1,}")
@@ -393,10 +395,12 @@ class SummaryPlugin(Plugin):
         self._cfg: dict[str, Any] = {}
         self._scheduled: set[str] = set()
         self._tasks: set[asyncio.Task] = set()
+        self._db_path: Path | None = None
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._cfg = dict(ctx.config or {})
         self._command = str(self._cfg.get("command") or "sum").strip() or "sum"
+        self._db_path = self._prepare_data_path(ctx)
         aliases = {self._command, "总结"}
         self.commands = {alias: self._cmd_sum for alias in aliases if alias}
         await self._bootstrap_tasks(ctx)
@@ -410,6 +414,7 @@ class SummaryPlugin(Plugin):
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        self._db_path = None
         if ctx.log:
             await ctx.log("info", "[sum] 已停止")
 
@@ -484,14 +489,12 @@ class SummaryPlugin(Plugin):
         return True
 
     async def _load_db(self) -> SummaryDB:
-        if not DB_PATH.exists():
-            db = _default_db()
-            await self._save_db(db)
-            return db
-        try:
-            data = json.loads(DB_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            data = {}
+        data: dict[str, Any] = {}
+        if self._db_path is not None and self._db_path.exists():
+            try:
+                data = json.loads(self._db_path.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
         db = _default_db()
         db.seq = _int(data.get("seq"), 0)
         db.default_push_target = str(data.get("defaultPushTarget") or data.get("default_push_target") or "")
@@ -512,6 +515,8 @@ class SummaryPlugin(Plugin):
             db.ai_config.telepilot_model = db.ai_config.telepilot_model or str(old_telepilot.get("model") or "")
         db.tasks = [self._coerce_task(item) for item in data.get("tasks", []) if isinstance(item, dict)]
         self._merge_runtime_config(db)
+        if self._db_path is not None and not self._db_path.exists():
+            await self._save_db(db)
         return db
 
     async def _save_db(self, db: SummaryDB) -> None:
@@ -530,7 +535,27 @@ class SummaryPlugin(Plugin):
             },
             "defaultPushTarget": db.default_push_target,
         }
-        DB_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        if self._db_path is not None:
+            self._db_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _prepare_data_path(ctx: PluginContext) -> Path | None:
+        data_dir = getattr(ctx, "data_dir", None)
+        if data_dir is None:
+            return None
+        path = Path(data_dir) / DB_FILE_NAME
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if not path.exists() and LEGACY_DB_PATH.is_file() and LEGACY_DB_PATH.resolve() != path.resolve():
+                temporary = path.with_name(f".{path.name}.migrating-{uuid.uuid4().hex}")
+                try:
+                    temporary.write_bytes(LEGACY_DB_PATH.read_bytes())
+                    temporary.replace(path)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        except OSError:
+            return None
+        return path
 
     def _merge_runtime_config(self, db: SummaryDB) -> None:
         cfg = self._cfg

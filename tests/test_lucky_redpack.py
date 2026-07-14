@@ -33,6 +33,7 @@ def _load_plugin_module():
             self.client = None
             self.redis = redis
             self.messages = None
+            self.data_dir = Path(os.environ["LUCKY_REDPACK_TEST_DATA_DIR"])
 
     def register(cls):
         return cls
@@ -168,15 +169,15 @@ class FakeRedis:
 
 class LuckyRedpackTest(unittest.TestCase):
     def setUp(self) -> None:
-        self._old_state_dir = os.environ.get("LUCKY_REDPACK_STATE_DIR")
+        self._old_data_dir = os.environ.get("LUCKY_REDPACK_TEST_DATA_DIR")
         self._state_dir = tempfile.TemporaryDirectory(prefix="lucky_redpack_test_")
-        os.environ["LUCKY_REDPACK_STATE_DIR"] = self._state_dir.name
+        os.environ["LUCKY_REDPACK_TEST_DATA_DIR"] = self._state_dir.name
 
     def tearDown(self) -> None:
-        if self._old_state_dir is None:
-            os.environ.pop("LUCKY_REDPACK_STATE_DIR", None)
+        if self._old_data_dir is None:
+            os.environ.pop("LUCKY_REDPACK_TEST_DATA_DIR", None)
         else:
-            os.environ["LUCKY_REDPACK_STATE_DIR"] = self._old_state_dir
+            os.environ["LUCKY_REDPACK_TEST_DATA_DIR"] = self._old_data_dir
         self._state_dir.cleanup()
 
     def test_parse_create_args_supports_keyword_amount_count(self) -> None:
@@ -213,6 +214,27 @@ class LuckyRedpackTest(unittest.TestCase):
         self.assertIn("发送财富密码即可领取\n提示：财富密码被领一次会随机变动", text)
         self.assertNotIn("是口令", text)
         self.assertNotIn("随机码）", text)
+
+    def test_startup_migrates_legacy_file_state_to_context_data_dir(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory(prefix="lucky_redpack_legacy_") as legacy_dir:
+                source = Path(legacy_dir) / "1_-100123.json"
+                source.write_text("[]", encoding="utf-8")
+                previous = os.environ.get("LUCKY_REDPACK_STATE_DIR")
+                os.environ["LUCKY_REDPACK_STATE_DIR"] = legacy_dir
+                try:
+                    plugin = plugin_module.LuckyRedpackPlugin()
+                    await plugin.on_startup(PluginContext(account_id=1))
+                finally:
+                    if previous is None:
+                        os.environ.pop("LUCKY_REDPACK_STATE_DIR", None)
+                    else:
+                        os.environ["LUCKY_REDPACK_STATE_DIR"] = previous
+
+                target = Path(os.environ["LUCKY_REDPACK_TEST_DATA_DIR"]) / source.name
+                self.assertEqual(target.read_text(encoding="utf-8"), "[]")
+
+        asyncio.run(run())
 
     def test_render_message_uses_folded_claim_details(self) -> None:
         pack = plugin_module.LuckyRedpack(

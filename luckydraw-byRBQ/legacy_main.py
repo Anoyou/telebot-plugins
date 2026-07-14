@@ -18,8 +18,10 @@
 
 import asyncio
 import json
+import os
 import random
 import re
+import tempfile
 from pathlib import Path
 from typing import Dict, Optional, Set, List
 from collections import defaultdict
@@ -30,9 +32,9 @@ from pagermaid.enums import Message, Client
 from pagermaid.utils import logs
 
 
-# 配置文件路径
-plugin_dir = Path(__file__).parent
-config_file = plugin_dir / "luckydraw_config.json"
+# 配置文件路径；由 plugin.py 在账号启动时绑定到 ctx.data_dir。
+LEGACY_CONFIG_FILE = Path(__file__).parent / "luckydraw_config.json"
+config_file: Path | None = None
 
 # 脚本检测关键词（出现这些词则不触发）
 SCRIPT_DETECTION_KEYWORDS = [
@@ -101,6 +103,38 @@ CONFIG_FLUSH_MAX_PENDING = 50  # 积累多少条变更后立即刷盘
 # ==========================================
 
 
+def _copy_legacy_file_once(source: Path, target: Path) -> bool:
+    """原子复制旧文件；目标已存在时保持原样。"""
+    if target.exists() or not source.is_file():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as temp_file:
+            temp_file.write(source.read_bytes())
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
+
+
+def configure_data_dir(data_dir: Path | None, account_id: int) -> None:
+    """绑定当前账号的持久化目录并重载状态。"""
+    global config_file, config
+    if data_dir is None:
+        raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 luckydraw 配置")
+    account_dir = Path(data_dir) / str(int(account_id))
+    account_dir.mkdir(parents=True, exist_ok=True)
+    config_file = account_dir / "luckydraw_config.json"
+    _copy_legacy_file_once(LEGACY_CONFIG_FILE, config_file)
+    config = LuckyDrawConfig()
+
+
 class LuckyDrawConfig:
     """自动抽奖配置管理类"""
 
@@ -131,7 +165,7 @@ class LuckyDrawConfig:
 
     def load(self) -> None:
         """从文件加载配置"""
-        if config_file.exists():
+        if config_file is not None and config_file.exists():
             try:
                 with open(config_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -215,6 +249,8 @@ class LuckyDrawConfig:
     def _do_save(self) -> bool:
         """实际执行磁盘写入（同步）"""
         try:
+            if config_file is None:
+                raise RuntimeError("TelePilot 未提供 ctx.data_dir")
             with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {

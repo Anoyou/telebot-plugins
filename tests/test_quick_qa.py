@@ -8,6 +8,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -188,6 +189,25 @@ class QuickQATest(unittest.TestCase):
         question = plugin_module._question_from_dict(data["questions"][0])
         self.assertIsNotNone(question)
         self.assertEqual(question.answer_index, 1)
+
+    def test_startup_uses_context_data_dir_and_copies_legacy_store(self) -> None:
+        async def scenario() -> None:
+            legacy_path = Path(self._tmp.name) / "legacy" / "quickqa_data.json"
+            legacy_path.parent.mkdir(parents=True)
+            legacy_path.write_text('{"version": 1, "accounts": {"1": {"drafts": {}, "knowledge_bases": []}}}', encoding="utf-8")
+            data_dir = Path(self._tmp.name) / "persistent"
+            ctx = PluginContext(account_id=1)
+            ctx.data_dir = data_dir
+
+            with patch.object(plugin_module, "LEGACY_DATA_PATH", legacy_path):
+                plugin = plugin_module.QuickQAPlugin()
+                await plugin.on_startup(ctx)
+
+            target = data_dir / "quickqa_data.json"
+            self.assertEqual(plugin._store_path(), target)
+            self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["version"], 1)
+
+        asyncio.run(scenario())
 
     def test_draft_save_persists_knowledge_base(self) -> None:
         plugin = plugin_module.QuickQAPlugin()

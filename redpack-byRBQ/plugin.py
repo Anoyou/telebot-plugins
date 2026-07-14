@@ -368,11 +368,15 @@ class RedpackByRBQPlugin(Plugin):
     def __init__(self) -> None:
         super().__init__()
         self._command = DEFAULT_COMMAND
-        self._config_path = Path(__file__).with_name("redpack_config.json")
+        self._config_path: Path | None = None
+        self._data_dir: Path | None = None
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
         self._command = str(cfg.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
+        if ctx.data_dir is None:
+            raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 redpack 配置")
+        self._data_dir = Path(ctx.data_dir)
         self._bind_core_config(ctx.account_id)
         self._apply_core_settings(ctx)
         self.commands = {self._command: self._cmd_redpack}
@@ -396,12 +400,13 @@ class RedpackByRBQPlugin(Plugin):
         return [{"type": "send_message", "text": f"🧧 口令红包入口已触发，总额 {total_amount}，个数 {count}。发送 ,{self._command} 口令 {total_amount} {count} 开始。"}]
 
     def _bind_core_config(self, account_id: int) -> None:
-        config_path = Path(__file__).with_name(f"redpack_config_{account_id}.json")
+        if self._data_dir is None:
+            raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 redpack 配置")
+        config_path = self._data_dir / str(int(account_id)) / "redpack_config.json"
         if self._config_path == config_path:
             return
         self._config_path = config_path
-        redpack_core.config_file = config_path
-        redpack_core.config = redpack_core.RedPackConfig()
+        redpack_core.configure_data_dir(self._data_dir, account_id)
 
     def _apply_core_settings(self, ctx: PluginContext) -> None:
         cfg = dict(ctx.config or {})

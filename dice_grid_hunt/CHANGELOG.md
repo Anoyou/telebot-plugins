@@ -1,4 +1,7 @@
 # 更新日志
+## 1.1.29 (2026-07-14)
+- 移除题图发送与 caption 编辑动作中硬编码的 `send_via` / `send_via_options`，普通会话消息现由 TelePilot 按 `session.channel` 自动路由，保持 `payout` 固定走 userbot。
+
 ## 1.1.28 (2026-07-10)
 - 修复交互 Bot 开局和答题仍依赖插件进程内存的问题：开局写入平台 session，后续答题从 `payload.session.data` 恢复局面。
 - 猜错时返回 `update_session` 保存用户答题冷却，避免进程重载或会话续投递后同一用户限制丢失。

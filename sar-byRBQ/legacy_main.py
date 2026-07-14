@@ -6,6 +6,8 @@
 
 import asyncio
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Set
 
@@ -15,9 +17,29 @@ from pagermaid.enums import Message, Client
 from pagermaid.utils import logs
 
 
-# 配置文件路径
-plugin_dir = Path(__file__).parent
-config_file = plugin_dir / "sar_config.json"
+# 配置文件路径；由 plugin.py 在账号启动时绑定到 ctx.data_dir。
+LEGACY_CONFIG_FILE = Path(__file__).parent / "sar_config.json"
+config_file: Path | None = None
+
+
+def _copy_legacy_file_once(source: Path, target: Path) -> bool:
+    """原子复制旧文件；目标已存在时保持原样。"""
+    if target.exists() or not source.is_file():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as temp_file:
+            temp_file.write(source.read_bytes())
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
 
 
 class SARConfig:
@@ -31,7 +53,7 @@ class SARConfig:
 
     def load(self) -> None:
         """从文件加载配置"""
-        if config_file.exists():
+        if config_file is not None and config_file.exists():
             try:
                 with open(config_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -44,11 +66,14 @@ class SARConfig:
                 self.my_user_id = None
                 self.stats = {"total_replied": 0}
         else:
-            self.save()
+            # 等 plugin.py 绑定 ctx.data_dir 后再保存，导入阶段不得写源码目录。
+            pass
 
     def save(self) -> bool:
         """保存配置到文件"""
         try:
+            if config_file is None:
+                raise RuntimeError("TelePilot 未提供 ctx.data_dir")
             with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
@@ -110,6 +135,18 @@ class SARConfig:
 
 # 全局配置实例
 config = SARConfig()
+
+
+def configure_data_dir(data_dir: Path | None, account_id: int) -> None:
+    """绑定当前账号的持久化目录并重载状态。"""
+    global config_file, config
+    if data_dir is None:
+        raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 sar 配置")
+    account_dir = Path(data_dir) / str(int(account_id))
+    account_dir.mkdir(parents=True, exist_ok=True)
+    config_file = account_dir / "sar_config.json"
+    _copy_legacy_file_once(LEGACY_CONFIG_FILE, config_file)
+    config = SARConfig()
 
 
 # ==================== 生命周期钩子 ====================

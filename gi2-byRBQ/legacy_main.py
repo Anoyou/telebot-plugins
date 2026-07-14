@@ -12,6 +12,7 @@ import base64
 import contextlib
 import json
 import mimetypes
+import os
 import struct
 import tempfile
 import time
@@ -32,7 +33,8 @@ PLUGIN_NAME = "GI2"
 GI2_MARKER = "🧩 GI2 |"
 DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
-CONFIG_FILE = Path(__file__).parent / "gi2_config.json"
+LEGACY_CONFIG_FILE = Path(__file__).parent / "gi2_config.json"
+CONFIG_FILE: Path | None = None
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=300)
 RESULT_IMAGE_NAME = "gi2_result.png"
 SUPPORTED_OUTPUT_FORMAT = "png"
@@ -43,6 +45,37 @@ DEFAULT_CONFIG = {
     "api_base": DEFAULT_API_BASE,
     "model": DEFAULT_MODEL,
 }
+
+
+def _copy_legacy_file_once(source: Path, target: Path) -> bool:
+    """原子复制旧文件；目标已存在时保持原样。"""
+    if target.exists() or not source.is_file():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as temp_file:
+            temp_file.write(source.read_bytes())
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
+
+
+def configure_data_dir(data_dir: Path | None, account_id: int) -> None:
+    """绑定当前账号的持久化目录。"""
+    global CONFIG_FILE
+    if data_dir is None:
+        raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 gi2 配置")
+    account_dir = Path(data_dir) / str(int(account_id))
+    account_dir.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE = account_dir / "gi2_config.json"
+    _copy_legacy_file_once(LEGACY_CONFIG_FILE, CONFIG_FILE)
 
 
 def normalize_api_base(api_base: str) -> str:
@@ -83,7 +116,7 @@ def normalize_config(config: Optional[dict[str, Any]]) -> dict[str, Any]:
 
 def load_config() -> dict[str, Any]:
     """加载插件配置。"""
-    if not CONFIG_FILE.exists():
+    if CONFIG_FILE is None or not CONFIG_FILE.exists():
         return DEFAULT_CONFIG.copy()
 
     try:
@@ -97,6 +130,8 @@ def load_config() -> dict[str, Any]:
 def save_config(config: dict[str, Any]) -> bool:
     """保存插件配置。"""
     try:
+        if CONFIG_FILE is None:
+            raise RuntimeError("TelePilot 未提供 ctx.data_dir")
         CONFIG_FILE.write_text(
             json.dumps(normalize_config(config), ensure_ascii=False, indent=2),
             encoding="utf-8",

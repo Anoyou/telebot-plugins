@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.4.2 (2026-07-14)
+- 文件型红包状态和进程锁改为写入 TelePilot 注入的 `ctx.data_dir`；插件更新替换代码目录时不再丢失本地持久化数据，也不再写入任意临时目录。
+- 首次启动会复制旧版临时目录或 `LUCKY_REDPACK_STATE_DIR` 中的账号状态，已有新数据时不会覆盖。
+- 最低 TelePilot 版本提升至 0.59.1，避免旧运行时缺少持久化目录时静默退化。
+- 对齐运行时 `PLUGIN_VERSION`、`manifest.py` 和 `plugin.json` 的补丁版本。
+
 ## 1.4.1 (2026-07-10)
 - 按最新插件开发指南做元数据同步与卫生对齐：`plugin.json` 与 `manifest.py` 版本递增并保持一致。
 - 本插件为命令 + `on_message` 通道，无 `on_interaction`/`interaction_entries`，故不适用 payload 主路径现代化（Tier 2）。

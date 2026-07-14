@@ -342,6 +342,7 @@ class AisByRBQPlugin(Plugin):
     owner_only = False
 
     async def on_startup(self, ctx: PluginContext) -> None:
+        legacy_main.configure_data_dir(ctx.data_dir, ctx.account_id)
         RUNTIME.ctx = ctx
         RUNTIME.client = ctx.client
         cmds = {spec.command for spec in RUNTIME.listeners if spec.command}

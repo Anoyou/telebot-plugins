@@ -26,8 +26,10 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.4.3"
-DATA_PATH = Path(__file__).with_name("quickqa_data.json")
+PLUGIN_VERSION = "1.4.4"
+LEGACY_DATA_PATH = Path(__file__).with_name("quickqa_data.json")
+# 测试和显式嵌入场景可以覆盖；生产实例会在 on_startup 绑定 ctx.data_dir。
+DATA_PATH = LEGACY_DATA_PATH
 
 CALLBACK_PREFIX = "qqa"
 ENTRY_KEY = "join_quick_qa"
@@ -737,11 +739,12 @@ def _question_to_json(question: QAQuestion) -> dict[str, Any]:
     return asdict(question)
 
 
-def _load_store() -> dict[str, Any]:
-    if not DATA_PATH.exists():
+def _load_store(data_path: Path | None = None) -> dict[str, Any]:
+    path = data_path or DATA_PATH
+    if not path.exists():
         return {"version": 1, "accounts": {}}
     try:
-        data = json.loads(DATA_PATH.read_text("utf-8"))
+        data = json.loads(path.read_text("utf-8"))
     except Exception:
         return {"version": 1, "accounts": {}}
     if not isinstance(data, dict):
@@ -753,11 +756,12 @@ def _load_store() -> dict[str, Any]:
     return data
 
 
-def _save_store(data: dict[str, Any]) -> None:
-    DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = DATA_PATH.with_suffix(".tmp")
+def _save_store(data: dict[str, Any], data_path: Path | None = None) -> None:
+    path = data_path or DATA_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
-    tmp.replace(DATA_PATH)
+    tmp.replace(path)
 
 
 def _account_store(data: dict[str, Any], account_id: int) -> dict[str, Any]:
@@ -790,11 +794,18 @@ class QuickQAPlugin(Plugin):
         self._games: dict[int, QuickQAGame] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
+        self._data_path = DATA_PATH
 
     async def on_startup(self, ctx: PluginContext) -> None:
         cfg = ctx.config or {}
         self._command = str(cfg.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
         self.commands = {self._command: self._cmd_handler}
+        data_dir = getattr(ctx, "data_dir", None)
+        if data_dir is not None:
+            self._data_path = Path(data_dir) / LEGACY_DATA_PATH.name
+            self._data_path.parent.mkdir(parents=True, exist_ok=True)
+            if not self._data_path.exists() and LEGACY_DATA_PATH.is_file():
+                _save_store(_load_store(LEGACY_DATA_PATH), self._data_path)
         if ctx.log:
             await ctx.log("info", f"[quick_qa] 已启动，指令：{self._command}，版本：{PLUGIN_VERSION}")
 
@@ -817,6 +828,9 @@ class QuickQAPlugin(Plugin):
     def _track(self, task: asyncio.Task) -> None:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    def _store_path(self) -> Path:
+        return self._data_path
 
     def _game_message_key(self, game: QuickQAGame, label: str) -> str:
         game.message_seq += 1
@@ -1948,41 +1962,41 @@ class QuickQAPlugin(Plugin):
             raise ValueError(f"当前配置不允许抓取 {host}，请先加入允许来源域名")
 
     def _put_draft(self, account_id: int, draft: dict[str, Any]) -> None:
-        store = _load_store()
+        store = _load_store(self._store_path())
         account = _account_store(store, account_id)
         account["drafts"][str(draft["draft_id"])] = draft
-        _save_store(store)
+        _save_store(store, self._store_path())
 
     def _save_draft(self, account_id: int, draft_id: str) -> str:
-        store = _load_store()
+        store = _load_store(self._store_path())
         account = _account_store(store, account_id)
         draft = _dict(account["drafts"].pop(str(draft_id), {}))
         kb = _kb_from_dict(draft)
         if kb is None:
-            _save_store(store)
+            _save_store(store, self._store_path())
             return "没有找到可保存的题库草稿。"
         items = [_kb_from_dict(item) for item in account["knowledge_bases"]]
         existing = [item for item in items if item is not None and item.kb_id != kb.kb_id]
         existing.append(kb)
         account["knowledge_bases"] = [_kb_to_json(item) for item in existing]
-        _save_store(store)
+        _save_store(store, self._store_path())
         return f"题库已保存：{_html(kb.title)}（{len(kb.questions)} 题，ID {_code(kb.kb_id)}）。"
 
     def _drop_draft(self, account_id: int, draft_id: str) -> str:
-        store = _load_store()
+        store = _load_store(self._store_path())
         account = _account_store(store, account_id)
         removed = account["drafts"].pop(str(draft_id), None)
-        _save_store(store)
+        _save_store(store, self._store_path())
         return "题库草稿已取消。" if removed else "没有找到这个题库草稿。"
 
     def _delete_kb(self, account_id: int, kb_id: str) -> str:
-        store = _load_store()
+        store = _load_store(self._store_path())
         account = _account_store(store, account_id)
         before = len(account["knowledge_bases"])
         account["knowledge_bases"] = [
             item for item in account["knowledge_bases"] if str(_dict(item).get("kb_id") or _dict(item).get("id")) != kb_id
         ]
-        _save_store(store)
+        _save_store(store, self._store_path())
         if len(account["knowledge_bases"]) == before:
             return "没有找到这个题库。"
         return f"题库已删除：{_code(kb_id)}"
@@ -1992,7 +2006,7 @@ class QuickQAPlugin(Plugin):
 
     def _available_kbs_for_account(self, account_id: int, config: dict[str, Any] | None = None) -> list[KnowledgeBase]:
         kbs: list[KnowledgeBase] = []
-        store = _load_store()
+        store = _load_store(self._store_path())
         account = _account_store(store, account_id)
         for item in account["knowledge_bases"]:
             kb = _kb_from_dict(item)
