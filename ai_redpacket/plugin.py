@@ -24,7 +24,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.9"
+PLUGIN_VERSION = "0.1.10"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -395,6 +395,17 @@ def _edit(message_id: int | None, text: str, *, chat_id: int, markup: dict[str, 
     }
 
 
+def _delete_command(message_id: int | None, *, chat_id: int) -> dict[str, Any] | None:
+    if not message_id:
+        return None
+    return {
+        "type": "delete_message",
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "send_via": "userbot_reply",
+    }
+
+
 @register
 class AIRedpacketPlugin(Plugin):
     key = "ai_redpacket"
@@ -572,12 +583,31 @@ class AIRedpacketPlugin(Plugin):
         if action in {"create", "发", "创建"}:
             return await self._create_packet(ctx, chat_id, creator_id, reply_to, args[1:])
         if action in {"reset", "重置"}:
+            date = self._today(ctx)
+            if len(args) >= 2 and args[1].lower() in {"all", "全部", "所有"}:
+                result = self.storage.reset_all_daily_limits(ctx.account_id, date)
+                user_count = int(result["user_count"])
+                await self._log(
+                    ctx,
+                    "info",
+                    "管理员重置当日所有人的红包参与限制",
+                    **{"用户数": user_count, "日期": date},
+                )
+                actions = [
+                    _send(
+                        f"已重置 <code>{date}</code> 当日全部 <code>{user_count}</code> 名用户的领取与答题限制。既有奖励和红包记录不会撤销。",
+                        chat_id=chat_id,
+                    )
+                ]
+                delete_action = _delete_command(reply_to, chat_id=chat_id)
+                if delete_action:
+                    actions.append(delete_action)
+                return actions
             target_user_id = creator_id
             if len(args) >= 2:
                 if not re.fullmatch(r"[1-9]\d*", args[1]):
                     return [_send("用户 ID 必须是正整数。", chat_id=chat_id, reply_to=reply_to)]
                 target_user_id = int(args[1])
-            date = self._today(ctx)
             self.storage.reset_daily_limit(ctx.account_id, target_user_id, date)
             await self._log(
                 ctx,
@@ -585,19 +615,26 @@ class AIRedpacketPlugin(Plugin):
                 "管理员重置红包领取与答题限制",
                 **{"用户ID": target_user_id, "日期": date},
             )
-            return [
+            actions = [
                 _send(
                     f"已重置用户 <code>{target_user_id}</code> 在 <code>{date}</code> 的领取与答题限制。既有奖励和红包记录不会撤销。",
                     chat_id=chat_id,
-                    reply_to=reply_to,
                 )
             ]
+            delete_action = _delete_command(reply_to, chat_id=chat_id)
+            if delete_action:
+                actions.append(delete_action)
+            return actions
         if action == "list":
             return [_send(self._render_packets(ctx, chat_id), chat_id=chat_id, reply_to=reply_to)]
         if action in {"close", "off"} and len(args) >= 2:
             closed = self.storage.close_redpacket(ctx.account_id, chat_id, args[1])
             text = "红包已关闭。" if closed else "没有找到可关闭的红包。"
-            return [_send(text, chat_id=chat_id, reply_to=reply_to)]
+            actions = [_send(text, chat_id=chat_id, reply_to=None if closed else reply_to)]
+            delete_action = _delete_command(reply_to, chat_id=chat_id) if closed else None
+            if delete_action:
+                actions.append(delete_action)
+            return actions
         return [_send(self._usage(ctx), chat_id=chat_id, reply_to=reply_to)]
 
     async def _generate_bank(
@@ -1025,18 +1062,21 @@ class AIRedpacketPlugin(Plugin):
             reward_min=minimum,
             reward_max=maximum,
         )
-        return [
+        actions = [
             _send(
                 text,
                 chat_id=chat_id,
-                reply_to=reply_to,
                 markup=markup,
                 via="interaction_bot",
                 pin=self._bool_config(ctx, "pin_packet_message", True),
                 save_message_id_key=f"ai_redpacket:packet:{packet_id}",
             ),
-            {"type": "end_session"},
         ]
+        delete_action = _delete_command(reply_to, chat_id=chat_id)
+        if delete_action:
+            actions.append(delete_action)
+        actions.append({"type": "end_session"})
+        return actions
 
     async def _handle_callback(
         self,
@@ -1615,9 +1655,11 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{base} create 400</code> 创建默认题数红包\n"
             f"<code>{base} create 200 20 题库ID</code> 指定题数和题库\n"
             f"<code>{base} reset [用户ID]</code> 重置当天领取与答题限制\n"
+            f"<code>{base} reset all</code> 重置当天所有人的参与限制\n"
             f"<code>{self._prefix(ctx)}{self._weekly_command(ctx)}</code> 查看本周排行榜\n"
             f"<code>{base} list</code> 查看当前聊天红包\n"
-            f"<code>{base} close 红包ID</code> 关闭红包"
+            f"<code>{base} close 红包ID</code> 关闭红包\n"
+            "创建、重置或关闭成功后自动删除原命令消息；失败时保留。"
         )
 
     def _command_args(self, ctx: PluginContext, text: str, *, command_confirmed: bool = False) -> list[str] | None:

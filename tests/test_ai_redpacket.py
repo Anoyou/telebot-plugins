@@ -95,7 +95,7 @@ class RewardAllocationTest(unittest.TestCase):
 class QuestionGenerationTest(unittest.TestCase):
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.9")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.10")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -122,6 +122,8 @@ class QuestionGenerationTest(unittest.TestCase):
         self.assertTrue(properties["question_bank_options"]["x-ui-hidden"])
         self.assertTrue(properties["question_generation_prompt"]["x-ui-placeholder"].startswith("你是 TelePilot"))
         self.assertIn("reset [用户ID]", manifest_module.USAGE)
+        self.assertIn("reset all", manifest_module.USAGE)
+        self.assertIn("自动删除原命令消息", manifest_module.USAGE)
         for preview_key in (
             "packet_message_preview",
             "question_message_preview",
@@ -529,6 +531,38 @@ class StorageFlowTest(unittest.TestCase):
         self.assertEqual(history["reward"], 10)
         self.assertEqual(self.storage.get_redpacket("reset-one")["remaining_amount"], 0)
 
+    def test_admin_reset_all_marks_every_participant_for_only_the_selected_day(self) -> None:
+        self._create_packet("reset-all", 3)
+        for user_id, date in ((153, "2026-07-14"), (154, "2026-07-14"), (155, "2026-07-13")):
+            self.storage.reserve_question(
+                attempt_id=f"reset-all-attempt-{user_id}",
+                account_id=1,
+                user_id=user_id,
+                chat_id=-1001,
+                redpacket_id="reset-all",
+                date=date,
+                submission_token=f"reset-all-token-{user_id}",
+                reservation_seconds=300,
+            )
+
+        result = self.storage.reset_all_daily_limits(1, "2026-07-14")
+
+        self.assertEqual(result["user_count"], 2)
+        with self.storage.connect() as conn:
+            reset_users = conn.execute(
+                """
+                SELECT user_id FROM redpacket_limit_reset
+                WHERE account_id = ? AND date = ? ORDER BY user_id
+                """,
+                (1, "2026-07-14"),
+            ).fetchall()
+            attempt_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM redpacket_attempt WHERE account_id = ?",
+                (1,),
+            ).fetchone()["count"]
+        self.assertEqual([int(row["user_id"]) for row in reset_users], [153, 154])
+        self.assertEqual(attempt_count, 3)
+
     def test_single_slot_cannot_be_reserved_concurrently(self) -> None:
         self._create_packet(count=1)
         self._reserve(201)
@@ -817,7 +851,9 @@ class PluginActionTest(unittest.TestCase):
 
         usage = plugin._usage(Context())
         self.assertIn("。airp reset [用户ID]", usage)
+        self.assertIn("。airp reset all", usage)
         self.assertIn("。airp-7", usage)
+        self.assertIn("自动删除原命令消息", usage)
         self.assertNotIn(",airp", usage)
 
     def test_create_auto_adjusts_incompatible_reward_bounds_from_command(self) -> None:
@@ -1228,6 +1264,17 @@ class PluginActionTest(unittest.TestCase):
 
                 actions = await plugin._handle_admin_command(Context(), -1001, 77, 1, [])
                 self.assertEqual(actions[0]["send_via"], "interaction_bot")
+                self.assertNotIn("reply_to_message_id", actions[0])
+                self.assertEqual(
+                    actions[1],
+                    {
+                        "type": "delete_message",
+                        "chat_id": -1001,
+                        "message_id": 1,
+                        "send_via": "userbot_reply",
+                    },
+                )
+                self.assertEqual(actions[2], {"type": "end_session"})
                 packet = plugin.storage.list_redpackets(1, -1001)[0]
                 self.assertEqual(packet["total_amount"], 150000)
                 self.assertEqual(packet["question_count"], 40)
@@ -1250,12 +1297,46 @@ class PluginActionTest(unittest.TestCase):
                 plugin._today = lambda ctx: "2026-07-14"
                 actions = await plugin._handle_admin_command(Context(), -1001, 77, 1, ["reset"])
                 self.assertIn("用户 <code>77</code>", actions[0]["text"])
+                self.assertNotIn("reply_to_message_id", actions[0])
+                self.assertEqual(actions[1]["type"], "delete_message")
+                self.assertEqual(actions[1]["message_id"], 1)
                 with plugin.storage.connect() as conn:
                     row = conn.execute(
                         "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
                         (1, 77, "2026-07-14"),
                     ).fetchone()
                 self.assertIsNotNone(row)
+
+        asyncio.run(run_case())
+
+    def test_admin_reset_all_command_resets_every_daily_participant(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+
+                class Context:
+                    account_id = 1
+                    config = {"timezone": "Asia/Shanghai"}
+                    account_config = {}
+                    log = None
+
+                plugin._today = lambda ctx: "2026-07-14"
+                with patch.object(
+                    plugin.storage,
+                    "reset_all_daily_limits",
+                    return_value={"user_count": 3},
+                ) as reset_all:
+                    actions = await plugin._handle_admin_command(Context(), -1001, 77, 1, ["reset", "all"])
+
+                reset_all.assert_called_once_with(1, "2026-07-14")
+                self.assertIn("全部 <code>3</code> 名用户", actions[0]["text"])
+                self.assertEqual(actions[1]["type"], "delete_message")
+                self.assertEqual(actions[1]["send_via"], "userbot_reply")
+
+                invalid = await plugin._handle_admin_command(Context(), -1001, 77, 2, ["reset", "not-a-user"])
+                self.assertEqual([action["type"] for action in invalid], ["send_message"])
+                self.assertEqual(invalid[0]["reply_to_message_id"], 2)
 
         asyncio.run(run_case())
 

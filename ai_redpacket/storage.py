@@ -328,6 +328,36 @@ class AIStorage:
             )
         return {"account_id": account_id, "user_id": user_id, "date": date, "reset_at": reset_at}
 
+    def reset_all_daily_limits(self, account_id: int, date: str) -> dict[str, Any]:
+        with self.transaction() as conn:
+            reset_at = time.time()
+            user_ids = [
+                int(row["user_id"])
+                for row in conn.execute(
+                    """
+                    SELECT DISTINCT user_id
+                    FROM redpacket_attempt
+                    WHERE account_id = ? AND date = ?
+                    """,
+                    (account_id, date),
+                ).fetchall()
+            ]
+            conn.executemany(
+                """
+                INSERT INTO redpacket_limit_reset(account_id, user_id, date, reset_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(account_id, user_id, date) DO UPDATE SET
+                    reset_at = excluded.reset_at
+                """,
+                [(account_id, user_id, date, reset_at) for user_id in user_ids],
+            )
+        return {
+            "account_id": account_id,
+            "date": date,
+            "reset_at": reset_at,
+            "user_count": len(user_ids),
+        }
+
     def create_redpacket(
         self,
         *,
