@@ -106,8 +106,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.13")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.59.1")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.14")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -2786,7 +2786,12 @@ class PluginActionTest(unittest.TestCase):
                 self.assertIsInstance(payout["amount"], int)
                 self.assertEqual(payout["payout_key"], "ai_redpacket:1:rp1:1:77")
                 self.assertEqual(payout["reply_to_user_id"], 77)
-                self.assertIn("先在群里发送一条消息", payout["reply_anchor_missing_text"])
+                self.assertEqual(payout["parse_mode"], "html")
+                self.assertIn("暂未找到 张三 在本群的近期发言", payout["reply_anchor_missing_text"])
+                self.assertIn("请先在群里任意发言一次", payout["reply_anchor_missing_text"])
+                self.assertIn("也可发送以下命令触发补发按钮", payout["reply_anchor_missing_text"])
+                self.assertIn("<code>/airp list</code>", payout["reply_anchor_missing_text"])
+                self.assertNotIn("用户（77）", payout["reply_anchor_missing_text"])
 
                 retry_payload = {
                     "source": {"type": "callback_query"},
@@ -2837,6 +2842,28 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(plugin.storage.get_redpacket("rp1")["remaining_amount"], 0)
 
         asyncio.run(run_case())
+
+    def test_payout_missing_anchor_notice_truncates_user_name(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+
+        class Context:
+            account_id = 1
+
+        action = plugin._payout_action(
+            Context(),
+            -1001,
+            77,
+            "rp1",
+            {
+                "reward": 10,
+                "question_slot_id": 1,
+                "user_display_name": "一二三四五六七八九十十一十二",
+            },
+        )
+
+        self.assertIn("暂未找到 一二三四五六七八九十 在本群的近期发言", action["reply_anchor_missing_text"])
+        self.assertNotIn("十一十二", action["reply_anchor_missing_text"])
+        self.assertNotIn("77", action["reply_anchor_missing_text"])
 
     def test_payout_retry_without_recent_message_only_shows_alert(self) -> None:
         async def run_case() -> None:

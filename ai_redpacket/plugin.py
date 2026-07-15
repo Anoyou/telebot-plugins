@@ -1466,18 +1466,20 @@ class AIRedpacketPlugin(Plugin):
     ) -> dict[str, Any]:
         reward = int(result["reward"])
         payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
+        user_display_name = html.escape(truncate_display_name(result.get("user_display_name")))
         action = {
             "type": "payout",
             "chat_id": chat_id,
             "amount": reward,
             "text": f"+{reward}",
-            "parse_mode": "plain",
+            "parse_mode": "html",
             "reply_to_user_id": user_id,
             "reply_to_search_limit": 200,
             "reply_anchor_missing_text": (
-                "未找到用户（{user_id}）近期发言，暂时无法核验或补发奖励。若尚未收到奖励，"
-                f"请先在群里发送一条消息，再点击答题结果下方或“{self._prefix(ctx)}{self._command(ctx)} list”"
-                "回执中的“申请补发奖励”。"
+                f"暂未找到 {user_display_name} 在本群的近期发言，因此暂时无法核验和补发奖励。\n\n"
+                "请先在群里任意发言一次，再重新点击“申请补发奖励”。\n\n"
+                "也可发送以下命令触发补发按钮：\n"
+                "<code>/airp list</code>"
             ),
             "payout_key": payout_key,
             "payout_probe_fingerprint": payout_key,
