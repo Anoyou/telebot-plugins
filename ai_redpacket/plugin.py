@@ -2253,7 +2253,8 @@ class AIRedpacketPlugin(Plugin):
         return value == command or value.startswith(command + " ")
 
     def _command(self, ctx: PluginContext) -> str:
-        return str((ctx.config or {}).get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
+        config = getattr(ctx, "config", None) or {}
+        return str(config.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
 
     def _weekly_command(self, ctx: PluginContext) -> str:
         return f"{self._command(ctx)}-7"
@@ -2270,7 +2271,8 @@ class AIRedpacketPlugin(Plugin):
         return datetime.now(self._timezone(ctx)).date().isoformat()
 
     def _timezone(self, ctx: PluginContext) -> ZoneInfo:
-        timezone = str((ctx.config or {}).get("timezone") or "Asia/Shanghai")
+        config = getattr(ctx, "config", None) or {}
+        timezone = str(config.get("timezone") or "Asia/Shanghai")
         try:
             return ZoneInfo(timezone)
         except Exception:
@@ -2322,9 +2324,10 @@ class AIRedpacketPlugin(Plugin):
             return self._today(ctx)
 
     def _int_config(self, ctx: PluginContext, key: str, default: int, minimum: int, maximum: int) -> int:
-        value = (ctx.config or {}).get(key, default)
+        config = getattr(ctx, "config", None) or {}
+        value = config.get(key, default)
         if key in {"reward_min", "reward_max"}:
-            nested = _dict((ctx.config or {}).get("reward"))
+            nested = _dict(config.get("reward"))
             value = nested.get("min" if key == "reward_min" else "max", value)
         try:
             parsed = int(value)
@@ -2364,10 +2367,18 @@ class AIRedpacketPlugin(Plugin):
 
     def _render_template(self, ctx: PluginContext, key: str, default: str, **values: Any) -> str:
         template = str((getattr(ctx, "config", None) or {}).get(key) or default)
+        render_values = {
+            "date": self._today(ctx),
+            "daily_limit": self._int_config(ctx, "daily_limit", 1, 1, 100),
+            "retry_count": self._int_config(ctx, "retry_count", 1, 0, 10),
+            "prefix": html.escape(self._prefix(ctx)),
+            "command": html.escape(self._command(ctx)),
+            **values,
+        }
         try:
-            return template.format_map(values)
+            return template.format_map(render_values)
         except (KeyError, ValueError):
-            return default.format_map(values)
+            return default.format_map(render_values)
 
     async def _log(self, ctx: PluginContext, level: str, message: str, **detail: Any) -> None:
         logger = getattr(ctx, "log", None)

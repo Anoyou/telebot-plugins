@@ -106,7 +106,7 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.15")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.16")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -1467,16 +1467,23 @@ class PluginActionTest(unittest.TestCase):
             account_id = 1
             config = {
                 "timezone": "Asia/Shanghai",
-                "settlement_message_template": "结算 {redpacket_id} {status} {ranking}",
+                "daily_limit": 3,
+                "retry_count": 2,
+                "command": "rain",
+                "settlement_message_template": (
+                    "结算 {date} {daily_limit}/{retry_count} {prefix}{command} "
+                    "{redpacket_id} {status} {ranking}"
+                ),
                 "weekly_message_template": "周榜 {weekly_title} {period_start} {period_end} {count_ranking} / {reward_ranking}",
             }
 
         plugin.storage = Storage()
-        settlement = plugin._render_redpacket_settlement(
-            Context(),
-            {"id": "custom", "status": "expired", "total_amount": 100, "remaining_amount": 100},
-        )
-        self.assertEqual(settlement, ["结算 custom 已到期 本次无人成功领取。"])
+        with patch.object(plugin, "_today", return_value="2026-07-15"):
+            settlement = plugin._render_redpacket_settlement(
+                Context(),
+                {"id": "custom", "status": "expired", "total_amount": 100, "remaining_amount": 100},
+            )
+        self.assertEqual(settlement, ["结算 2026-07-15 3/2 。rain custom 已到期 本次无人成功领取。"])
         weekly = plugin._render_weekly_leaderboard(
             Context(),
             -1001,
@@ -1485,6 +1492,10 @@ class PluginActionTest(unittest.TestCase):
         )
         self.assertIn("周榜 AI 红包本周排行榜", weekly)
         self.assertEqual(weekly.count("本周期暂无成功答题记录。"), 2)
+
+        with patch.object(plugin, "_today", return_value="2026-07-15"):
+            fallback = plugin._render_template(Context(), "settlement_message_template", "默认 {date}", typo="x")
+        self.assertIn("2026-07-15", fallback)
 
     def test_startup_registers_settlement_daily_reminder_and_sunday_ten_jobs(self) -> None:
         async def run_case() -> None:

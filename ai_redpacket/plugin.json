@@ -3,7 +3,7 @@
   "display_name": "AI 答题红包",
   "description": "从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
   "author": "Anoyou",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "entry": "plugin.py",
   "category": "interactive",
   "min_telepilot_version": "0.60.2",
@@ -334,49 +334,49 @@
         "type": "string",
         "title": "红包开场模板",
         "default": "<b>AI 答题红包</b>\n总金额：<code>{total_amount}</code>\n题目数量：<code>{question_count}</code>\n红包 ID：<code>{redpacket_id}</code>\n\n今日日期：<code>{date}</code>\n每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。",
-        "description": "占位符：{total_amount} 总金额；{question_count} 题目数；{redpacket_id} 红包 ID；{date} 今日日期；{daily_limit} 每日成功上限；{retry_count} 重试次数。支持 Telegram HTML。"
+        "description": "场景占位符：{total_amount} 总金额、{question_count} 题目数、{redpacket_id} 红包 ID。所有模板均可使用 {date}、{daily_limit}、{retry_count}、{prefix}、{command}。支持 Telegram HTML。"
       },
       "question_message_template": {
         "type": "string",
         "title": "答题题面模板",
         "default": "<b>AI 红包题目</b>\n{question}\n\n{options}\n\n请选择唯一正确答案。",
-        "description": "占位符：{question} 题目；{options} 三个选项；{date} 今日日期；{daily_limit} 每日成功上限；{retry_count} 重试次数。支持 Telegram HTML。"
+        "description": "场景占位符：{question} 题目、{options} 三个选项；另可使用全部通用占位符。支持 Telegram HTML。"
       },
       "success_message_template": {
         "type": "string",
         "title": "答对结果模板",
         "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答对了，获得 {reward}</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
-        "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}、{date}、{daily_limit}、{retry_count}。"
+        "description": "场景占位符：{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。"
       },
       "failed_message_template": {
         "type": "string",
         "title": "挑战失败模板",
         "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答题机会已用完，今天的挑战已结束</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
-        "description": "占位符：{question}、{reward}、{answer}、{explanation}、{source}、{date}、{daily_limit}、{retry_count}。"
+        "description": "场景占位符：{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。"
       },
       "settlement_message_template": {
         "type": "string",
         "title": "红包结算模板",
         "default": "<b>AI 红包每日结算</b>\n红包 ID：<code>{redpacket_id}</code>\n状态：{status}\n已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code>\n领取人数：<code>{claim_count}</code>\n\n运气王：<b>{luckiest_name}</b> · {luckiest_reward}\n倒霉蛋：<b>{unluckiest_name}</b> · {unluckiest_reward}\n\n{ranking}",
-        "description": "占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}。"
+        "description": "场景占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}；另可使用全部通用占位符。"
       },
       "reminder_message_template": {
         "type": "string",
         "title": "未领完红包提醒模板",
         "default": "<b>昨日雨露均沾即将到期</b>\n\n以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：\n{redpackets}",
-        "description": "占位符：{packet_date} 红包创建日期；{expire_time} 当日截止时间；{redpackets} 未领完红包、领取进度和跳转链接。"
+        "description": "场景占位符：{packet_date} 红包创建日期、{expire_time} 当日截止时间、{redpackets} 未领完红包、领取进度和跳转链接；另可使用全部通用占位符。"
       },
       "weekly_message_template": {
         "type": "string",
         "title": "每周榜单模板",
         "default": "<b>{weekly_title}</b>\n周期：<code>{period_start}</code> 至 <code>{period_end}</code>\n\n<blockquote expandable><b>答对次数 TOP 5</b>\n{count_ranking}\n\n<b>获得奖金 TOP 5</b>\n{reward_ranking}</blockquote>",
-        "description": "占位符：{weekly_title}、{period_start}、{period_end}、{count_ranking}、{reward_ranking}。"
+        "description": "场景占位符：{weekly_title}、{period_start}、{period_end}、{count_ranking}、{reward_ranking}；另可使用全部通用占位符。"
       },
       "template_placeholders": {
         "type": "string",
         "title": "模板占位符（只读）",
         "readOnly": true,
-        "default": "通用：{date} {daily_limit} {retry_count}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}"
+        "default": "通用（所有模板均可用）：{date} {daily_limit} {retry_count} {prefix} {command}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}"
       },
       "packet_message_preview": {
         "type": "string",
