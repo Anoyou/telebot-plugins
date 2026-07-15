@@ -1555,13 +1555,7 @@ class AIRedpacketPlugin(Plugin):
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
         owner = html.escape(str(result.get("user_display_name") or f"用户{result.get('user_id') or ''}"))
-        text = f"<b>答题者：{owner}</b>\n{body}"
-        if correct:
-            text += (
-                "\n\n<i>若未收到奖励，请先在群里发言一次，再点击下方“申请补发奖励”。"
-                "系统会核验发放状态，已发放的奖励不会重复发放。</i>"
-            )
-        return text
+        return f"<b>答题者：{owner}</b>\n{body}"
 
     def _answer_markup(self, redpacket_id: str, attempt_id: str, token: str, attempt: dict[str, Any]) -> dict[str, Any]:
         return {

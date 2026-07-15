@@ -106,7 +106,7 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.14")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.15")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -2610,7 +2610,8 @@ class PluginActionTest(unittest.TestCase):
         failed = plugin._render_result(Context(), payload, correct=False)
         self.assertIn("答题者：张三", success)
         self.assertIn("成功 2026-07-14 3/2", success)
-        self.assertIn("申请补发奖励", success)
+        self.assertNotIn("申请补发奖励", success)
+        self.assertNotIn("若未收到奖励", success)
         self.assertIn("答题者：张三", failed)
         self.assertIn("失败 2026-07-14 3/2", failed)
 
@@ -2781,7 +2782,8 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(buttons[0][0]["callback_data"], "airp:repay:rp1:a1")
                 self.assertEqual(buttons[1][0]["text"], "我也要雨露均沾")
                 self.assertIn("答题者：张三", edit["text"])
-                self.assertIn("已发放的奖励不会重复发放", edit["text"])
+                self.assertNotIn("若未收到奖励", edit["text"])
+                self.assertNotIn("已发放的奖励不会重复发放", edit["text"])
                 self.assertEqual(payout["amount"], 10)
                 self.assertIsInstance(payout["amount"], int)
                 self.assertEqual(payout["payout_key"], "ai_redpacket:1:rp1:1:77")
