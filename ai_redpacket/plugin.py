@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.17"
+PLUGIN_VERSION = "0.1.18"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -633,18 +633,18 @@ class AIRedpacketPlugin(Plugin):
         if action in {"reset", "重置"}:
             date = self._today(ctx)
             if len(args) >= 2 and args[1].lower() in {"all", "全部", "所有"}:
-                result = self.storage.reset_all_daily_limits(ctx.account_id, date)
+                result = self.storage.reset_all_daily_limits(ctx.account_id, chat_id, date)
                 user_count = int(result["user_count"])
                 notice_key = f"ai_redpacket:reset_notice:{secrets.token_hex(8)}"
                 await self._log(
                     ctx,
                     "info",
-                    "管理员重置当日所有人的红包参与限制",
-                    **{"用户数": user_count, "日期": date},
+                    "管理员重置当前群当日所有人的红包参与限制",
+                    **{"用户数": user_count, "日期": date, "聊天ID": chat_id},
                 )
                 actions = [
                     _send(
-                        f"已重置 <code>{date}</code> 当日全部 <code>{user_count}</code> 名用户的领取与答题限制。既有奖励和红包记录不会撤销。",
+                        f"已重置本群 <code>{date}</code> 当日全部 <code>{user_count}</code> 名用户的领取与答题限制。既有奖励和红包记录不会撤销。",
                         chat_id=chat_id,
                         via="interaction_bot",
                         save_message_id_key=notice_key,
@@ -667,17 +667,17 @@ class AIRedpacketPlugin(Plugin):
                 if not re.fullmatch(r"[1-9]\d*", args[1]):
                     return [_send("用户 ID 必须是正整数。", chat_id=chat_id, reply_to=reply_to)]
                 target_user_id = int(args[1])
-            self.storage.reset_daily_limit(ctx.account_id, target_user_id, date)
+            self.storage.reset_daily_limit(ctx.account_id, chat_id, target_user_id, date)
             notice_key = f"ai_redpacket:reset_notice:{secrets.token_hex(8)}"
             await self._log(
                 ctx,
                 "info",
-                "管理员重置红包领取与答题限制",
-                **{"用户ID": target_user_id, "日期": date},
+                "管理员重置当前群红包领取与答题限制",
+                **{"用户ID": target_user_id, "日期": date, "聊天ID": chat_id},
             )
             actions = [
                 _send(
-                    f"已重置用户 <code>{target_user_id}</code> 在 <code>{date}</code> 的领取与答题限制。既有奖励和红包记录不会撤销。",
+                    f"已重置本群用户 <code>{target_user_id}</code> 在 <code>{date}</code> 的领取与答题限制。既有奖励和红包记录不会撤销。",
                     chat_id=chat_id,
                     via="interaction_bot",
                     save_message_id_key=notice_key,
@@ -2313,8 +2313,8 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{base} bank list</code> 查看题库\n"
             f"<code>{base} create 400</code> 创建默认题数红包\n"
             f"<code>{base} create 200 20 题库ID</code> 指定题数和题库\n"
-            f"<code>{base} reset [用户ID]</code> 重置当天领取与答题限制\n"
-            f"<code>{base} reset all</code> 重置当天所有人的参与限制\n"
+            f"<code>{base} reset [用户ID]</code> 重置当前群当天领取与答题限制\n"
+            f"<code>{base} reset all</code> 重置当前群当天所有人的参与限制\n"
             f"<code>{self._prefix(ctx)}{self._weekly_command(ctx)}</code> 查看本周排行榜\n"
             f"<code>{base} list</code> 查看进行中红包、领取进度和开题消息，并提供补发入口\n"
             "<code>/airp list</code> 普通群员自助查询同一列表\n"

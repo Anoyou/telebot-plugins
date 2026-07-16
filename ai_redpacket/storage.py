@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class StorageError(RuntimeError):
@@ -166,10 +166,11 @@ class AIStorage:
 
                 CREATE TABLE IF NOT EXISTS redpacket_limit_reset (
                     account_id INTEGER NOT NULL,
+                    chat_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
                     date TEXT NOT NULL,
                     reset_at REAL NOT NULL,
-                    PRIMARY KEY(account_id, user_id, date)
+                    PRIMARY KEY(account_id, chat_id, user_id, date)
                 );
 
                 CREATE TABLE IF NOT EXISTS redpacket_weekly_report (
@@ -199,6 +200,42 @@ class AIStorage:
             }
             if "user_display_name" not in attempt_columns:
                 conn.execute("ALTER TABLE redpacket_attempt ADD COLUMN user_display_name TEXT NOT NULL DEFAULT ''")
+            reset_columns = {
+                str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket_limit_reset)").fetchall()
+            }
+            if "chat_id" not in reset_columns:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    conn.execute("ALTER TABLE redpacket_limit_reset RENAME TO redpacket_limit_reset_legacy")
+                    conn.execute(
+                        """
+                        CREATE TABLE redpacket_limit_reset (
+                            account_id INTEGER NOT NULL,
+                            chat_id INTEGER NOT NULL,
+                            user_id INTEGER NOT NULL,
+                            date TEXT NOT NULL,
+                            reset_at REAL NOT NULL,
+                            PRIMARY KEY(account_id, chat_id, user_id, date)
+                        )
+                        """
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
+                        SELECT legacy.account_id, attempt.chat_id, legacy.user_id, legacy.date, MAX(legacy.reset_at)
+                        FROM redpacket_limit_reset_legacy AS legacy
+                        JOIN redpacket_attempt AS attempt
+                          ON attempt.account_id = legacy.account_id
+                         AND attempt.user_id = legacy.user_id
+                         AND attempt.date = legacy.date
+                        GROUP BY legacy.account_id, attempt.chat_id, legacy.user_id, legacy.date
+                        """
+                    )
+                    conn.execute("DROP TABLE redpacket_limit_reset_legacy")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
             row = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
             if row is None:
                 conn.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
@@ -323,21 +360,27 @@ class AIStorage:
             for row in rows
         ]
 
-    def reset_daily_limit(self, account_id: int, user_id: int, date: str) -> dict[str, Any]:
+    def reset_daily_limit(self, account_id: int, chat_id: int, user_id: int, date: str) -> dict[str, Any]:
         with self.transaction() as conn:
             reset_at = time.time()
             conn.execute(
                 """
-                INSERT INTO redpacket_limit_reset(account_id, user_id, date, reset_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(account_id, user_id, date) DO UPDATE SET
+                INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(account_id, chat_id, user_id, date) DO UPDATE SET
                     reset_at = excluded.reset_at
                 """,
-                (account_id, user_id, date, reset_at),
+                (account_id, chat_id, user_id, date, reset_at),
             )
-        return {"account_id": account_id, "user_id": user_id, "date": date, "reset_at": reset_at}
+        return {
+            "account_id": account_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "date": date,
+            "reset_at": reset_at,
+        }
 
-    def reset_all_daily_limits(self, account_id: int, date: str) -> dict[str, Any]:
+    def reset_all_daily_limits(self, account_id: int, chat_id: int, date: str) -> dict[str, Any]:
         with self.transaction() as conn:
             reset_at = time.time()
             user_ids = [
@@ -346,22 +389,23 @@ class AIStorage:
                     """
                     SELECT DISTINCT user_id
                     FROM redpacket_attempt
-                    WHERE account_id = ? AND date = ?
+                    WHERE account_id = ? AND chat_id = ? AND date = ?
                     """,
-                    (account_id, date),
+                    (account_id, chat_id, date),
                 ).fetchall()
             ]
             conn.executemany(
                 """
-                INSERT INTO redpacket_limit_reset(account_id, user_id, date, reset_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(account_id, user_id, date) DO UPDATE SET
+                INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(account_id, chat_id, user_id, date) DO UPDATE SET
                     reset_at = excluded.reset_at
                 """,
-                [(account_id, user_id, date, reset_at) for user_id in user_ids],
+                [(account_id, chat_id, user_id, date, reset_at) for user_id in user_ids],
             )
         return {
             "account_id": account_id,
+            "chat_id": chat_id,
             "date": date,
             "reset_at": reset_at,
             "user_count": len(user_ids),
@@ -855,8 +899,8 @@ class AIStorage:
                 raise StorageError("红包已经过期")
 
             reset = conn.execute(
-                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
-                (account_id, user_id, date),
+                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?",
+                (account_id, chat_id, user_id, date),
             ).fetchone()
             reset_at = float(reset["reset_at"]) if reset else 0.0
             daily = conn.execute(
@@ -1071,8 +1115,8 @@ class AIStorage:
                 remaining_seconds = max(1, math.ceil(cooldown - elapsed))
                 raise StorageError(f"点击太快，请 {remaining_seconds} 秒后再试，本次不会消耗答题机会")
             reset = conn.execute(
-                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
-                (account_id, user_id, row["date"]),
+                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?",
+                (account_id, chat_id, user_id, row["date"]),
             ).fetchone()
             reset_at = float(reset["reset_at"]) if reset else 0.0
             daily = conn.execute(

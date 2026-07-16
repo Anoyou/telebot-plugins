@@ -3,10 +3,10 @@
   "display_name": "AI 答题红包",
   "description": "从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
   "author": "Anoyou",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "entry": "plugin.py",
   "category": "interactive",
-  "min_telepilot_version": "0.60.5",
+  "min_telepilot_version": "0.60.6",
   "cleanup_mode": "resource",
   "permissions": [
     "send_message",
@@ -44,7 +44,7 @@
   ],
   "commands": ["airp", "airp-7"],
   "tags": ["redpacket", "quiz", "ai", "interaction-bot", "payout"],
-  "usage": "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；{prefix}{command} reset [用户ID] 重置当天领取与答题限制；{prefix}{command} reset all 重置当天所有人的参与限制；{prefix}{command}-7 查询本周排行榜；{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。",
+  "usage": "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；{prefix}{command} reset [用户ID] 重置当前群当天领取与答题限制；{prefix}{command} reset all 重置当前群当天所有人的参与限制；{prefix}{command}-7 查询本周排行榜；{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。",
   "strict_trace": true,
   "capabilities": {},
   "interaction_profile": "session_game",
@@ -52,14 +52,14 @@
     "type": "object",
     "x-ui-mode": "single",
     "x-category": "interactive",
-    "x-usage-guide": "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；{prefix}{command} reset [用户ID] 重置当天领取与答题限制；{prefix}{command} reset all 重置当天所有人的参与限制；{prefix}{command}-7 查询本周排行榜；{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。",
+    "x-usage-guide": "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；{prefix}{command} reset [用户ID] 重置当前群当天领取与答题限制；{prefix}{command} reset all 重置当前群当天所有人的参与限制；{prefix}{command}-7 查询本周排行榜；{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。",
     "additionalProperties": false,
     "properties": {
       "usage_preview": {
         "type": "string",
         "title": "使用说明（只读）",
         "readOnly": true,
-        "default": "1. 填写题库来源 URL，并保存插件配置。\n2. 选择 Provider 和模型，点击“生成/补齐题库”；已有题目会保留并补齐到目标数量。\n3. 直接发送 {prefix}{command} 按默认配置创建总额 150000、40 份的红包。\n4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n6. 测试后可发送 {prefix}{command} reset 重置自己，或发送 {prefix}{command} reset all 重置当天所有人的参与限制。\n7. 发送 {prefix}{command} bank list 查看题库；管理员用 {prefix}{command} list、普通群员用 /airp list 查看进行中红包的领取进度、开题消息链接和补发入口。管理员原命令自动删除但列表回执保留。\n8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。\n10. 管理员创建、重置或关闭红包成功后会自动删除原命令消息；参数错误或操作失败时保留。\n11. 重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。\n12. 答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态且不会重复发放。答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n13. 红包实际到期时间不会晚于创建日次日 08:30；前一日红包如在 08:00 仍未领完，会按群发送一次提醒，08:30 后自动结算。"
+        "default": "1. 填写题库来源 URL，并保存插件配置。\n2. 选择 Provider 和模型，点击“生成/补齐题库”；已有题目会保留并补齐到目标数量。\n3. 直接发送 {prefix}{command} 按默认配置创建总额 150000、40 份的红包。\n4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n6. 测试后可发送 {prefix}{command} reset 重置自己在当前群的限制，或发送 {prefix}{command} reset all 重置当前群当天所有人的参与限制。\n7. 发送 {prefix}{command} bank list 查看题库；管理员用 {prefix}{command} list、普通群员用 /airp list 查看进行中红包的领取进度、开题消息链接和补发入口。管理员原命令自动删除但列表回执保留。\n8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。\n10. 管理员创建、重置或关闭红包成功后会自动删除原命令消息；参数错误或操作失败时保留。\n11. 重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。\n12. 答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态且不会重复发放。答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n13. 红包实际到期时间不会晚于创建日次日 08:30；前一日红包如在 08:00 仍未领完，会按群发送一次提醒，08:30 后自动结算。"
       },
       "command": {
         "type": "string",

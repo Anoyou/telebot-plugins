@@ -160,9 +160,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.17")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.17")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.5")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.18")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.18")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.6")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -337,7 +337,7 @@ class StorageMigrationTest(unittest.TestCase):
                 version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()["version"]
                 redpacket_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket)")}
                 attempt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket_attempt)")}
-            self.assertEqual(version, 5)
+            self.assertEqual(version, 6)
             self.assertIn("settled_at", redpacket_columns)
             self.assertIn("user_display_name", attempt_columns)
             with storage.connect() as conn:
@@ -346,6 +346,114 @@ class StorageMigrationTest(unittest.TestCase):
                 ).fetchone()
             self.assertIsNotNone(reminder_table)
             self.assertEqual(storage.get_source_cache(1, "https://example.com/source")["content"], "缓存正文")
+
+    def test_version_five_global_resets_migrate_to_attempt_chats(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "ai_redpacket.sqlite3"
+            storage = storage_module.AIStorage(path)
+            storage.replace_bank(account_id=1, bank_id="bank", title="测试题库", questions=_questions(1))
+            for packet_id, chat_id in (("chat-a", -1001), ("chat-b", -2002)):
+                storage.create_redpacket(
+                    redpacket_id=packet_id,
+                    account_id=1,
+                    chat_id=chat_id,
+                    creator_id=99,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                storage.reserve_question(
+                    attempt_id=f"attempt-{packet_id}",
+                    account_id=1,
+                    user_id=77,
+                    chat_id=chat_id,
+                    redpacket_id=packet_id,
+                    date="2026-07-16",
+                    submission_token=f"token-{packet_id}",
+                    reservation_seconds=300,
+                )
+
+            with storage.connect() as conn:
+                conn.executescript(
+                    """
+                    DROP TABLE redpacket_limit_reset;
+                    CREATE TABLE redpacket_limit_reset (
+                        account_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        reset_at REAL NOT NULL,
+                        PRIMARY KEY(account_id, user_id, date)
+                    );
+                    INSERT INTO redpacket_limit_reset(account_id, user_id, date, reset_at)
+                    VALUES (1, 77, '2026-07-16', 12345);
+                    UPDATE schema_meta SET version = 5;
+                    """
+                )
+
+            migrated = storage_module.AIStorage(path)
+            with migrated.connect() as conn:
+                version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()["version"]
+                rows = conn.execute(
+                    """
+                    SELECT chat_id, reset_at FROM redpacket_limit_reset
+                    WHERE account_id = 1 AND user_id = 77 AND date = '2026-07-16'
+                    ORDER BY chat_id
+                    """
+                ).fetchall()
+            self.assertEqual(version, 6)
+            self.assertEqual([(int(row["chat_id"]), float(row["reset_at"])) for row in rows], [(-2002, 12345.0), (-1001, 12345.0)])
+
+    def test_version_five_reset_migration_rolls_back_atomically_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "ai_redpacket.sqlite3"
+            storage = storage_module.AIStorage(path)
+            with storage.connect() as conn:
+                conn.executescript(
+                    """
+                    DROP TABLE redpacket_limit_reset;
+                    CREATE TABLE redpacket_limit_reset (
+                        account_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        reset_at REAL NOT NULL,
+                        PRIMARY KEY(account_id, user_id, date)
+                    );
+                    INSERT INTO redpacket_limit_reset(account_id, user_id, date, reset_at)
+                    VALUES (1, 77, '2026-07-16', 12345);
+                    UPDATE schema_meta SET version = 5;
+                    """
+                )
+
+            class InterruptedMigrationStorage(storage_module.AIStorage):
+                def connect(self):
+                    conn = super().connect()
+
+                    def deny_legacy_drop(action, arg1, _arg2, _database, _trigger):
+                        if action == sqlite3.SQLITE_DROP_TABLE and arg1 == "redpacket_limit_reset_legacy":
+                            return sqlite3.SQLITE_DENY
+                        return sqlite3.SQLITE_OK
+
+                    conn.set_authorizer(deny_legacy_drop)
+                    return conn
+
+            with self.assertRaises(sqlite3.DatabaseError):
+                InterruptedMigrationStorage(path)
+
+            with sqlite3.connect(path) as conn:
+                current_columns = {
+                    str(row[1]) for row in conn.execute("PRAGMA table_info(redpacket_limit_reset)").fetchall()
+                }
+                legacy_table = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'redpacket_limit_reset_legacy'"
+                ).fetchone()
+                version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()[0]
+                reset_count = conn.execute("SELECT COUNT(*) FROM redpacket_limit_reset").fetchone()[0]
+
+            self.assertNotIn("chat_id", current_columns)
+            self.assertIsNone(legacy_table)
+            self.assertEqual(version, 5)
+            self.assertEqual(reset_count, 1)
 
 
 class StorageFlowTest(unittest.TestCase):
@@ -757,7 +865,7 @@ class StorageFlowTest(unittest.TestCase):
                 reservation_seconds=300,
             )
 
-        self.storage.reset_daily_limit(1, 152, "2026-07-14")
+        self.storage.reset_daily_limit(1, -1001, 152, "2026-07-14")
         second = self.storage.reserve_question(
             attempt_id="reset-attempt-two",
             account_id=1,
@@ -792,24 +900,113 @@ class StorageFlowTest(unittest.TestCase):
                 submission_token=f"reset-all-token-{user_id}",
                 reservation_seconds=300,
             )
+        self.storage.create_redpacket(
+            redpacket_id="reset-all-other-chat",
+            account_id=1,
+            chat_id=-2002,
+            creator_id=99,
+            bank_id="bank",
+            total_amount=10,
+            rewards=[10],
+            ttl_seconds=3600,
+        )
+        self.storage.reserve_question(
+            attempt_id="reset-all-other-chat-attempt",
+            account_id=1,
+            user_id=156,
+            chat_id=-2002,
+            redpacket_id="reset-all-other-chat",
+            date="2026-07-14",
+            submission_token="reset-all-other-chat-token",
+            reservation_seconds=300,
+        )
 
-        result = self.storage.reset_all_daily_limits(1, "2026-07-14")
+        result = self.storage.reset_all_daily_limits(1, -1001, "2026-07-14")
 
         self.assertEqual(result["user_count"], 2)
         with self.storage.connect() as conn:
             reset_users = conn.execute(
                 """
                 SELECT user_id FROM redpacket_limit_reset
-                WHERE account_id = ? AND date = ? ORDER BY user_id
+                WHERE account_id = ? AND chat_id = ? AND date = ? ORDER BY user_id
                 """,
-                (1, "2026-07-14"),
+                (1, -1001, "2026-07-14"),
             ).fetchall()
             attempt_count = conn.execute(
                 "SELECT COUNT(*) AS count FROM redpacket_attempt WHERE account_id = ?",
                 (1,),
             ).fetchone()["count"]
         self.assertEqual([int(row["user_id"]) for row in reset_users], [153, 154])
-        self.assertEqual(attempt_count, 3)
+        self.assertEqual(attempt_count, 4)
+        with self.storage.connect() as conn:
+            other_chat_reset = conn.execute(
+                """
+                SELECT 1 FROM redpacket_limit_reset
+                WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?
+                """,
+                (1, -2002, 156, "2026-07-14"),
+            ).fetchone()
+        self.assertIsNone(other_chat_reset)
+
+    def test_single_reset_only_unlocks_the_selected_chat(self) -> None:
+        for packet_id, chat_id in (("scope-b-first", -2002), ("scope-a", -1001), ("scope-b-second", -2002)):
+            self.storage.create_redpacket(
+                redpacket_id=packet_id,
+                account_id=1,
+                chat_id=chat_id,
+                creator_id=99,
+                bank_id="bank",
+                total_amount=10,
+                rewards=[10],
+                ttl_seconds=3600,
+            )
+        first = self.storage.reserve_question(
+            attempt_id="scope-b-first-attempt",
+            account_id=1,
+            user_id=157,
+            chat_id=-2002,
+            redpacket_id="scope-b-first",
+            date="2026-07-14",
+            submission_token="scope-b-first-token",
+            reservation_seconds=300,
+        )
+        self.storage.submit_answer(
+            attempt_id="scope-b-first-attempt",
+            account_id=1,
+            user_id=157,
+            chat_id=-2002,
+            redpacket_id="scope-b-first",
+            option_index=int(first["answer_index"]),
+            submission_token="scope-b-first-token",
+            submission_key="scope-b-first-submit",
+            retry_count=1,
+            daily_limit=1,
+        )
+
+        self.storage.reset_daily_limit(1, -1001, 157, "2026-07-14")
+
+        unlocked = self.storage.reserve_question(
+            attempt_id="scope-a-attempt",
+            account_id=1,
+            user_id=157,
+            chat_id=-1001,
+            redpacket_id="scope-a",
+            date="2026-07-14",
+            submission_token="scope-a-token",
+            reservation_seconds=300,
+        )
+        self.assertEqual(unlocked["id"], "scope-a-attempt")
+        with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
+            self.storage.reserve_question(
+                attempt_id="scope-b-second-attempt",
+                account_id=1,
+                user_id=157,
+                chat_id=-2002,
+                redpacket_id="scope-b-second",
+                date="2026-07-14",
+                submission_token="scope-b-second-token",
+                reservation_seconds=300,
+            )
 
     def test_unanswered_timeout_releases_question_without_consuming_attempt(self) -> None:
         self._create_packet("timeout-return", 1)
@@ -2143,8 +2340,8 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(actions[1]["message_id"], 1)
                 with plugin.storage.connect() as conn:
                     row = conn.execute(
-                        "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND user_id = ? AND date = ?",
-                        (1, 77, "2026-07-14"),
+                        "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?",
+                        (1, -1001, 77, "2026-07-14"),
                     ).fetchone()
                 self.assertIsNotNone(row)
 
@@ -2188,8 +2385,8 @@ class PluginActionTest(unittest.TestCase):
                     timer_task = next(iter(plugin._timer_tasks.values()))
                     await timer_task
 
-                reset_all.assert_called_once_with(1, "2026-07-14")
-                self.assertIn("全部 <code>3</code> 名用户", actions[0]["text"])
+                reset_all.assert_called_once_with(1, -1001, "2026-07-14")
+                self.assertIn("本群 <code>2026-07-14</code> 当日全部 <code>3</code> 名用户", actions[0]["text"])
                 self.assertEqual(actions[0]["send_via"], "interaction_bot")
                 self.assertIn("save_message_id_key", actions[0])
                 self.assertEqual(actions[1]["type"], "delete_message")
