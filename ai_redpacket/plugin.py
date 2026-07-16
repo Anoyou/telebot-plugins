@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.21"
+PLUGIN_VERSION = "0.1.22"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -2081,6 +2081,7 @@ class AIRedpacketPlugin(Plugin):
         claimed_amount = int(packet["total_amount"]) - int(packet["remaining_amount"])
         status = "已全部领完" if packet["status"] == "finished" else "已到期"
         if not rows:
+            extreme_values = self._settlement_extreme_values(ctx, "无", 0, "无", 0)
             return [
                 self._render_template(
                     ctx,
@@ -2091,10 +2092,7 @@ class AIRedpacketPlugin(Plugin):
                     claimed_amount=claimed_amount,
                     total_amount=int(packet["total_amount"]),
                     claim_count=0,
-                    luckiest_name="无",
-                    luckiest_reward=0,
-                    unluckiest_name="无",
-                    unluckiest_reward=0,
+                    **extreme_values,
                     ranking="本次无人成功领取。",
                 )
             ]
@@ -2125,6 +2123,13 @@ class AIRedpacketPlugin(Plugin):
             chunk_text = "\n".join(chunk)
             block = f"<blockquote expandable>{title}\n{chunk_text}</blockquote>"
             if index == 0:
+                extreme_values = self._settlement_extreme_values(
+                    ctx,
+                    html.escape(public_names.get(int(luckiest["user_id"]), "匿名用户")),
+                    int(luckiest["reward"]),
+                    html.escape(public_names.get(int(unluckiest["user_id"]), "匿名用户")),
+                    int(unluckiest["reward"]),
+                )
                 messages.append(
                     self._render_template(
                         ctx,
@@ -2135,26 +2140,38 @@ class AIRedpacketPlugin(Plugin):
                         claimed_amount=claimed_amount,
                         total_amount=int(packet["total_amount"]),
                         claim_count=len(rows),
-                        luckiest_name=html.escape(
-                            public_names.get(
-                                int(luckiest["user_id"]),
-                                "匿名用户",
-                            )
-                        ),
-                        luckiest_reward=int(luckiest["reward"]),
-                        unluckiest_name=html.escape(
-                            public_names.get(
-                                int(unluckiest["user_id"]),
-                                "匿名用户",
-                            )
-                        ),
-                        unluckiest_reward=int(unluckiest["reward"]),
+                        **extreme_values,
                         ranking=block,
                     )
                 )
             else:
                 messages.append(block)
         return messages
+
+    def _settlement_extreme_values(
+        self,
+        ctx: PluginContext,
+        luckiest_name: str,
+        luckiest_reward: int,
+        unluckiest_name: str,
+        unluckiest_reward: int,
+    ) -> dict[str, Any]:
+        template = str(
+            (getattr(ctx, "config", None) or {}).get("settlement_message_template")
+            or SETTLEMENT_MESSAGE_TEMPLATE
+        )
+        luckiest_value: int | str = int(luckiest_reward)
+        unluckiest_value: int | str = int(unluckiest_reward)
+        if "{luckiest_name" not in template and "{luckiest_reward" in template:
+            luckiest_value = f"{luckiest_name} · {int(luckiest_reward)}"
+        if "{unluckiest_name" not in template and "{unluckiest_reward" in template:
+            unluckiest_value = f"{unluckiest_name} · {int(unluckiest_reward)}"
+        return {
+            "luckiest_name": luckiest_name,
+            "luckiest_reward": luckiest_value,
+            "unluckiest_name": unluckiest_name,
+            "unluckiest_reward": unluckiest_value,
+        }
 
     def _weekly_period(
         self,

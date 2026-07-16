@@ -171,9 +171,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.21")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.21")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.9")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.22")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.22")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.10")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -1830,6 +1830,13 @@ class PluginActionTest(unittest.TestCase):
         class Context:
             account_id = 1
             client = Client()
+            config = {
+                "settlement_message_template": (
+                    "运气王 · {luckiest_reward}\n"
+                    "倒霉蛋 · {unluckiest_reward}\n\n"
+                    "{ranking}"
+                )
+            }
 
         plugin.storage = Storage()
         messages = asyncio.run(
@@ -1844,7 +1851,9 @@ class PluginActionTest(unittest.TestCase):
                 },
             )
         )
-        self.assertIn("匿名标签", messages[0])
+        self.assertIn("运气王 · 匿名标签 · 30", messages[0])
+        self.assertIn("倒霉蛋 · 匿名标签 · 30", messages[0])
+        self.assertIn("1. 匿名标签 · 30", messages[0])
         self.assertNotIn("数据库中的真实姓名", messages[0])
 
     def test_weekly_message_ranks_top_five_by_count_and_reward(self) -> None:
