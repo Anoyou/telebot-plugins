@@ -19,12 +19,18 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from app.worker.command import current_command_prefix
-from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.base import (
+    Plugin,
+    PluginContext,
+    register,
+    resolve_public_sender_identities,
+    resolve_public_sender_identity,
+)
 
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.13"
+PLUGIN_VERSION = "0.1.17"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -545,7 +551,7 @@ class AIRedpacketPlugin(Plugin):
         ):
             return [
                 _send(
-                    self._render_weekly_leaderboard(ctx, chat_id, completed=False),
+                    await self._render_weekly_leaderboard(ctx, chat_id, completed=False),
                     chat_id=chat_id,
                     reply_to=_message_id(payload),
                 )
@@ -596,7 +602,7 @@ class AIRedpacketPlugin(Plugin):
 
     async def _legacy_weekly_command(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
         chat_id = int(getattr(event, "chat_id", 0) or 0)
-        text = self._render_weekly_leaderboard(ctx, chat_id, completed=False)
+        text = await self._render_weekly_leaderboard(ctx, chat_id, completed=False)
         editor = getattr(event, "edit", None)
         if callable(editor):
             await editor(text, parse_mode="html")
@@ -1168,12 +1174,18 @@ class AIRedpacketPlugin(Plugin):
         if not callback_id or not chat_id or not user_id:
             return []
         if len(parts) == 3 and parts[1] == "start":
+            public_name = await self._public_display_name(
+                ctx,
+                chat_id,
+                user_id,
+                sender_display_name(payload, user_id),
+            )
             return self._start_attempt(
                 ctx,
                 callback_id,
                 chat_id,
                 user_id,
-                sender_display_name(payload, user_id),
+                public_name,
                 parts[2],
             )
         if len(parts) == 6 and parts[1] == "answer":
@@ -1303,6 +1315,12 @@ class AIRedpacketPlugin(Plugin):
             )
         except StorageError as exc:
             return [_ack(callback_id, str(exc), alert=True)]
+        result["public_display_name"] = await self._public_display_name(
+            ctx,
+            chat_id,
+            user_id,
+            str(result.get("user_display_name") or ""),
+        )
         if result.get("duplicate"):
             if result.get("correct"):
                 return [
@@ -1386,6 +1404,12 @@ class AIRedpacketPlugin(Plugin):
             )
         except StorageError as exc:
             return [_ack(callback_id, str(exc), alert=True)]
+        result["public_display_name"] = await self._public_display_name(
+            ctx,
+            chat_id,
+            user_id,
+            str(result.get("user_display_name") or ""),
+        )
         reply_to_message_id = await self._find_recent_user_message_id(ctx, chat_id, user_id)
         if reply_to_message_id is None:
             return [
@@ -1466,7 +1490,9 @@ class AIRedpacketPlugin(Plugin):
     ) -> dict[str, Any]:
         reward = int(result["reward"])
         payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
-        user_display_name = html.escape(truncate_display_name(result.get("user_display_name")))
+        user_display_name = html.escape(
+            truncate_display_name(result.get("public_display_name") or result.get("user_display_name"))
+        )
         action = {
             "type": "payout",
             "chat_id": chat_id,
@@ -1518,6 +1544,52 @@ class AIRedpacketPlugin(Plugin):
             pass
         return None
 
+    async def _public_display_name(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        user_id: int,
+        recorded_name: str,
+    ) -> str:
+        """Return a public-safe name without exposing anonymous administrators.
+
+        Telegram callback queries identify the real clicking user. That identity is
+        still required for payout and idempotency, but it must not be rendered into
+        the group when the member currently acts as an anonymous administrator.
+        Regular-member tags are intentionally ignored.
+        """
+
+        identity = await resolve_public_sender_identity(
+            ctx,
+            chat_id=chat_id,
+            user_id=user_id,
+            fallback_display_name=recorded_name or f"用户{user_id}",
+        )
+        return truncate_display_name(identity.display_name)
+
+    async def _public_display_names(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        rows: list[dict[str, Any]],
+    ) -> dict[int, str]:
+        pending = {
+            int(row["user_id"]): str(row.get("user_display_name") or "")
+            for row in rows
+            if row.get("user_id") is not None
+        }
+        if not pending:
+            return {}
+        identities = await resolve_public_sender_identities(
+            ctx,
+            chat_id=chat_id,
+            senders=pending,
+        )
+        return {
+            user_id: truncate_display_name(identity.display_name)
+            for user_id, identity in identities.items()
+        }
+
     def _render_question(self, ctx: PluginContext, attempt: dict[str, Any]) -> str:
         source_options = json.loads(str(attempt["source_options_json"]))
         order = json.loads(str(attempt["option_order_json"]))
@@ -1533,7 +1605,13 @@ class AIRedpacketPlugin(Plugin):
             daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
-        owner = html.escape(str(attempt.get("user_display_name") or f"用户{attempt.get('user_id') or ''}"))
+        owner = html.escape(
+            str(
+                attempt.get("public_display_name")
+                or attempt.get("user_display_name")
+                or f"用户{attempt.get('user_id') or ''}"
+            )
+        )
         return f"<b>{owner} 这是你的专属雨露</b>\n{body}"
 
     def _render_result(self, ctx: PluginContext, result: dict[str, Any], *, correct: bool) -> str:
@@ -1554,7 +1632,13 @@ class AIRedpacketPlugin(Plugin):
             daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
-        owner = html.escape(str(result.get("user_display_name") or f"用户{result.get('user_id') or ''}"))
+        owner = html.escape(
+            str(
+                result.get("public_display_name")
+                or result.get("user_display_name")
+                or f"用户{result.get('user_id') or ''}"
+            )
+        )
         return f"<b>答题者：{owner}</b>\n{body}"
 
     def _answer_markup(self, redpacket_id: str, attempt_id: str, token: str, attempt: dict[str, Any]) -> dict[str, Any]:
@@ -1886,7 +1970,7 @@ class AIRedpacketPlugin(Plugin):
     async def _run_redpacket_settlements(self, ctx: PluginContext, job: Any) -> None:
         for packet in self.storage.list_unsettled_redpackets(ctx.account_id):
             try:
-                messages = self._render_redpacket_settlement(ctx, packet)
+                messages = await self._render_redpacket_settlement(ctx, packet)
                 for part_index, text in enumerate(messages, 1):
                     await self._send_background_message(
                         ctx,
@@ -1989,7 +2073,7 @@ class AIRedpacketPlugin(Plugin):
             redpackets="\n\n".join(entries),
         )
 
-    def _render_redpacket_settlement(self, ctx: PluginContext, packet: dict[str, Any]) -> list[str]:
+    async def _render_redpacket_settlement(self, ctx: PluginContext, packet: dict[str, Any]) -> list[str]:
         rows = self.storage.get_redpacket_settlement(ctx.account_id, str(packet["id"]))
         claimed_amount = int(packet["total_amount"]) - int(packet["remaining_amount"])
         status = "已全部领完" if packet["status"] == "finished" else "已到期"
@@ -2011,10 +2095,11 @@ class AIRedpacketPlugin(Plugin):
                     ranking="本次无人成功领取。",
                 )
             ]
+        public_names = await self._public_display_names(ctx, int(packet.get("chat_id") or 0), rows)
         luckiest = rows[0]
         unluckiest = min(rows, key=lambda item: (int(item["reward"]), float(item["updated_at"]), int(item["user_id"])))
         ranking = list(
-            f"{index}. {html.escape(truncate_display_name(row['user_display_name']))} · {int(row['reward'])}"
+            f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['reward'])}"
             for index, row in enumerate(rows, 1)
         )
         chunks: list[list[str]] = []
@@ -2047,9 +2132,19 @@ class AIRedpacketPlugin(Plugin):
                         claimed_amount=claimed_amount,
                         total_amount=int(packet["total_amount"]),
                         claim_count=len(rows),
-                        luckiest_name=html.escape(truncate_display_name(luckiest["user_display_name"])),
+                        luckiest_name=html.escape(
+                            public_names.get(
+                                int(luckiest["user_id"]),
+                                "匿名用户",
+                            )
+                        ),
                         luckiest_reward=int(luckiest["reward"]),
-                        unluckiest_name=html.escape(truncate_display_name(unluckiest["user_display_name"])),
+                        unluckiest_name=html.escape(
+                            public_names.get(
+                                int(unluckiest["user_id"]),
+                                "匿名用户",
+                            )
+                        ),
                         unluckiest_reward=int(unluckiest["reward"]),
                         ranking=block,
                     )
@@ -2079,7 +2174,7 @@ class AIRedpacketPlugin(Plugin):
             return boundary - timedelta(days=7), boundary
         return boundary, local_now
 
-    def _render_weekly_leaderboard(
+    async def _render_weekly_leaderboard(
         self,
         ctx: PluginContext,
         chat_id: int,
@@ -2101,6 +2196,7 @@ class AIRedpacketPlugin(Plugin):
                 count_ranking="本周期暂无成功答题记录。",
                 reward_ranking="本周期暂无成功答题记录。",
             )
+        public_names = await self._public_display_names(ctx, chat_id, rows)
         by_count = sorted(
             rows,
             key=lambda item: (-int(item["success_count"]), -int(item["total_reward"]), int(item["user_id"])),
@@ -2110,11 +2206,11 @@ class AIRedpacketPlugin(Plugin):
             key=lambda item: (-int(item["total_reward"]), -int(item["success_count"]), int(item["user_id"])),
         )[:5]
         count_ranking = "\n".join(
-            f"{index}. {html.escape(truncate_display_name(row['user_display_name']))} · {int(row['success_count'])} 次"
+            f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['success_count'])} 次"
             for index, row in enumerate(by_count, 1)
         )
         reward_ranking = "\n".join(
-            f"{index}. {html.escape(truncate_display_name(row['user_display_name']))} · {int(row['total_reward'])}"
+            f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['total_reward'])}"
             for index, row in enumerate(by_reward, 1)
         )
         return self._render_template(
@@ -2139,7 +2235,7 @@ class AIRedpacketPlugin(Plugin):
             if self.storage.weekly_report_published(ctx.account_id, chat_id, week_start):
                 continue
             try:
-                text = self._render_weekly_leaderboard(ctx, chat_id, completed=True, now=fired_at)
+                text = await self._render_weekly_leaderboard(ctx, chat_id, completed=True, now=fired_at)
                 period_key = hashlib.sha256(f"{chat_id}:{week_start}".encode()).hexdigest()[:16]
                 await self._send_background_message(
                     ctx,
@@ -2225,7 +2321,7 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{base} close 红包ID</code> 关闭红包\n"
             "创建、重置或关闭成功后自动删除原命令消息；失败时保留。\n"
             "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。\n"
-            "答题结果会显示答题者姓名；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
+            "答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
             "list 原命令会自动删除，列表回执保留；已完结红包不会出现在列表中。\n"
             "答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n"
             "红包最晚于创建日次日 08:30 到期；如昨日红包未领完，今日 08:00 会发送一次提醒。"

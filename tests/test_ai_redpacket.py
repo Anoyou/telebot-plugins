@@ -39,9 +39,63 @@ def _install_telepilot_stubs() -> None:
     def current_command_prefix(*, fallback=None):
         return "。"
 
+    async def resolve_public_sender_identity(
+        ctx,
+        *,
+        chat_id,
+        user_id,
+        fallback_display_name="",
+        unresolved_display_name="匿名用户",
+        anonymous_admin_display_name="匿名管理员",
+    ):
+        client = getattr(ctx, "client", None)
+        get_permissions = getattr(client, "get_permissions", None) if client is not None else None
+        if not callable(get_permissions):
+            return types.SimpleNamespace(
+                user_id=user_id,
+                display_name=fallback_display_name or str(user_id),
+                is_anonymous_admin=False,
+                tag=None,
+                resolved=False,
+            )
+        try:
+            permissions = await get_permissions(chat_id, user_id)
+            participant = getattr(permissions, "participant", None)
+            tag = str(getattr(participant, "rank", None) or "").strip() or None
+            anonymous = bool(getattr(permissions, "anonymous", False))
+            return types.SimpleNamespace(
+                user_id=user_id,
+                display_name=(tag or anonymous_admin_display_name) if anonymous else (fallback_display_name or str(user_id)),
+                is_anonymous_admin=anonymous,
+                tag=tag,
+                resolved=True,
+            )
+        except Exception:
+            return types.SimpleNamespace(
+                user_id=user_id,
+                display_name=unresolved_display_name,
+                is_anonymous_admin=False,
+                tag=None,
+                resolved=False,
+            )
+
+    async def resolve_public_sender_identities(ctx, *, chat_id, senders, **kwargs):
+        return {
+            user_id: await resolve_public_sender_identity(
+                ctx,
+                chat_id=chat_id,
+                user_id=user_id,
+                fallback_display_name=display_name,
+                **kwargs,
+            )
+            for user_id, display_name in senders.items()
+        }
+
     base.Plugin = Plugin
     base.PluginContext = PluginContext
     base.register = register
+    base.resolve_public_sender_identities = resolve_public_sender_identities
+    base.resolve_public_sender_identity = resolve_public_sender_identity
     command.current_command_prefix = current_command_prefix
     sys.modules["app.worker.command"] = command
     manifest.Manifest = Manifest
@@ -106,8 +160,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.16")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.2")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.17")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.17")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.5")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -1154,6 +1209,60 @@ class PluginActionTest(unittest.TestCase):
         self.assertEqual(named, "张三")
         self.assertEqual(username_only, "@lisi")
 
+    def test_anonymous_admin_callback_uses_tag_in_public_question(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="rp-anonymous",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+
+                class Client:
+                    async def get_permissions(self, chat_id, user_id):
+                        return types.SimpleNamespace(
+                            anonymous=True,
+                            participant=types.SimpleNamespace(rank="值班管理员"),
+                        )
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    client = Client()
+                    scheduler = None
+
+                actions = await plugin._handle_callback(
+                    Context(),
+                    {
+                        "source": {"type": "callback_query"},
+                        "message": {"chat_id": -1001, "message_id": 88},
+                        "sender": {"user_id": 77, "display_name": "真实姓名", "username": "real_user"},
+                    },
+                    "callback-anonymous",
+                    "airp:start:rp-anonymous",
+                )
+
+                question = next(action for action in actions if action["type"] == "send_message")
+                self.assertIn("值班管理员 这是你的专属雨露", question["text"])
+                self.assertNotIn("真实姓名", question["text"])
+                with plugin.storage.connect() as conn:
+                    attempt = conn.execute(
+                        "SELECT user_display_name FROM redpacket_attempt WHERE user_id = ?",
+                        (77,),
+                    ).fetchone()
+                self.assertEqual(attempt["user_display_name"], "值班管理员")
+
+        asyncio.run(run_case())
+
     def test_create_auto_adjusts_incompatible_reward_bounds_from_command(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
@@ -1382,14 +1491,16 @@ class PluginActionTest(unittest.TestCase):
             account_id = 1
 
         plugin.storage = Storage()
-        messages = plugin._render_redpacket_settlement(
-            Context(),
-            {
-                "id": "packet",
-                "status": "finished",
-                "total_amount": 40,
-                "remaining_amount": 0,
-            },
+        messages = asyncio.run(
+            plugin._render_redpacket_settlement(
+                Context(),
+                {
+                    "id": "packet",
+                    "status": "finished",
+                    "total_amount": 40,
+                    "remaining_amount": 0,
+                },
+            )
         )
         text = messages[0]
         self.assertIn("运气王：<b>一二三四五六七八九十</b> · 30", text)
@@ -1417,14 +1528,57 @@ class PluginActionTest(unittest.TestCase):
             account_id = 1
 
         plugin.storage = Storage()
-        messages = plugin._render_redpacket_settlement(
-            Context(),
-            {"id": "large", "status": "finished", "total_amount": 500000, "remaining_amount": 0},
+        messages = asyncio.run(
+            plugin._render_redpacket_settlement(
+                Context(),
+                {"id": "large", "status": "finished", "total_amount": 500000, "remaining_amount": 0},
+            )
         )
         self.assertGreater(len(messages), 1)
         self.assertTrue(all(len(message) < 3900 for message in messages))
         self.assertEqual(sum(message.count(" · ") for message in messages), 502)
         self.assertTrue(all("<blockquote expandable>" in message for message in messages))
+
+    def test_settlement_rechecks_historical_anonymous_admin_name(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+
+        class Storage:
+            def get_redpacket_settlement(self, account_id, redpacket_id):
+                return [
+                    {
+                        "user_id": 77,
+                        "user_display_name": "数据库中的真实姓名",
+                        "reward": 30,
+                        "updated_at": 2.0,
+                    }
+                ]
+
+        class Client:
+            async def get_permissions(self, chat_id, user_id):
+                return types.SimpleNamespace(
+                    anonymous=True,
+                    participant=types.SimpleNamespace(rank="匿名标签"),
+                )
+
+        class Context:
+            account_id = 1
+            client = Client()
+
+        plugin.storage = Storage()
+        messages = asyncio.run(
+            plugin._render_redpacket_settlement(
+                Context(),
+                {
+                    "id": "packet",
+                    "chat_id": -1001,
+                    "status": "finished",
+                    "total_amount": 30,
+                    "remaining_amount": 0,
+                },
+            )
+        )
+        self.assertIn("匿名标签", messages[0])
+        self.assertNotIn("数据库中的真实姓名", messages[0])
 
     def test_weekly_message_ranks_top_five_by_count_and_reward(self) -> None:
         plugin = plugin_module.AIRedpacketPlugin()
@@ -1442,11 +1596,13 @@ class PluginActionTest(unittest.TestCase):
             config = {"timezone": "Asia/Shanghai"}
 
         plugin.storage = Storage()
-        text = plugin._render_weekly_leaderboard(
-            Context(),
-            -1001,
-            completed=False,
-            now=datetime.fromisoformat("2026-07-15T12:00:00+08:00"),
+        text = asyncio.run(
+            plugin._render_weekly_leaderboard(
+                Context(),
+                -1001,
+                completed=False,
+                now=datetime.fromisoformat("2026-07-15T12:00:00+08:00"),
+            )
         )
         self.assertIn("<blockquote expandable>", text)
         count_section, reward_section = text.split("<b>获得奖金 TOP 5</b>")
@@ -1479,16 +1635,20 @@ class PluginActionTest(unittest.TestCase):
 
         plugin.storage = Storage()
         with patch.object(plugin, "_today", return_value="2026-07-15"):
-            settlement = plugin._render_redpacket_settlement(
-                Context(),
-                {"id": "custom", "status": "expired", "total_amount": 100, "remaining_amount": 100},
+            settlement = asyncio.run(
+                plugin._render_redpacket_settlement(
+                    Context(),
+                    {"id": "custom", "status": "expired", "total_amount": 100, "remaining_amount": 100},
+                )
             )
         self.assertEqual(settlement, ["结算 2026-07-15 3/2 。rain custom 已到期 本次无人成功领取。"])
-        weekly = plugin._render_weekly_leaderboard(
-            Context(),
-            -1001,
-            completed=False,
-            now=datetime.fromisoformat("2026-07-15T12:00:00+08:00"),
+        weekly = asyncio.run(
+            plugin._render_weekly_leaderboard(
+                Context(),
+                -1001,
+                completed=False,
+                now=datetime.fromisoformat("2026-07-15T12:00:00+08:00"),
+            )
         )
         self.assertIn("周榜 AI 红包本周排行榜", weekly)
         self.assertEqual(weekly.count("本周期暂无成功答题记录。"), 2)
