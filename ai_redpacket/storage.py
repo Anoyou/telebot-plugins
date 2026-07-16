@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class StorageError(RuntimeError):
@@ -200,47 +200,40 @@ class AIStorage:
             }
             if "user_display_name" not in attempt_columns:
                 conn.execute("ALTER TABLE redpacket_attempt ADD COLUMN user_display_name TEXT NOT NULL DEFAULT ''")
+            row = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
+            current_version = int(row["version"]) if row is not None else None
             reset_columns = {
                 str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket_limit_reset)").fetchall()
             }
-            if "chat_id" not in reset_columns:
+            rebuild_legacy_reset = "chat_id" not in reset_columns
+            clear_unsafe_resets = current_version is not None and current_version < SCHEMA_VERSION
+            if rebuild_legacy_reset or clear_unsafe_resets:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    conn.execute("ALTER TABLE redpacket_limit_reset RENAME TO redpacket_limit_reset_legacy")
-                    conn.execute(
-                        """
-                        CREATE TABLE redpacket_limit_reset (
-                            account_id INTEGER NOT NULL,
-                            chat_id INTEGER NOT NULL,
-                            user_id INTEGER NOT NULL,
-                            date TEXT NOT NULL,
-                            reset_at REAL NOT NULL,
-                            PRIMARY KEY(account_id, chat_id, user_id, date)
+                    if rebuild_legacy_reset:
+                        conn.execute("ALTER TABLE redpacket_limit_reset RENAME TO redpacket_limit_reset_legacy")
+                        conn.execute(
+                            """
+                            CREATE TABLE redpacket_limit_reset (
+                                account_id INTEGER NOT NULL,
+                                chat_id INTEGER NOT NULL,
+                                user_id INTEGER NOT NULL,
+                                date TEXT NOT NULL,
+                                reset_at REAL NOT NULL,
+                                PRIMARY KEY(account_id, chat_id, user_id, date)
+                            )
+                            """
                         )
-                        """
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
-                        SELECT legacy.account_id, attempt.chat_id, legacy.user_id, legacy.date, MAX(legacy.reset_at)
-                        FROM redpacket_limit_reset_legacy AS legacy
-                        JOIN redpacket_attempt AS attempt
-                          ON attempt.account_id = legacy.account_id
-                         AND attempt.user_id = legacy.user_id
-                         AND attempt.date = legacy.date
-                        GROUP BY legacy.account_id, attempt.chat_id, legacy.user_id, legacy.date
-                        """
-                    )
-                    conn.execute("DROP TABLE redpacket_limit_reset_legacy")
+                        conn.execute("DROP TABLE redpacket_limit_reset_legacy")
+                    else:
+                        conn.execute("DELETE FROM redpacket_limit_reset")
+                    conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
                     conn.commit()
                 except Exception:
                     conn.rollback()
                     raise
-            row = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
-            if row is None:
+            elif row is None:
                 conn.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
-            elif int(row["version"]) < SCHEMA_VERSION:
-                conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
 
     def get_source_cache(self, account_id: int, source_url: str) -> dict[str, Any] | None:
         with self.connect() as conn:

@@ -160,9 +160,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.18")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.18")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.6")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.19")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.19")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.7")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -337,7 +337,7 @@ class StorageMigrationTest(unittest.TestCase):
                 version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()["version"]
                 redpacket_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket)")}
                 attempt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket_attempt)")}
-            self.assertEqual(version, 6)
+            self.assertEqual(version, 7)
             self.assertIn("settled_at", redpacket_columns)
             self.assertIn("user_display_name", attempt_columns)
             with storage.connect() as conn:
@@ -347,7 +347,7 @@ class StorageMigrationTest(unittest.TestCase):
             self.assertIsNotNone(reminder_table)
             self.assertEqual(storage.get_source_cache(1, "https://example.com/source")["content"], "缓存正文")
 
-    def test_version_five_global_resets_migrate_to_attempt_chats(self) -> None:
+    def test_version_five_global_resets_are_discarded_without_guessing_chat(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             path = Path(tempdir) / "ai_redpacket.sqlite3"
             storage = storage_module.AIStorage(path)
@@ -401,8 +401,67 @@ class StorageMigrationTest(unittest.TestCase):
                     ORDER BY chat_id
                     """
                 ).fetchall()
-            self.assertEqual(version, 6)
-            self.assertEqual([(int(row["chat_id"]), float(row["reset_at"])) for row in rows], [(-2002, 12345.0), (-1001, 12345.0)])
+            self.assertEqual(version, 7)
+            self.assertEqual(rows, [])
+
+    def test_version_six_resets_are_cleared_without_touching_attempts_or_rewards(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "ai_redpacket.sqlite3"
+            storage = storage_module.AIStorage(path)
+            storage.replace_bank(account_id=1, bank_id="bank", title="测试题库", questions=_questions(1))
+            storage.create_redpacket(
+                redpacket_id="packet",
+                account_id=1,
+                chat_id=-1001,
+                creator_id=99,
+                bank_id="bank",
+                total_amount=10,
+                rewards=[10],
+                ttl_seconds=3600,
+            )
+            reserved = storage.reserve_question(
+                attempt_id="attempt",
+                account_id=1,
+                user_id=77,
+                chat_id=-1001,
+                redpacket_id="packet",
+                date="2026-07-16",
+                submission_token="token",
+                reservation_seconds=300,
+            )
+            with storage.connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
+                    VALUES (1, -1001, 77, '2026-07-16', 12345)
+                    """
+                )
+                conn.execute(
+                    "UPDATE redpacket_attempt SET attempts = 1, success = 1, reward = 10 WHERE id = ?",
+                    (reserved["id"],),
+                )
+                conn.execute(
+                    "UPDATE redpacket SET remaining_amount = 0 WHERE id = 'packet'"
+                )
+                conn.execute("UPDATE schema_meta SET version = 6")
+
+            migrated = storage_module.AIStorage(path)
+            with migrated.connect() as conn:
+                version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()["version"]
+                reset_count = conn.execute("SELECT COUNT(*) FROM redpacket_limit_reset").fetchone()[0]
+                attempt = conn.execute(
+                    "SELECT id, reward, success FROM redpacket_attempt WHERE id = ?",
+                    (reserved["id"],),
+                ).fetchone()
+                packet = conn.execute(
+                    "SELECT total_amount, remaining_amount FROM redpacket WHERE id = 'packet'"
+                ).fetchone()
+
+            self.assertEqual(version, 7)
+            self.assertEqual(reset_count, 0)
+            self.assertIsNotNone(attempt)
+            self.assertEqual((int(attempt["reward"]), int(attempt["success"])), (10, 1))
+            self.assertEqual((int(packet["total_amount"]), int(packet["remaining_amount"])), (10, 0))
 
     def test_version_five_reset_migration_rolls_back_atomically_on_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
