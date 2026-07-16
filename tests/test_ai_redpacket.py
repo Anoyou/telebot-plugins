@@ -48,6 +48,16 @@ def _install_telepilot_stubs() -> None:
         unresolved_display_name="匿名用户",
         anonymous_admin_display_name="匿名管理员",
     ):
+        identities = getattr(ctx, "identities", None)
+        resolve = getattr(identities, "resolve", None) if identities is not None else None
+        if callable(resolve):
+            return await resolve(
+                chat_id=chat_id,
+                user_id=user_id,
+                fallback_display_name=fallback_display_name,
+                unresolved_display_name=unresolved_display_name,
+                anonymous_admin_display_name=anonymous_admin_display_name,
+            )
         client = getattr(ctx, "client", None)
         get_permissions = getattr(client, "get_permissions", None) if client is not None else None
         if not callable(get_permissions):
@@ -160,8 +170,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.19")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.19")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.20")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.20")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.7")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -3291,6 +3301,7 @@ class PluginActionTest(unittest.TestCase):
         )
 
         self.assertIn("暂未找到 一二三四五六七八九十 在本群的近期发言", action["reply_anchor_missing_text"])
+        self.assertEqual(action["reply_to_display_name"], "一二三四五六七八九十")
         self.assertNotIn("十一十二", action["reply_anchor_missing_text"])
         self.assertNotIn("77", action["reply_anchor_missing_text"])
 

@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.19"
+PLUGIN_VERSION = "0.1.20"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -1490,9 +1490,10 @@ class AIRedpacketPlugin(Plugin):
     ) -> dict[str, Any]:
         reward = int(result["reward"])
         payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
-        user_display_name = html.escape(
-            truncate_display_name(result.get("public_display_name") or result.get("user_display_name"))
+        public_display_name = truncate_display_name(
+            result.get("public_display_name") or result.get("user_display_name")
         )
+        user_display_name = html.escape(public_display_name)
         action = {
             "type": "payout",
             "chat_id": chat_id,
@@ -1500,6 +1501,7 @@ class AIRedpacketPlugin(Plugin):
             "text": f"+{reward}",
             "parse_mode": "html",
             "reply_to_user_id": user_id,
+            "reply_to_display_name": public_display_name,
             "reply_to_search_limit": 200,
             "reply_anchor_missing_text": (
                 f"暂未找到 {user_display_name} 在本群的近期发言，因此暂时无法核验和补发奖励。\n\n"
