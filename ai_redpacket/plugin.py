@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.20"
+PLUGIN_VERSION = "0.1.21"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -1502,6 +1502,7 @@ class AIRedpacketPlugin(Plugin):
             "parse_mode": "html",
             "reply_to_user_id": user_id,
             "reply_to_display_name": public_display_name,
+            "reply_to_username": None,
             "reply_to_search_limit": 200,
             "reply_anchor_missing_text": (
                 f"暂未找到 {user_display_name} 在本群的近期发言，因此暂时无法核验和补发奖励。\n\n"

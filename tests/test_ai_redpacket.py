@@ -163,6 +163,7 @@ class QuestionGenerationTest(unittest.TestCase):
         )
 
         self.assertEqual(raw["version"], manifest_module.PLUGIN_VERSION)
+        self.assertEqual(raw["min_telepilot_version"], manifest_module.MANIFEST.min_telepilot_version)
         self.assertEqual(raw["usage"], manifest_module.USAGE)
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
@@ -170,9 +171,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.20")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.20")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.7")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.21")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.21")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.60.9")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -3302,6 +3303,7 @@ class PluginActionTest(unittest.TestCase):
 
         self.assertIn("暂未找到 一二三四五六七八九十 在本群的近期发言", action["reply_anchor_missing_text"])
         self.assertEqual(action["reply_to_display_name"], "一二三四五六七八九十")
+        self.assertIsNone(action["reply_to_username"])
         self.assertNotIn("十一十二", action["reply_anchor_missing_text"])
         self.assertNotIn("77", action["reply_anchor_missing_text"])
 
