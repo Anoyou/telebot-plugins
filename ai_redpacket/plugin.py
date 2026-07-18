@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.23"
+PLUGIN_VERSION = "0.1.24"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -404,6 +404,7 @@ def _edit(message_id: int | None, text: str, *, chat_id: int, markup: dict[str, 
         "message_id": message_id,
         "text": text,
         "parse_mode": "html",
+        "rich_message": {"html": text},
         "reply_markup": markup,
     }
 
@@ -1900,6 +1901,13 @@ class AIRedpacketPlugin(Plugin):
                             f"{timeout_seconds} 秒内未作答，本题失效并已回归题库。\n"
                             "本次不消耗领取与答题次数。"
                         ),
+                        "rich_message": {
+                            "html": (
+                                "<b>答题超时</b>\n\n"
+                                f"{timeout_seconds} 秒内未作答，本题失效并已回归题库。\n"
+                                "本次不消耗领取与答题次数。"
+                            )
+                        },
                         "parse_mode": "html",
                         "reply_markup": {"inline_keyboard": []},
                     }
