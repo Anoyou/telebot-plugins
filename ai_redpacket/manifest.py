@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.24"
+PLUGIN_VERSION = "0.1.25"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -325,43 +325,43 @@ CONFIG_SCHEMA = {
         "packet_message_template": {
             "type": "string",
             "title": "红包开场模板",
-            "default": "<b>AI 答题红包</b>\n总金额：<code>{total_amount}</code>\n题目数量：<code>{question_count}</code>\n红包 ID：<code>{redpacket_id}</code>\n\n今日日期：<code>{date}</code>\n每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。",
-            "description": "场景占位符：{total_amount} 总金额、{question_count} 题目数、{redpacket_id} 红包 ID。所有模板均可使用 {date}、{daily_limit}、{retry_count}、{prefix}、{command}。支持 Telegram HTML。",
+            "default": "<h1>AI 答题红包</h1><ul><li>总金额：<code>{total_amount}</code></li><li>题目数量：<code>{question_count}</code></li><li>红包 ID：<code>{redpacket_id}</code></li><li>今日日期：<code>{date}</code></li></ul><p>每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>",
+            "description": "场景占位符：{total_amount} 总金额、{question_count} 题目数、{redpacket_id} 红包 ID。所有模板均可使用 {date}、{daily_limit}、{retry_count}、{prefix}、{command}。新模板使用 Telegram Rich HTML；升级前保存的自定义 Telegram HTML 继续按普通消息发送。",
         },
         "question_message_template": {
             "type": "string",
             "title": "答题题面模板",
-            "default": "<b>AI 红包题目</b>\n{question}\n\n{options}\n\n请选择唯一正确答案。",
-            "description": "场景占位符：{question} 题目、{options} 三个选项；另可使用全部通用占位符。支持 Telegram HTML。",
+            "default": "<h1>AI 红包题目</h1><p>{question}</p>{options}<p>请选择唯一正确答案。</p>",
+            "description": "场景占位符：{question} 题目、{options} 三个选项；另可使用全部通用占位符。新模板使用 Telegram Rich HTML；旧自定义模板保持普通 Telegram HTML。",
         },
         "success_message_template": {
             "type": "string",
             "title": "答对结果模板",
-            "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答对了，获得 {reward}</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
+            "default": "<h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答对了，获得 {reward}</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
             "description": "场景占位符：{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。",
         },
         "failed_message_template": {
             "type": "string",
             "title": "挑战失败模板",
-            "default": "<b>AI 红包答题结果</b>\n{question}\n\n结果：<b>答题机会已用完，今天的挑战已结束</b>\n正确答案：{answer}\n解析：{explanation}\n来源：{source}",
+            "default": "<h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答题机会已用完，今天的挑战已结束</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
             "description": "场景占位符：{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。",
         },
         "settlement_message_template": {
             "type": "string",
             "title": "红包结算模板",
-            "default": "<b>AI 红包每日结算</b>\n红包 ID：<code>{redpacket_id}</code>\n状态：{status}\n已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code>\n领取人数：<code>{claim_count}</code>\n\n运气王：<b>{luckiest_name}</b> · {luckiest_reward}\n倒霉蛋：<b>{unluckiest_name}</b> · {unluckiest_reward}\n\n{ranking}",
+            "default": "<h1>AI 红包每日结算</h1><ul><li>红包 ID：<code>{redpacket_id}</code></li><li>状态：{status}</li><li>已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code></li><li>领取人数：<code>{claim_count}</code></li></ul><p><b>运气王：</b>{luckiest_name} · {luckiest_reward}</p><p><b>倒霉蛋：</b>{unluckiest_name} · {unluckiest_reward}</p>{ranking}",
             "description": "场景占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}；另可使用全部通用占位符。",
         },
         "reminder_message_template": {
             "type": "string",
             "title": "未领完红包提醒模板",
-            "default": "<b>昨日雨露均沾即将到期</b>\n\n以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：\n{redpackets}",
+            "default": "<h1>昨日雨露均沾即将到期</h1><p>以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：</p><ul>{redpackets}</ul>",
             "description": "场景占位符：{packet_date} 红包创建日期、{expire_time} 当日截止时间、{redpackets} 未领完红包、领取进度和跳转链接；另可使用全部通用占位符。",
         },
         "weekly_message_template": {
             "type": "string",
             "title": "每周榜单模板",
-            "default": "<b>{weekly_title}</b>\n周期：<code>{period_start}</code> 至 <code>{period_end}</code>\n\n<blockquote expandable><b>答对次数 TOP 5</b>\n{count_ranking}\n\n<b>获得奖金 TOP 5</b>\n{reward_ranking}</blockquote>",
+            "default": "<h1>{weekly_title}</h1><p>周期：<code>{period_start}</code> 至 <code>{period_end}</code></p><details><summary>答对次数 TOP 5</summary>{count_ranking}</details><details><summary>获得奖金 TOP 5</summary>{reward_ranking}</details>",
             "description": "场景占位符：{weekly_title}、{period_start}、{period_end}、{count_ranking}、{reward_ranking}；另可使用全部通用占位符。",
         },
         "template_placeholders": {
@@ -508,7 +508,7 @@ INTERACTION_ENTRIES = [
             "required_event_fields": ["type", "chat_id"],
         },
         "result_contract": {
-            "actions": ["send_message", "edit_message", "delete_message", "pin_message", "answer_callback", "payout", "end_session"],
+            "actions": ["send_message", "send_rich_message", "edit_message", "delete_message", "pin_message", "answer_callback", "payout", "end_session"],
         },
         "settlement": {
             "mode": "auto",

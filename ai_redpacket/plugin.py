@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.24"
+PLUGIN_VERSION = "0.1.25"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -57,7 +57,7 @@ AI_SYSTEM_PROMPT = """你是 TelePilot AI 红包插件的题库生成器。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
 题目必须能从正文中直接得到答案；不要编造，不要出主观题；解析尽量简洁。"""
 
-PACKET_MESSAGE_TEMPLATE = (
+LEGACY_PACKET_MESSAGE_TEMPLATE = (
     "<b>AI 答题红包</b>\n"
     "总金额：<code>{total_amount}</code>\n"
     "题目数量：<code>{question_count}</code>\n"
@@ -65,18 +65,18 @@ PACKET_MESSAGE_TEMPLATE = (
     "今日日期：<code>{date}</code>\n"
     "每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。"
 )
-QUESTION_MESSAGE_TEMPLATE = "<b>AI 红包题目</b>\n{question}\n\n{options}\n\n请选择唯一正确答案。"
-SUCCESS_MESSAGE_TEMPLATE = (
+LEGACY_QUESTION_MESSAGE_TEMPLATE = "<b>AI 红包题目</b>\n{question}\n\n{options}\n\n请选择唯一正确答案。"
+LEGACY_SUCCESS_MESSAGE_TEMPLATE = (
     "<b>AI 红包答题结果</b>\n{question}\n\n"
     "结果：<b>答对了，获得 {reward}</b>\n"
     "正确答案：{answer}\n解析：{explanation}\n来源：{source}"
 )
-FAILED_MESSAGE_TEMPLATE = (
+LEGACY_FAILED_MESSAGE_TEMPLATE = (
     "<b>AI 红包答题结果</b>\n{question}\n\n"
     "结果：<b>答题机会已用完，今天的挑战已结束</b>\n"
     "正确答案：{answer}\n解析：{explanation}\n来源：{source}"
 )
-SETTLEMENT_MESSAGE_TEMPLATE = (
+LEGACY_SETTLEMENT_MESSAGE_TEMPLATE = (
     "<b>AI 红包每日结算</b>\n"
     "红包 ID：<code>{redpacket_id}</code>\n"
     "状态：{status}\n"
@@ -86,18 +86,76 @@ SETTLEMENT_MESSAGE_TEMPLATE = (
     "倒霉蛋：<b>{unluckiest_name}</b> · {unluckiest_reward}\n\n"
     "{ranking}"
 )
-REMINDER_MESSAGE_TEMPLATE = (
+LEGACY_REMINDER_MESSAGE_TEMPLATE = (
     "<b>昨日雨露均沾即将到期</b>\n\n"
     "以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：\n"
     "{redpackets}"
 )
-WEEKLY_MESSAGE_TEMPLATE = (
+LEGACY_WEEKLY_MESSAGE_TEMPLATE = (
     "<b>{weekly_title}</b>\n"
     "周期：<code>{period_start}</code> 至 <code>{period_end}</code>\n\n"
     "<blockquote expandable><b>答对次数 TOP 5</b>\n"
     "{count_ranking}\n\n"
     "<b>获得奖金 TOP 5</b>\n"
     "{reward_ranking}</blockquote>"
+)
+
+PACKET_MESSAGE_TEMPLATE = (
+    "<h1>AI 答题红包</h1>"
+    "<ul>"
+    "<li>总金额：<code>{total_amount}</code></li>"
+    "<li>题目数量：<code>{question_count}</code></li>"
+    "<li>红包 ID：<code>{redpacket_id}</code></li>"
+    "<li>今日日期：<code>{date}</code></li>"
+    "</ul>"
+    "<p>每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>"
+)
+QUESTION_MESSAGE_TEMPLATE = (
+    "<h1>AI 红包题目</h1>"
+    "<p>{question}</p>"
+    "{options}"
+    "<p>请选择唯一正确答案。</p>"
+)
+SUCCESS_MESSAGE_TEMPLATE = (
+    "<h1>AI 红包答题结果</h1>"
+    "<p>{question}</p>"
+    "<details open><summary>答对了，获得 {reward}</summary>"
+    "<p><b>正确答案：</b>{answer}</p>"
+    "<p><b>解析：</b>{explanation}</p>"
+    "<p><b>来源：</b>{source}</p>"
+    "</details>"
+)
+FAILED_MESSAGE_TEMPLATE = (
+    "<h1>AI 红包答题结果</h1>"
+    "<p>{question}</p>"
+    "<details open><summary>答题机会已用完，今天的挑战已结束</summary>"
+    "<p><b>正确答案：</b>{answer}</p>"
+    "<p><b>解析：</b>{explanation}</p>"
+    "<p><b>来源：</b>{source}</p>"
+    "</details>"
+)
+SETTLEMENT_MESSAGE_TEMPLATE = (
+    "<h1>AI 红包每日结算</h1>"
+    "<ul>"
+    "<li>红包 ID：<code>{redpacket_id}</code></li>"
+    "<li>状态：{status}</li>"
+    "<li>已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code></li>"
+    "<li>领取人数：<code>{claim_count}</code></li>"
+    "</ul>"
+    "<p><b>运气王：</b>{luckiest_name} · {luckiest_reward}</p>"
+    "<p><b>倒霉蛋：</b>{unluckiest_name} · {unluckiest_reward}</p>"
+    "{ranking}"
+)
+REMINDER_MESSAGE_TEMPLATE = (
+    "<h1>昨日雨露均沾即将到期</h1>"
+    "<p>以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：</p>"
+    "<ul>{redpackets}</ul>"
+)
+WEEKLY_MESSAGE_TEMPLATE = (
+    "<h1>{weekly_title}</h1>"
+    "<p>周期：<code>{period_start}</code> 至 <code>{period_end}</code></p>"
+    "<details><summary>答对次数 TOP 5</summary>{count_ranking}</details>"
+    "<details><summary>获得奖金 TOP 5</summary>{reward_ranking}</details>"
 )
 
 
@@ -374,8 +432,15 @@ def _send(
     via: str | None = None,
     pin: bool = False,
     save_message_id_key: str | None = None,
+    rich: bool = False,
 ) -> dict[str, Any]:
-    action: dict[str, Any] = {"type": "send_message", "text": text, "parse_mode": "html"}
+    if rich:
+        action: dict[str, Any] = {
+            "type": "send_rich_message",
+            "rich_message": {"html": text},
+        }
+    else:
+        action = {"type": "send_message", "text": text, "parse_mode": "html"}
     if chat_id:
         action["chat_id"] = chat_id
     if reply_to:
@@ -395,18 +460,30 @@ def _ack(callback_id: str, text: str, *, alert: bool = False) -> dict[str, Any]:
     return {"type": "answer_callback", "callback_query_id": callback_id, "text": text, "show_alert": alert}
 
 
-def _edit(message_id: int | None, text: str, *, chat_id: int, markup: dict[str, Any] | None = None) -> dict[str, Any] | None:
+def _edit(
+    message_id: int | None,
+    text: str,
+    *,
+    chat_id: int,
+    markup: dict[str, Any] | None = None,
+    rich: bool = False,
+) -> dict[str, Any] | None:
     if not message_id:
         return None
-    return {
+    action: dict[str, Any] = {
         "type": "edit_message",
         "chat_id": chat_id,
         "message_id": message_id,
-        "text": text,
-        "parse_mode": "html",
-        "rich_message": {"html": text},
         "reply_markup": markup,
     }
+    if rich:
+        action["text"] = text
+        action["rich_message"] = {"html": text}
+        action["send_via"] = "interaction_bot"
+    else:
+        action["text"] = text
+        action["parse_mode"] = "html"
+    return action
 
 
 def _delete_command(message_id: int | None, *, chat_id: int) -> dict[str, Any] | None:
@@ -550,11 +627,18 @@ class AIRedpacketPlugin(Plugin):
         if triggered_command.casefold() == weekly_command or (
             not triggered_command and self._command_text_matches(ctx, message_text, self._weekly_command(ctx))
         ):
+            text = await self._render_weekly_leaderboard(ctx, chat_id, completed=False)
             return [
                 _send(
-                    await self._render_weekly_leaderboard(ctx, chat_id, completed=False),
+                    text,
                     chat_id=chat_id,
                     reply_to=_message_id(payload),
+                    rich=self._uses_rich_template(
+                        ctx,
+                        "weekly_message_template",
+                        WEEKLY_MESSAGE_TEMPLATE,
+                        LEGACY_WEEKLY_MESSAGE_TEMPLATE,
+                    ),
                 )
             ]
         raw_args = trigger.get("args") or trigger.get("command_args") or payload.get("args")
@@ -603,7 +687,28 @@ class AIRedpacketPlugin(Plugin):
 
     async def _legacy_weekly_command(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
         chat_id = int(getattr(event, "chat_id", 0) or 0)
+        message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0) or None
         text = await self._render_weekly_leaderboard(ctx, chat_id, completed=False)
+        if self._uses_rich_template(
+            ctx,
+            "weekly_message_template",
+            WEEKLY_MESSAGE_TEMPLATE,
+            LEGACY_WEEKLY_MESSAGE_TEMPLATE,
+        ):
+            messages = getattr(ctx, "messages", None)
+            apply_actions = getattr(messages, "apply", None) if messages is not None else None
+            if callable(apply_actions):
+                await apply_actions(
+                    [_send(text, chat_id=chat_id, reply_to=message_id, rich=True)],
+                    entry_key=ENTRY_KEY,
+                )
+                return
+            text = await self._render_weekly_leaderboard(
+                ctx,
+                chat_id,
+                completed=False,
+                force_legacy=True,
+            )
         editor = getattr(event, "edit", None)
         if callable(editor):
             await editor(text, parse_mode="html")
@@ -1123,10 +1228,11 @@ class AIRedpacketPlugin(Plugin):
             )
         except (ValueError, StorageError) as exc:
             return [_send(f"红包创建失败：{html.escape(str(exc))}", chat_id=chat_id, reply_to=reply_to)]
-        text = self._render_template(
+        text = self._render_business_template(
             ctx,
             "packet_message_template",
             PACKET_MESSAGE_TEMPLATE,
+            LEGACY_PACKET_MESSAGE_TEMPLATE,
             total_amount=packet["total_amount"],
             question_count=packet["question_count"],
             redpacket_id=packet_id,
@@ -1154,6 +1260,12 @@ class AIRedpacketPlugin(Plugin):
                 via="interaction_bot",
                 pin=self._bool_config(ctx, "pin_packet_message", True),
                 save_message_id_key=f"ai_redpacket:packet:{packet_id}",
+                rich=self._uses_rich_template(
+                    ctx,
+                    "packet_message_template",
+                    PACKET_MESSAGE_TEMPLATE,
+                    LEGACY_PACKET_MESSAGE_TEMPLATE,
+                ),
             ),
         ]
         delete_action = _delete_command(reply_to, chat_id=chat_id)
@@ -1274,6 +1386,12 @@ class AIRedpacketPlugin(Plugin):
                 markup=self._answer_markup(redpacket_id, attempt_id, token, attempt),
                 via="interaction_bot",
                 save_message_id_key=question_message_key,
+                rich=self._uses_rich_template(
+                    ctx,
+                    "question_message_template",
+                    QUESTION_MESSAGE_TEMPLATE,
+                    LEGACY_QUESTION_MESSAGE_TEMPLATE,
+                ),
             ),
         ]
 
@@ -1337,6 +1455,12 @@ class AIRedpacketPlugin(Plugin):
                 self._render_result(ctx, result, correct=True),
                 chat_id=chat_id,
                 markup=self._success_markup(redpacket_id, attempt_id, str(result.get("date") or self._today(ctx))),
+                rich=self._uses_rich_template(
+                    ctx,
+                    "success_message_template",
+                    SUCCESS_MESSAGE_TEMPLATE,
+                    LEGACY_SUCCESS_MESSAGE_TEMPLATE,
+                ),
             )
             payout_key = self._payout_key(ctx, redpacket_id, int(result["question_slot_id"]), user_id)
             actions: list[dict[str, Any]] = [_ack(callback_id, f"答对了，获得 {reward}")]
@@ -1352,6 +1476,12 @@ class AIRedpacketPlugin(Plugin):
                 self._render_result(ctx, result, correct=False),
                 chat_id=chat_id,
                 markup=self._join_markup(redpacket_id),
+                rich=self._uses_rich_template(
+                    ctx,
+                    "failed_message_template",
+                    FAILED_MESSAGE_TEMPLATE,
+                    LEGACY_FAILED_MESSAGE_TEMPLATE,
+                ),
             )
             actions = [_ack(callback_id, "答题机会已用完，今天的挑战已结束", alert=True)]
             if edit:
@@ -1368,6 +1498,12 @@ class AIRedpacketPlugin(Plugin):
                 attempt_id,
                 str(result["submission_token"]),
                 result,
+            ),
+            rich=self._uses_rich_template(
+                ctx,
+                "question_message_template",
+                QUESTION_MESSAGE_TEMPLATE,
+                LEGACY_QUESTION_MESSAGE_TEMPLATE,
             ),
         )
         actions = [_ack(callback_id, f"答错了，还有 {remaining} 次机会", alert=True)]
@@ -1598,11 +1734,26 @@ class AIRedpacketPlugin(Plugin):
         source_options = json.loads(str(attempt["source_options_json"]))
         order = json.loads(str(attempt["option_order_json"]))
         options = [source_options[index] for index in order]
-        option_text = "\n".join(f"{chr(65 + index)}. {html.escape(str(option))}" for index, option in enumerate(options))
-        body = self._render_template(
+        rich = self._uses_rich_template(
             ctx,
             "question_message_template",
             QUESTION_MESSAGE_TEMPLATE,
+            LEGACY_QUESTION_MESSAGE_TEMPLATE,
+        )
+        if rich:
+            option_text = '<ol type="A">' + "".join(
+                f"<li>{html.escape(str(option))}</li>" for option in options
+            ) + "</ol>"
+        else:
+            option_text = "\n".join(
+                f"{chr(65 + index)}. {html.escape(str(option))}"
+                for index, option in enumerate(options)
+            )
+        body = self._render_business_template(
+            ctx,
+            "question_message_template",
+            QUESTION_MESSAGE_TEMPLATE,
+            LEGACY_QUESTION_MESSAGE_TEMPLATE,
             question=html.escape(str(attempt["question"])),
             options=option_text,
             date=self._today(ctx),
@@ -1616,6 +1767,8 @@ class AIRedpacketPlugin(Plugin):
                 or f"用户{attempt.get('user_id') or ''}"
             )
         )
+        if rich:
+            return f"<p><b>{owner} 这是你的专属雨露</b></p>{body}"
         return f"<b>{owner} 这是你的专属雨露</b>\n{body}"
 
     def _render_result(self, ctx: PluginContext, result: dict[str, Any], *, correct: bool) -> str:
@@ -1623,10 +1776,15 @@ class AIRedpacketPlugin(Plugin):
         order = json.loads(str(result["option_order_json"]))
         options = [source_options[index] for index in order]
         answer_index = int(result["answer_index"])
-        body = self._render_template(
+        key = "success_message_template" if correct else "failed_message_template"
+        rich_default = SUCCESS_MESSAGE_TEMPLATE if correct else FAILED_MESSAGE_TEMPLATE
+        legacy_default = LEGACY_SUCCESS_MESSAGE_TEMPLATE if correct else LEGACY_FAILED_MESSAGE_TEMPLATE
+        rich = self._uses_rich_template(ctx, key, rich_default, legacy_default)
+        body = self._render_business_template(
             ctx,
-            "success_message_template" if correct else "failed_message_template",
-            SUCCESS_MESSAGE_TEMPLATE if correct else FAILED_MESSAGE_TEMPLATE,
+            key,
+            rich_default,
+            legacy_default,
             question=html.escape(str(result["question"])),
             reward=int(result["reward"]),
             answer=f"{chr(65 + answer_index)}. {html.escape(str(options[answer_index]))}",
@@ -1643,6 +1801,8 @@ class AIRedpacketPlugin(Plugin):
                 or f"用户{result.get('user_id') or ''}"
             )
         )
+        if rich:
+            return f"<p><b>答题者：{owner}</b></p>{body}"
         return f"<b>答题者：{owner}</b>\n{body}"
 
     def _answer_markup(self, redpacket_id: str, attempt_id: str, token: str, attempt: dict[str, Any]) -> dict[str, Any]:
@@ -1896,19 +2056,13 @@ class AIRedpacketPlugin(Plugin):
                         "send_via": "interaction_bot",
                         "chat_id": chat_id,
                         "message_id": int(message_id),
-                        "text": (
-                            "<b>答题超时</b>\n\n"
-                            f"{timeout_seconds} 秒内未作答，本题失效并已回归题库。\n"
-                            "本次不消耗领取与答题次数。"
-                        ),
                         "rich_message": {
                             "html": (
-                                "<b>答题超时</b>\n\n"
-                                f"{timeout_seconds} 秒内未作答，本题失效并已回归题库。\n"
-                                "本次不消耗领取与答题次数。"
+                                "<h1>答题超时</h1>"
+                                f"<p>{timeout_seconds} 秒内未作答，本题失效并已回归题库。</p>"
+                                "<p>本次不消耗领取与答题次数。</p>"
                             )
                         },
-                        "parse_mode": "html",
                         "reply_markup": {"inline_keyboard": []},
                     }
                 ],
@@ -1982,12 +2136,19 @@ class AIRedpacketPlugin(Plugin):
         for packet in self.storage.list_unsettled_redpackets(ctx.account_id):
             try:
                 messages = await self._render_redpacket_settlement(ctx, packet)
+                rich = self._uses_rich_template(
+                    ctx,
+                    "settlement_message_template",
+                    SETTLEMENT_MESSAGE_TEMPLATE,
+                    LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
+                )
                 for part_index, text in enumerate(messages, 1):
                     await self._send_background_message(
                         ctx,
                         int(packet["chat_id"]),
                         text,
                         delivery_key=f"ai_redpacket:settlement:{packet['id']}:{part_index}",
+                        rich=rich,
                     )
                 self.storage.mark_redpacket_settled(ctx.account_id, str(packet["id"]))
                 await self._log(
@@ -2033,6 +2194,12 @@ class AIRedpacketPlugin(Plugin):
                     chat_id,
                     text,
                     delivery_key=f"ai_redpacket:unfinished-reminder:{chat_id}:{packet_date}",
+                    rich=self._uses_rich_template(
+                        ctx,
+                        "reminder_message_template",
+                        REMINDER_MESSAGE_TEMPLATE,
+                        LEGACY_REMINDER_MESSAGE_TEMPLATE,
+                    ),
                 )
                 self.storage.mark_daily_reminder_published(ctx.account_id, chat_id, packet_date)
                 await self._log(
@@ -2057,6 +2224,12 @@ class AIRedpacketPlugin(Plugin):
         *,
         packet_date: str,
     ) -> str:
+        rich = self._uses_rich_template(
+            ctx,
+            "reminder_message_template",
+            REMINDER_MESSAGE_TEMPLATE,
+            LEGACY_REMINDER_MESSAGE_TEMPLATE,
+        )
         entries: list[str] = []
         read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
         for packet in packets:
@@ -2069,19 +2242,28 @@ class AIRedpacketPlugin(Plugin):
                 if message_link
                 else "开题消息暂不可用"
             )
-            entries.append(
-                f"- <code>{html.escape(str(packet['id']))}</code>\n"
-                f"  已领取：<code>{int(packet['claimed_count'])}/{int(packet['question_count'])}</code> 题，"
-                f"<code>{int(packet['claimed_amount'])}/{int(packet['total_amount'])}</code> 金额\n"
-                f"  {opening}"
-            )
-        return self._render_template(
+            if rich:
+                entries.append(
+                    f"<li><code>{html.escape(str(packet['id']))}</code> · "
+                    f"已领取 <code>{int(packet['claimed_count'])}/{int(packet['question_count'])}</code> 题，"
+                    f"<code>{int(packet['claimed_amount'])}/{int(packet['total_amount'])}</code> 金额 · "
+                    f"{opening}</li>"
+                )
+            else:
+                entries.append(
+                    f"- <code>{html.escape(str(packet['id']))}</code>\n"
+                    f"  已领取：<code>{int(packet['claimed_count'])}/{int(packet['question_count'])}</code> 题，"
+                    f"<code>{int(packet['claimed_amount'])}/{int(packet['total_amount'])}</code> 金额\n"
+                    f"  {opening}"
+                )
+        return self._render_business_template(
             ctx,
             "reminder_message_template",
             REMINDER_MESSAGE_TEMPLATE,
+            LEGACY_REMINDER_MESSAGE_TEMPLATE,
             packet_date=packet_date,
             expire_time="08:30",
-            redpackets="\n\n".join(entries),
+            redpackets="".join(entries) if rich else "\n\n".join(entries),
         )
 
     async def _render_redpacket_settlement(self, ctx: PluginContext, packet: dict[str, Any]) -> list[str]:
@@ -2089,34 +2271,53 @@ class AIRedpacketPlugin(Plugin):
         claimed_amount = int(packet["total_amount"]) - int(packet["remaining_amount"])
         status = "已全部领完" if packet["status"] == "finished" else "已到期"
         if not rows:
+            rich = self._uses_rich_template(
+                ctx,
+                "settlement_message_template",
+                SETTLEMENT_MESSAGE_TEMPLATE,
+                LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
+            )
             extreme_values = self._settlement_extreme_values(ctx, "无", 0, "无", 0)
             return [
-                self._render_template(
+                self._render_business_template(
                     ctx,
                     "settlement_message_template",
                     SETTLEMENT_MESSAGE_TEMPLATE,
+                    LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
                     redpacket_id=html.escape(str(packet["id"])),
                     status=status,
                     claimed_amount=claimed_amount,
                     total_amount=int(packet["total_amount"]),
                     claim_count=0,
                     **extreme_values,
-                    ranking="本次无人成功领取。",
+                    ranking="<p>本次无人成功领取。</p>" if rich else "本次无人成功领取。",
                 )
             ]
         public_names = await self._public_display_names(ctx, int(packet.get("chat_id") or 0), rows)
+        rich = self._uses_rich_template(
+            ctx,
+            "settlement_message_template",
+            SETTLEMENT_MESSAGE_TEMPLATE,
+            LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
+        )
         luckiest = rows[0]
         unluckiest = min(rows, key=lambda item: (int(item["reward"]), float(item["updated_at"]), int(item["user_id"])))
-        ranking = list(
-            f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['reward'])}"
-            for index, row in enumerate(rows, 1)
-        )
+        if rich:
+            ranking = list(
+                f"<li>{html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['reward'])}</li>"
+                for row in rows
+            )
+        else:
+            ranking = list(
+                f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['reward'])}"
+                for index, row in enumerate(rows, 1)
+            )
         chunks: list[list[str]] = []
         current: list[str] = []
         first_budget = 2800
         budget = max(1000, first_budget)
         for item in ranking:
-            projected = len("\n".join([*current, item]))
+            projected = len("".join([*current, item]) if rich else "\n".join([*current, item]))
             if current and projected > budget:
                 chunks.append(current)
                 current = []
@@ -2127,9 +2328,12 @@ class AIRedpacketPlugin(Plugin):
 
         messages: list[str] = []
         for index, chunk in enumerate(chunks):
-            title = "<b>领取总名单（金额降序）</b>" if index == 0 else "<b>领取总名单（续）</b>"
-            chunk_text = "\n".join(chunk)
-            block = f"<blockquote expandable>{title}\n{chunk_text}</blockquote>"
+            title = "领取总名单（金额降序）" if index == 0 else "领取总名单（续）"
+            if rich:
+                block = f"<details><summary>{title}</summary><ol>{''.join(chunk)}</ol></details>"
+            else:
+                chunk_text = "\n".join(chunk)
+                block = f"<blockquote expandable><b>{title}</b>\n{chunk_text}</blockquote>"
             if index == 0:
                 extreme_values = self._settlement_extreme_values(
                     ctx,
@@ -2139,10 +2343,11 @@ class AIRedpacketPlugin(Plugin):
                     int(unluckiest["reward"]),
                 )
                 messages.append(
-                    self._render_template(
+                    self._render_business_template(
                         ctx,
                         "settlement_message_template",
                         SETTLEMENT_MESSAGE_TEMPLATE,
+                        LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
                         redpacket_id=html.escape(str(packet["id"])),
                         status=status,
                         claimed_amount=claimed_amount,
@@ -2166,7 +2371,7 @@ class AIRedpacketPlugin(Plugin):
     ) -> dict[str, Any]:
         template = str(
             (getattr(ctx, "config", None) or {}).get("settlement_message_template")
-            or SETTLEMENT_MESSAGE_TEMPLATE
+            or LEGACY_SETTLEMENT_MESSAGE_TEMPLATE
         )
         luckiest_value: int | str = int(luckiest_reward)
         unluckiest_value: int | str = int(unluckiest_reward)
@@ -2209,20 +2414,41 @@ class AIRedpacketPlugin(Plugin):
         *,
         completed: bool,
         now: datetime | None = None,
+        force_legacy: bool = False,
     ) -> str:
+        rich = not force_legacy and self._uses_rich_template(
+            ctx,
+            "weekly_message_template",
+            WEEKLY_MESSAGE_TEMPLATE,
+            LEGACY_WEEKLY_MESSAGE_TEMPLATE,
+        )
+
+        def render(**values: Any) -> str:
+            if rich:
+                return self._render_business_template(
+                    ctx,
+                    "weekly_message_template",
+                    WEEKLY_MESSAGE_TEMPLATE,
+                    LEGACY_WEEKLY_MESSAGE_TEMPLATE,
+                    **values,
+                )
+            return self._render_template(
+                ctx,
+                "weekly_message_template",
+                LEGACY_WEEKLY_MESSAGE_TEMPLATE,
+                **values,
+            )
+
         start, end = self._weekly_period(ctx, now=now, completed=completed)
         rows = self.storage.weekly_leaderboard(ctx.account_id, chat_id, start.timestamp(), end.timestamp())
         title = "AI 红包周榜结算" if completed else "AI 红包本周排行榜"
         if not rows:
-            return self._render_template(
-                ctx,
-                "weekly_message_template",
-                WEEKLY_MESSAGE_TEMPLATE,
+            return render(
                 weekly_title=title,
                 period_start=start.strftime("%Y-%m-%d %H:%M"),
                 period_end=end.strftime("%Y-%m-%d %H:%M"),
-                count_ranking="本周期暂无成功答题记录。",
-                reward_ranking="本周期暂无成功答题记录。",
+                count_ranking="<p>本周期暂无成功答题记录。</p>" if rich else "本周期暂无成功答题记录。",
+                reward_ranking="<p>本周期暂无成功答题记录。</p>" if rich else "本周期暂无成功答题记录。",
             )
         public_names = await self._public_display_names(ctx, chat_id, rows)
         by_count = sorted(
@@ -2233,18 +2459,25 @@ class AIRedpacketPlugin(Plugin):
             rows,
             key=lambda item: (-int(item["total_reward"]), -int(item["success_count"]), int(item["user_id"])),
         )[:5]
-        count_ranking = "\n".join(
-            f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['success_count'])} 次"
-            for index, row in enumerate(by_count, 1)
-        )
-        reward_ranking = "\n".join(
-            f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['total_reward'])}"
-            for index, row in enumerate(by_reward, 1)
-        )
-        return self._render_template(
-            ctx,
-            "weekly_message_template",
-            WEEKLY_MESSAGE_TEMPLATE,
+        if rich:
+            count_ranking = "<ol>" + "".join(
+                f"<li>{html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['success_count'])} 次</li>"
+                for row in by_count
+            ) + "</ol>"
+            reward_ranking = "<ol>" + "".join(
+                f"<li>{html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['total_reward'])}</li>"
+                for row in by_reward
+            ) + "</ol>"
+        else:
+            count_ranking = "\n".join(
+                f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['success_count'])} 次"
+                for index, row in enumerate(by_count, 1)
+            )
+            reward_ranking = "\n".join(
+                f"{index}. {html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['total_reward'])}"
+                for index, row in enumerate(by_reward, 1)
+            )
+        return render(
             weekly_title=title,
             period_start=start.strftime("%Y-%m-%d %H:%M"),
             period_end=end.strftime("%Y-%m-%d %H:%M"),
@@ -2270,6 +2503,12 @@ class AIRedpacketPlugin(Plugin):
                     chat_id,
                     text,
                     delivery_key=f"ai_redpacket:weekly:{period_key}",
+                    rich=self._uses_rich_template(
+                        ctx,
+                        "weekly_message_template",
+                        WEEKLY_MESSAGE_TEMPLATE,
+                        LEGACY_WEEKLY_MESSAGE_TEMPLATE,
+                    ),
                 )
                 self.storage.mark_weekly_report_published(ctx.account_id, chat_id, week_start)
                 await self._log(
@@ -2315,20 +2554,31 @@ class AIRedpacketPlugin(Plugin):
         text: str,
         *,
         delivery_key: str,
+        rich: bool = False,
     ) -> Any:
         messages = getattr(ctx, "messages", None)
-        if messages is None or not callable(getattr(messages, "send", None)):
+        sender_name = "send_rich" if rich else "send"
+        sender = getattr(messages, sender_name, None) if messages is not None else None
+        if not callable(sender):
             raise RuntimeError("当前没有可用的后台消息发送能力")
         read_message_id = getattr(messages, "read_saved_message_id", None)
         if callable(read_message_id) and await read_message_id(delivery_key):
             return None
-        result = await messages.send(
-            channel="interaction_bot",
-            chat_id=chat_id,
-            text=text,
-            parse_mode="html",
-            save_message_id_key=delivery_key,
-        )
+        if rich:
+            result = await sender(
+                channel="interaction_bot",
+                chat_id=chat_id,
+                html=text,
+                save_message_id_key=delivery_key,
+            )
+        else:
+            result = await sender(
+                channel="interaction_bot",
+                chat_id=chat_id,
+                text=text,
+                parse_mode="html",
+                save_message_id_key=delivery_key,
+            )
         if callable(read_message_id) and not await read_message_id(delivery_key):
             raise RuntimeError("后台消息未确认投递成功")
         return result
@@ -2489,8 +2739,56 @@ class AIRedpacketPlugin(Plugin):
             return value.strip().lower() not in {"", "0", "false", "off", "no"}
         return bool(value)
 
+    def _uses_rich_template(
+        self,
+        ctx: PluginContext,
+        key: str,
+        rich_default: str,
+        legacy_default: str,
+    ) -> bool:
+        configured = str((getattr(ctx, "config", None) or {}).get(key) or "").strip()
+        if not configured or configured in {rich_default.strip(), legacy_default.strip()}:
+            return True
+        return bool(
+            re.search(
+                r"</?(?:h[1-6]|p|ul|ol|li|details|summary)(?:\s|>)",
+                configured,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _render_business_template(
+        self,
+        ctx: PluginContext,
+        key: str,
+        rich_default: str,
+        legacy_default: str,
+        **values: Any,
+    ) -> str:
+        configured = str((getattr(ctx, "config", None) or {}).get(key) or "")
+        normalized = configured.strip()
+        if not normalized or normalized == legacy_default.strip():
+            template = rich_default
+        else:
+            template = configured
+        fallback = (
+            rich_default
+            if self._uses_rich_template(ctx, key, rich_default, legacy_default)
+            else legacy_default
+        )
+        return self._format_template(ctx, template, fallback, **values)
+
     def _render_template(self, ctx: PluginContext, key: str, default: str, **values: Any) -> str:
         template = str((getattr(ctx, "config", None) or {}).get(key) or default)
+        return self._format_template(ctx, template, default, **values)
+
+    def _format_template(
+        self,
+        ctx: PluginContext,
+        template: str,
+        fallback: str,
+        **values: Any,
+    ) -> str:
         render_values = {
             "date": self._today(ctx),
             "daily_limit": self._int_config(ctx, "daily_limit", 1, 1, 100),
@@ -2502,7 +2800,7 @@ class AIRedpacketPlugin(Plugin):
         try:
             return template.format_map(render_values)
         except (KeyError, ValueError):
-            return default.format_map(render_values)
+            return fallback.format_map(render_values)
 
     async def _log(self, ctx: PluginContext, level: str, message: str, **detail: Any) -> None:
         logger = getattr(ctx, "log", None)

@@ -134,6 +134,13 @@ def _questions(count: int = 5, *, start: int = 0) -> list[dict[str, object]]:
     ]
 
 
+def _action_html(action: dict[str, object]) -> str:
+    rich_message = action.get("rich_message")
+    if isinstance(rich_message, dict):
+        return str(rich_message.get("html") or "")
+    return str(action.get("text") or "")
+
+
 class RewardAllocationTest(unittest.TestCase):
     def test_integer_rewards_preserve_total_and_bounds(self) -> None:
         rewards = plugin_module.allocate_rewards(100, 10, 1, 20, rng=random.Random(7))
@@ -171,8 +178,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.24")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.24")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.25")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.25")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.67.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -216,6 +223,7 @@ class QuestionGenerationTest(unittest.TestCase):
         self.assertIn("weekly_message_template", properties)
         self.assertIn("settlement_message_template", properties)
         self.assertIn("reminder_message_template", properties)
+        self.assertIn("send_rich_message", manifest_module.INTERACTION_ENTRIES[0]["result_contract"]["actions"])
         public_list = next(
             item
             for item in manifest_module.EVENT_SUBSCRIPTIONS
@@ -1518,9 +1526,9 @@ class PluginActionTest(unittest.TestCase):
                     "airp:start:rp-anonymous",
                 )
 
-                question = next(action for action in actions if action["type"] == "send_message")
-                self.assertIn("值班管理员 这是你的专属雨露", question["text"])
-                self.assertNotIn("真实姓名", question["text"])
+                question = next(action for action in actions if action["type"] == "send_rich_message")
+                self.assertIn("值班管理员 这是你的专属雨露", _action_html(question))
+                self.assertNotIn("真实姓名", _action_html(question))
                 with plugin.storage.connect() as conn:
                     attempt = conn.execute(
                         "SELECT user_display_name FROM redpacket_attempt WHERE user_id = ?",
@@ -1555,7 +1563,8 @@ class PluginActionTest(unittest.TestCase):
                     1,
                     ["200", "2", "0e90376c7a2b"],
                 )
-                self.assertNotIn("红包创建失败", actions[0]["text"])
+                self.assertEqual(actions[0]["type"], "send_rich_message")
+                self.assertNotIn("红包创建失败", _action_html(actions[0]))
                 packet = plugin.storage.list_redpackets(1, -1001)[0]
                 with plugin.storage.connect() as conn:
                     rewards = [
@@ -1613,7 +1622,10 @@ class PluginActionTest(unittest.TestCase):
                         "trigger": {"command": "airp-7", "args": []},
                     },
                 )
-                self.assertIn("AI 红包本周排行榜", actions[0]["text"])
+                self.assertEqual(actions[0]["type"], "send_rich_message")
+                self.assertEqual(actions[0]["reply_to_message_id"], 9)
+                self.assertIn("<details>", _action_html(actions[0]))
+                self.assertIn("AI 红包本周排行榜", _action_html(actions[0]))
 
         asyncio.run(run_case())
 
@@ -1719,9 +1731,11 @@ class PluginActionTest(unittest.TestCase):
                 edit = applied[0][0][0]
                 self.assertEqual(edit["type"], "edit_message")
                 self.assertEqual(edit["message_id"], 88)
-                self.assertIn("30 秒内未作答", edit["text"])
-                self.assertIn("已回归题库", edit["text"])
-                self.assertIn("不消耗领取与答题次数", edit["text"])
+                self.assertNotIn("text", edit)
+                self.assertIn("<h1>答题超时</h1>", _action_html(edit))
+                self.assertIn("30 秒内未作答", _action_html(edit))
+                self.assertIn("已回归题库", _action_html(edit))
+                self.assertIn("不消耗领取与答题次数", _action_html(edit))
                 self.assertEqual(edit["reply_markup"], {"inline_keyboard": []})
                 self.assertGreaterEqual(delays[0], 29)
                 self.assertLessEqual(delays[0], 31)
@@ -1770,9 +1784,10 @@ class PluginActionTest(unittest.TestCase):
             )
         )
         text = messages[0]
-        self.assertIn("运气王：<b>一二三四五六七八九十</b> · 30", text)
-        self.assertIn("倒霉蛋：<b>小明</b> · 10", text)
-        self.assertIn("<blockquote expandable>", text)
+        self.assertIn("<b>运气王：</b>一二三四五六七八九十 · 30", text)
+        self.assertIn("<b>倒霉蛋：</b>小明 · 10", text)
+        self.assertIn("<details><summary>领取总名单（金额降序）</summary><ol>", text)
+        self.assertNotIn("<blockquote expandable>", text)
         self.assertLess(text.index("· 30"), text.rindex("· 10"))
         self.assertNotIn("十一十二", text)
 
@@ -1804,7 +1819,9 @@ class PluginActionTest(unittest.TestCase):
         self.assertGreater(len(messages), 1)
         self.assertTrue(all(len(message) < 3900 for message in messages))
         self.assertEqual(sum(message.count(" · ") for message in messages), 502)
-        self.assertTrue(all("<blockquote expandable>" in message for message in messages))
+        self.assertTrue(all("<details><summary>" in message for message in messages))
+        self.assertTrue(all("<ol>" in message for message in messages))
+        self.assertTrue(all("<blockquote expandable>" not in message for message in messages))
 
     def test_settlement_rechecks_historical_anonymous_admin_name(self) -> None:
         plugin = plugin_module.AIRedpacketPlugin()
@@ -1880,8 +1897,10 @@ class PluginActionTest(unittest.TestCase):
                 now=datetime.fromisoformat("2026-07-15T12:00:00+08:00"),
             )
         )
-        self.assertIn("<blockquote expandable>", text)
-        count_section, reward_section = text.split("<b>获得奖金 TOP 5</b>")
+        self.assertIn("<details><summary>答对次数 TOP 5</summary><ol>", text)
+        self.assertIn("<details><summary>获得奖金 TOP 5</summary><ol>", text)
+        self.assertNotIn("<blockquote expandable>", text)
+        count_section, reward_section = text.split("<summary>获得奖金 TOP 5</summary>")
         self.assertLess(count_section.index("答题王"), count_section.index("奖金王"))
         self.assertLess(reward_section.index("奖金王"), reward_section.index("答题王"))
 
@@ -2055,6 +2074,10 @@ class PluginActionTest(unittest.TestCase):
                     sent.append(kwargs)
                     self.saved[kwargs["save_message_id_key"]] = 123
 
+                async def send_rich(self, **kwargs):
+                    sent.append(kwargs)
+                    self.saved[kwargs["save_message_id_key"]] = 123
+
                 async def read_saved_message_id(self, key):
                     return self.saved.get(key)
 
@@ -2071,11 +2094,12 @@ class PluginActionTest(unittest.TestCase):
 
             self.assertEqual(len(sent), 2)
             chat_one = next(item for item in sent if item["chat_id"] == -1001)
-            self.assertIn("昨日雨露均沾即将到期", chat_one["text"])
-            self.assertIn("今日 08:30", chat_one["text"])
-            self.assertIn("yesterday-one", chat_one["text"])
-            self.assertIn("yesterday-two", chat_one["text"])
-            self.assertIn("https://t.me/c/1/88", chat_one["text"])
+            self.assertIn("昨日雨露均沾即将到期", chat_one["html"])
+            self.assertIn("今日 08:30", chat_one["html"])
+            self.assertIn("yesterday-one", chat_one["html"])
+            self.assertIn("yesterday-two", chat_one["html"])
+            self.assertIn("https://t.me/c/1/88", chat_one["html"])
+            self.assertNotIn("text", chat_one)
             self.assertEqual(chat_one["save_message_id_key"], "ai_redpacket:unfinished-reminder:-1001:2026-07-14")
             self.assertEqual(
                 queried[0][1:3],
@@ -2147,6 +2171,10 @@ class PluginActionTest(unittest.TestCase):
                     sent.append(kwargs)
                     self.saved[kwargs["save_message_id_key"]] = 123
 
+                async def send_rich(self, **kwargs):
+                    sent.append(kwargs)
+                    self.saved[kwargs["save_message_id_key"]] = 123
+
                 async def read_saved_message_id(self, key):
                     return self.saved.get(key)
 
@@ -2162,8 +2190,9 @@ class PluginActionTest(unittest.TestCase):
             await plugin._run_weekly_leaderboard(Context(), job)
             self.assertEqual(len(sent), 1)
             self.assertEqual(sent[0]["channel"], "interaction_bot")
-            self.assertIn("2026-07-12 10:00", sent[0]["text"])
-            self.assertIn("2026-07-19 10:00", sent[0]["text"])
+            self.assertIn("2026-07-12 10:00", sent[0]["html"])
+            self.assertIn("2026-07-19 10:00", sent[0]["html"])
+            self.assertNotIn("text", sent[0])
 
         asyncio.run(run_case())
 
@@ -2569,6 +2598,9 @@ class PluginActionTest(unittest.TestCase):
                 create_actions = await plugin._create_packet(ctx, -1001, 99, 12, ["30", "3"])
                 self.assertEqual(ai.calls, 1)
                 announcement = create_actions[0]
+                self.assertEqual(announcement["type"], "send_rich_message")
+                self.assertIn("<h1>AI 答题红包</h1>", _action_html(announcement))
+                self.assertNotIn("text", announcement)
                 self.assertEqual(announcement["send_via"], "interaction_bot")
                 self.assertEqual(announcement["reply_markup"]["inline_keyboard"][0][0]["text"], "领取我的雨露")
                 self.assertTrue(announcement["pin"])
@@ -3018,6 +3050,7 @@ class PluginActionTest(unittest.TestCase):
                 with patch.object(plugin_module.time, "time", return_value=created_at):
                     actions = await plugin._create_packet(Context(), -1001, 99, 1, ["10"])
                 self.assertEqual(actions[0]["send_via"], "interaction_bot")
+                self.assertEqual(actions[0]["type"], "send_message")
                 self.assertEqual(actions[0]["text"], "日期 2026-07-14 限制 3/2")
                 packets = plugin.storage.list_redpackets(1, -1001)
                 self.assertEqual(packets[0]["bank_id"], "default-bank")
@@ -3084,8 +3117,14 @@ class PluginActionTest(unittest.TestCase):
 
             actions = plugin._start_attempt(Context(), "callback", -1001, 77, "@alice", "public-entry")
             question = actions[1]
-            self.assertTrue(question["text"].startswith("<b>@alice 这是你的专属雨露</b>"))
+            self.assertEqual(question["type"], "send_rich_message")
+            self.assertTrue(_action_html(question).startswith("<p><b>@alice 这是你的专属雨露</b></p>"))
+            self.assertIn('<ol type="A">', _action_html(question))
+            self.assertEqual(_action_html(question).count("<li>"), 3)
             self.assertEqual(question["reply_markup"]["inline_keyboard"][1][0]["text"], "我也要雨露均沾")
+            answer_buttons = question["reply_markup"]["inline_keyboard"][0]
+            self.assertEqual([button["text"] for button in answer_buttons], ["A", "B", "C"])
+            self.assertTrue(all(button["callback_data"].startswith("airp:answer:public-entry:") for button in answer_buttons))
             self.assertEqual(
                 question["reply_markup"]["inline_keyboard"][1][0]["callback_data"],
                 "airp:start:public-entry",
@@ -3100,6 +3139,169 @@ class PluginActionTest(unittest.TestCase):
                     (77,),
                 ).fetchone()["count"]
             self.assertEqual(attempt_count, 1)
+
+    def test_failed_result_uses_rich_edit_and_keeps_join_button(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="failed-rich",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                attempt = plugin.storage.reserve_question(
+                    attempt_id="failed-attempt",
+                    account_id=1,
+                    user_id=77,
+                    chat_id=-1001,
+                    redpacket_id="failed-rich",
+                    date="2026-07-18",
+                    submission_token="failed-token",
+                    reservation_seconds=300,
+                    retry_count=0,
+                    user_display_name="张三",
+                )
+
+                class Context:
+                    account_id = 1
+                    config = {"retry_count": 0}
+                    account_config = {}
+                    scheduler = None
+                    log = None
+
+                wrong_index = (int(attempt["answer_index"]) + 1) % 3
+                actions = await plugin._submit_attempt(
+                    Context(),
+                    {"message": {"chat_id": -1001, "message_id": 88}},
+                    "failed-callback",
+                    -1001,
+                    77,
+                    "failed-rich",
+                    "failed-attempt",
+                    wrong_index,
+                    "failed-token",
+                )
+
+                self.assertEqual(actions[0]["type"], "answer_callback")
+                edit = next(action for action in actions if action["type"] == "edit_message")
+                self.assertEqual(edit["send_via"], "interaction_bot")
+                self.assertIn("<details open>", _action_html(edit))
+                self.assertIn("今天的挑战已结束", _action_html(edit))
+                self.assertEqual(edit["reply_markup"]["inline_keyboard"][0][0]["text"], "我也要雨露均沾")
+                self.assertEqual(
+                    edit["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+                    "airp:start:failed-rich",
+                )
+
+        asyncio.run(run_case())
+
+    def test_saved_custom_telegram_html_templates_stay_on_plain_message_path(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="legacy-custom",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+
+                class Context:
+                    account_id = 1
+                    config = {
+                        "question_message_template": "<b>旧题面</b>\n{question}\n\n{options}",
+                        "success_message_template": "<b>旧结果</b>\n{question}\n奖励 {reward}",
+                        "weekly_message_template": (
+                            "<b>{weekly_title}</b>\n<blockquote expandable>{count_ranking}\n{reward_ranking}</blockquote>"
+                        ),
+                    }
+                    account_config = {}
+                    log = None
+
+                actions = plugin._start_attempt(Context(), "legacy-callback", -1001, 77, "张三", "legacy-custom")
+                question = actions[1]
+                self.assertEqual(question["type"], "send_message")
+                self.assertEqual(question["parse_mode"], "html")
+                self.assertNotIn("rich_message", question)
+                self.assertIn("<b>旧题面</b>\n", question["text"])
+                self.assertIn("A. ", question["text"])
+                answer_callback = question["reply_markup"]["inline_keyboard"][0][0]["callback_data"]
+                self.assertEqual(answer_callback.split(":")[:3], ["airp", "answer", "legacy-custom"])
+
+                attempt_id = answer_callback.split(":")[3]
+                with plugin.storage.connect() as conn:
+                    attempt = conn.execute(
+                        "SELECT answer_index, submission_token FROM redpacket_attempt WHERE id = ?",
+                        (attempt_id,),
+                    ).fetchone()
+                result_actions = await plugin._submit_attempt(
+                    Context(),
+                    {"message": {"chat_id": -1001, "message_id": 88}},
+                    "legacy-success",
+                    -1001,
+                    77,
+                    "legacy-custom",
+                    attempt_id,
+                    int(attempt["answer_index"]),
+                    str(attempt["submission_token"]),
+                )
+                edit = next(action for action in result_actions if action["type"] == "edit_message")
+                self.assertEqual(edit["parse_mode"], "html")
+                self.assertNotIn("rich_message", edit)
+                self.assertIn("<b>旧结果</b>\n", edit["text"])
+
+                self.assertFalse(
+                    plugin._uses_rich_template(
+                        Context(),
+                        "weekly_message_template",
+                        plugin_module.WEEKLY_MESSAGE_TEMPLATE,
+                        plugin_module.LEGACY_WEEKLY_MESSAGE_TEMPLATE,
+                    )
+                )
+
+        asyncio.run(run_case())
+
+    def test_saved_legacy_builtin_template_is_migrated_to_rich_message(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+
+        class Context:
+            config = {"packet_message_template": plugin_module.LEGACY_PACKET_MESSAGE_TEMPLATE}
+
+        self.assertTrue(
+            plugin._uses_rich_template(
+                Context(),
+                "packet_message_template",
+                plugin_module.PACKET_MESSAGE_TEMPLATE,
+                plugin_module.LEGACY_PACKET_MESSAGE_TEMPLATE,
+            )
+        )
+
+        class RichCustomContext:
+            config = {
+                "packet_message_template": "<h1>自定义开场</h1><p>红包 {redpacket_id}</p>"
+            }
+
+        self.assertTrue(
+            plugin._uses_rich_template(
+                RichCustomContext(),
+                "packet_message_template",
+                plugin_module.PACKET_MESSAGE_TEMPLATE,
+                plugin_module.LEGACY_PACKET_MESSAGE_TEMPLATE,
+            )
+        )
 
     def test_other_user_answer_button_shows_owner_warning_alert(self) -> None:
         async def run_case() -> None:
@@ -3224,6 +3426,9 @@ class PluginActionTest(unittest.TestCase):
                 )
                 payout = next(action for action in actions if action["type"] == "payout")
                 edit = next(action for action in actions if action["type"] == "edit_message")
+                self.assertEqual(edit["send_via"], "interaction_bot")
+                self.assertIn("rich_message", edit)
+                self.assertIn("<details open>", _action_html(edit))
                 buttons = edit["reply_markup"]["inline_keyboard"]
                 self.assertEqual(buttons[0][0]["text"], "2026-07-13-雨露均沾 · 申请补发奖励")
                 self.assertEqual(buttons[0][0]["callback_data"], "airp:repay:rp1:a1")
