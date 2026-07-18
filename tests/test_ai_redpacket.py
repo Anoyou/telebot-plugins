@@ -178,8 +178,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.25")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.25")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.26")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.26")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.67.1")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -1484,7 +1484,7 @@ class PluginActionTest(unittest.TestCase):
         self.assertEqual(named, "张三")
         self.assertEqual(username_only, "@lisi")
 
-    def test_anonymous_admin_callback_uses_tag_in_public_question(self) -> None:
+    def test_anonymous_admin_is_blocked_from_all_participation_callbacks(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
                 plugin = plugin_module.AIRedpacketPlugin()
@@ -1515,26 +1515,81 @@ class PluginActionTest(unittest.TestCase):
                     client = Client()
                     scheduler = None
 
+                payload = {
+                    "source": {"type": "callback_query"},
+                    "message": {"chat_id": -1001, "message_id": 88},
+                    "sender": {"user_id": 77, "display_name": "真实姓名", "username": "real_user"},
+                }
+                callbacks = (
+                    "airp:start:rp-anonymous",
+                    "airp:answer:rp-anonymous:attempt:0:token",
+                    "airp:repay:rp-anonymous:attempt",
+                    "airp:repayme:rp-anonymous",
+                )
+                for index, callback_data in enumerate(callbacks):
+                    actions = await plugin._handle_callback(
+                        Context(),
+                        payload,
+                        f"callback-anonymous-{index}",
+                        callback_data,
+                    )
+                    self.assertEqual([action["type"] for action in actions], ["answer_callback"])
+                    self.assertTrue(actions[0]["show_alert"])
+                    self.assertEqual(actions[0]["text"], plugin_module.ANONYMOUS_ADMIN_BLOCKED_TEXT)
+                with plugin.storage.connect() as conn:
+                    attempt_count = conn.execute(
+                        "SELECT COUNT(*) FROM redpacket_attempt WHERE user_id = ?",
+                        (77,),
+                    ).fetchone()[0]
+                self.assertEqual(attempt_count, 0)
+
+        asyncio.run(run_case())
+
+    def test_non_anonymous_admin_can_start_question(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="rp-visible-admin",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+
+                class Client:
+                    async def get_permissions(self, chat_id, user_id):
+                        return types.SimpleNamespace(
+                            anonymous=False,
+                            participant=types.SimpleNamespace(rank="值班管理员"),
+                        )
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    client = Client()
+                    scheduler = None
+
                 actions = await plugin._handle_callback(
                     Context(),
                     {
                         "source": {"type": "callback_query"},
                         "message": {"chat_id": -1001, "message_id": 88},
-                        "sender": {"user_id": 77, "display_name": "真实姓名", "username": "real_user"},
+                        "sender": {"user_id": 77, "display_name": "公开姓名", "username": "visible_admin"},
                     },
-                    "callback-anonymous",
-                    "airp:start:rp-anonymous",
+                    "callback-visible-admin",
+                    "airp:start:rp-visible-admin",
                 )
 
                 question = next(action for action in actions if action["type"] == "send_rich_message")
-                self.assertIn("值班管理员 这是你的专属雨露", _action_html(question))
-                self.assertNotIn("真实姓名", _action_html(question))
-                with plugin.storage.connect() as conn:
-                    attempt = conn.execute(
-                        "SELECT user_display_name FROM redpacket_attempt WHERE user_id = ?",
-                        (77,),
-                    ).fetchone()
-                self.assertEqual(attempt["user_display_name"], "值班管理员")
+                self.assertIn("公开姓名 这是你的专属雨露", _action_html(question))
+                self.assertNotIn("值班管理员 这是你的专属雨露", _action_html(question))
 
         asyncio.run(run_case())
 

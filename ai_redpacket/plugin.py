@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.25"
+PLUGIN_VERSION = "0.1.26"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -40,6 +40,7 @@ DEFAULT_ANSWER_TIMEOUT_SECONDS = 300
 ANSWER_CLICK_COOLDOWN_SECONDS = 2
 CALLBACK_PREFIX = "airp"
 ENTRY_KEY = "ai_redpacket_claim"
+ANONYMOUS_ADMIN_BLOCKED_TEXT = "匿名管理员不能参与雨露均沾答题，请关闭匿名身份后再试。"
 DATA_PATH = Path(__file__).with_name("ai_redpacket.sqlite3")
 MAX_QUESTION_COUNT = 500
 MAX_SOURCE_CHARS = 300_000
@@ -1286,6 +1287,8 @@ class AIRedpacketPlugin(Plugin):
         user_id = _user_id(payload)
         if not callback_id or not chat_id or not user_id:
             return []
+        if await self._is_anonymous_admin(ctx, chat_id, user_id):
+            return [_ack(callback_id, ANONYMOUS_ADMIN_BLOCKED_TEXT, alert=True)]
         if len(parts) == 3 and parts[1] == "start":
             public_name = await self._public_display_name(
                 ctx,
@@ -1325,6 +1328,23 @@ class AIRedpacketPlugin(Plugin):
                 redpacket_id=parts[2],
             )
         return [_ack(callback_id, "按钮已经失效", alert=True)]
+
+    async def _is_anonymous_admin(self, ctx: PluginContext, chat_id: int, user_id: int) -> bool:
+        """Return true only when Telegram confirms the current anonymous mode."""
+
+        try:
+            identity = await resolve_public_sender_identity(
+                ctx,
+                chat_id=chat_id,
+                user_id=user_id,
+                fallback_display_name="",
+            )
+        except Exception:
+            # A transient member lookup failure must not turn ordinary members
+            # into anonymous administrators; the payout path still has its own
+            # recent-message safety check.
+            return False
+        return bool(getattr(identity, "is_anonymous_admin", False))
 
     def _start_attempt(
         self,
@@ -2599,7 +2619,7 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{base} close 红包ID</code> 关闭红包\n"
             "创建、重置或关闭成功后自动删除原命令消息；失败时保留。\n"
             "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。\n"
-            "答题消息中普通成员显示姓名，匿名管理员只显示管理员标签；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
+            "答题消息中普通成员显示姓名，匿名管理员不能参与答题；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
             "list 原命令会自动删除，列表回执保留；已完结红包不会出现在列表中。\n"
             "答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n"
             "红包最晚于创建日次日 08:30 到期；如昨日红包未领完，今日 08:00 会发送一次提醒。"
