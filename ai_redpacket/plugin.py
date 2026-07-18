@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.22"
+PLUGIN_VERSION = "0.1.23"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -1503,7 +1503,7 @@ class AIRedpacketPlugin(Plugin):
             "reply_to_user_id": user_id,
             "reply_to_display_name": public_display_name,
             "reply_to_username": None,
-            "reply_to_search_limit": 200,
+            "reply_to_search_limit": 5000,
             "reply_anchor_missing_text": (
                 f"暂未找到 {user_display_name} 在本群的近期发言，因此暂时无法核验和补发奖励。\n\n"
                 "请先在群里任意发言一次，再重新点击“申请补发奖励”。\n\n"
@@ -1522,7 +1522,7 @@ class AIRedpacketPlugin(Plugin):
         ctx: PluginContext,
         chat_id: int,
         user_id: int,
-        limit: int = 200,
+        limit: int = 5000,
     ) -> int | None:
         client = getattr(ctx, "client", None)
         iter_messages = getattr(client, "iter_messages", None) if client is not None else None
