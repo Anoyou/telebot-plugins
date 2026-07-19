@@ -178,9 +178,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.26")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.26")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.67.1")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.27")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.27")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.6")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -566,6 +566,56 @@ class StorageFlowTest(unittest.TestCase):
             submission_token=f"token-{user_id}",
             reservation_seconds=300,
         )
+
+    def test_each_new_packet_samples_a_fresh_question_batch(self) -> None:
+        self.storage.replace_bank(
+            account_id=1,
+            bank_id="bank",
+            title="测试题库",
+            questions=_questions(100),
+        )
+        original_connect = self.storage.connect
+        connection_index = 0
+
+        def deterministic_connect():
+            nonlocal connection_index
+            connection_index += 1
+            conn = original_connect()
+            if connection_index in {1, 3}:
+                random_call = 0
+                direction = 1 if connection_index == 1 else -1
+
+                def deterministic_random() -> int:
+                    nonlocal random_call
+                    random_call += 1
+                    return direction * random_call
+
+                conn.create_function("RANDOM", 0, deterministic_random)
+            return conn
+
+        with patch.object(self.storage, "connect", side_effect=deterministic_connect):
+            self._create_packet("fresh-a", 20)
+            self._create_packet("fresh-b", 20)
+
+        with self.storage.connect() as conn:
+            first = {
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT question_bank_id FROM redpacket_question WHERE redpacket_id = ?",
+                    ("fresh-a",),
+                )
+            }
+            second = {
+                int(row[0])
+                for row in conn.execute(
+                    "SELECT question_bank_id FROM redpacket_question WHERE redpacket_id = ?",
+                    ("fresh-b",),
+                )
+            }
+
+        self.assertEqual(len(first), 20)
+        self.assertEqual(len(second), 20)
+        self.assertTrue(first.isdisjoint(second))
 
     def test_hard_expiration_caps_ttl_without_extending_shorter_ttl(self) -> None:
         created_at = datetime.fromisoformat("2026-07-14T20:00:00+08:00").timestamp()
@@ -1590,6 +1640,65 @@ class PluginActionTest(unittest.TestCase):
                 question = next(action for action in actions if action["type"] == "send_rich_message")
                 self.assertIn("公开姓名 这是你的专属雨露", _action_html(question))
                 self.assertNotIn("值班管理员 这是你的专属雨露", _action_html(question))
+
+        asyncio.run(run_case())
+
+    def test_unresolved_identity_is_not_saved_as_anonymous_user(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="rp-unresolved",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+
+                class Identities:
+                    calls = 0
+
+                    async def resolve(self, **kwargs):
+                        self.calls += 1
+                        return types.SimpleNamespace(
+                            display_name="匿名用户",
+                            is_anonymous_admin=False,
+                            resolved=False,
+                        )
+
+                identities = Identities()
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    client = None
+                    scheduler = None
+
+                context = Context()
+                context.identities = identities
+                actions = await plugin._handle_callback(
+                    context,
+                    {
+                        "source": {"type": "callback_query"},
+                        "message": {"chat_id": -1001, "message_id": 88},
+                        "sender": {"user_id": 77, "display_name": "公开姓名"},
+                    },
+                    "callback-unresolved",
+                    "airp:start:rp-unresolved",
+                )
+
+                self.assertEqual(identities.calls, 1)
+                self.assertEqual([action["type"] for action in actions], ["answer_callback"])
+                self.assertEqual(actions[0]["text"], plugin_module.IDENTITY_VERIFICATION_FAILED_TEXT)
+                with plugin.storage.connect() as conn:
+                    attempts = conn.execute("SELECT COUNT(*) FROM redpacket_attempt").fetchone()[0]
+                self.assertEqual(attempts, 0)
 
         asyncio.run(run_case())
 
@@ -3386,6 +3495,12 @@ class PluginActionTest(unittest.TestCase):
                 )
 
                 class Client:
+                    async def get_permissions(self, chat_id, user_id):
+                        return types.SimpleNamespace(
+                            anonymous=False,
+                            participant=types.SimpleNamespace(rank=""),
+                        )
+
                     def iter_messages(self, chat_id, *, from_user=None, limit=None):
                         async def stream():
                             yield types.SimpleNamespace(id=777, sender_id=77)
@@ -3444,6 +3559,12 @@ class PluginActionTest(unittest.TestCase):
                 )
 
                 class Client:
+                    async def get_permissions(self, chat_id, user_id):
+                        return types.SimpleNamespace(
+                            anonymous=False,
+                            participant=types.SimpleNamespace(rank=""),
+                        )
+
                     def iter_messages(self, chat_id, *, from_user=None, limit=None):
                         async def stream():
                             yield types.SimpleNamespace(id=777, sender_id=77)

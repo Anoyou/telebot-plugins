@@ -30,7 +30,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.26"
+PLUGIN_VERSION = "0.1.27"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -41,6 +41,7 @@ ANSWER_CLICK_COOLDOWN_SECONDS = 2
 CALLBACK_PREFIX = "airp"
 ENTRY_KEY = "ai_redpacket_claim"
 ANONYMOUS_ADMIN_BLOCKED_TEXT = "匿名管理员不能参与雨露均沾答题，请关闭匿名身份后再试。"
+IDENTITY_VERIFICATION_FAILED_TEXT = "暂时无法核验你的群成员身份，请先在群里任意发言一次后再试。"
 DATA_PATH = Path(__file__).with_name("ai_redpacket.sqlite3")
 MAX_QUESTION_COUNT = 500
 MAX_SOURCE_CHARS = 300_000
@@ -1287,15 +1288,28 @@ class AIRedpacketPlugin(Plugin):
         user_id = _user_id(payload)
         if not callback_id or not chat_id or not user_id:
             return []
-        if await self._is_anonymous_admin(ctx, chat_id, user_id):
-            return [_ack(callback_id, ANONYMOUS_ADMIN_BLOCKED_TEXT, alert=True)]
-        if len(parts) == 3 and parts[1] == "start":
-            public_name = await self._public_display_name(
+        try:
+            identity = await resolve_public_sender_identity(
                 ctx,
-                chat_id,
-                user_id,
-                sender_display_name(payload, user_id),
+                chat_id=chat_id,
+                user_id=user_id,
+                fallback_display_name=sender_display_name(payload, user_id),
             )
+        except Exception:
+            identity = None
+        if identity is None or not bool(getattr(identity, "resolved", False)):
+            await self._log(
+                ctx,
+                "warning",
+                "AI 红包用户身份核验失败",
+                chat_id=chat_id,
+                user_id=user_id,
+            )
+            return [_ack(callback_id, IDENTITY_VERIFICATION_FAILED_TEXT, alert=True)]
+        if bool(getattr(identity, "is_anonymous_admin", False)):
+            return [_ack(callback_id, ANONYMOUS_ADMIN_BLOCKED_TEXT, alert=True)]
+        public_name = truncate_display_name(getattr(identity, "display_name", ""))
+        if len(parts) == 3 and parts[1] == "start":
             return self._start_attempt(
                 ctx,
                 callback_id,
@@ -1309,7 +1323,18 @@ class AIRedpacketPlugin(Plugin):
                 option_index = int(parts[4])
             except ValueError:
                 return [_ack(callback_id, "答案参数无效", alert=True)]
-            return await self._submit_attempt(ctx, payload, callback_id, chat_id, user_id, parts[2], parts[3], option_index, parts[5])
+            return await self._submit_attempt(
+                ctx,
+                payload,
+                callback_id,
+                chat_id,
+                user_id,
+                parts[2],
+                parts[3],
+                option_index,
+                parts[5],
+                public_display_name=public_name,
+            )
         if len(parts) == 4 and parts[1] == "repay":
             return await self._request_payout_retry(
                 ctx,
@@ -1318,6 +1343,7 @@ class AIRedpacketPlugin(Plugin):
                 user_id=user_id,
                 redpacket_id=parts[2],
                 attempt_id=parts[3],
+                public_display_name=public_name,
             )
         if len(parts) == 3 and parts[1] == "repayme":
             return await self._request_user_payout_retry(
@@ -1326,25 +1352,9 @@ class AIRedpacketPlugin(Plugin):
                 chat_id=chat_id,
                 user_id=user_id,
                 redpacket_id=parts[2],
+                public_display_name=public_name,
             )
         return [_ack(callback_id, "按钮已经失效", alert=True)]
-
-    async def _is_anonymous_admin(self, ctx: PluginContext, chat_id: int, user_id: int) -> bool:
-        """Return true only when Telegram confirms the current anonymous mode."""
-
-        try:
-            identity = await resolve_public_sender_identity(
-                ctx,
-                chat_id=chat_id,
-                user_id=user_id,
-                fallback_display_name="",
-            )
-        except Exception:
-            # A transient member lookup failure must not turn ordinary members
-            # into anonymous administrators; the payout path still has its own
-            # recent-message safety check.
-            return False
-        return bool(getattr(identity, "is_anonymous_admin", False))
 
     def _start_attempt(
         self,
@@ -1426,6 +1436,8 @@ class AIRedpacketPlugin(Plugin):
         attempt_id: str,
         option_index: int,
         token: str,
+        *,
+        public_display_name: str = "",
     ) -> list[dict[str, Any]]:
         if option_index not in {0, 1, 2}:
             return [_ack(callback_id, "答案无效", alert=True)]
@@ -1454,11 +1466,8 @@ class AIRedpacketPlugin(Plugin):
             )
         except StorageError as exc:
             return [_ack(callback_id, str(exc), alert=True)]
-        result["public_display_name"] = await self._public_display_name(
-            ctx,
-            chat_id,
-            user_id,
-            str(result.get("user_display_name") or ""),
+        result["public_display_name"] = truncate_display_name(
+            public_display_name or result.get("user_display_name")
         )
         if result.get("duplicate"):
             if result.get("correct"):
@@ -1550,6 +1559,7 @@ class AIRedpacketPlugin(Plugin):
         user_id: int,
         redpacket_id: str,
         attempt_id: str,
+        public_display_name: str = "",
     ) -> list[dict[str, Any]]:
         try:
             result = self.storage.get_successful_attempt_for_payout(
@@ -1561,11 +1571,8 @@ class AIRedpacketPlugin(Plugin):
             )
         except StorageError as exc:
             return [_ack(callback_id, str(exc), alert=True)]
-        result["public_display_name"] = await self._public_display_name(
-            ctx,
-            chat_id,
-            user_id,
-            str(result.get("user_display_name") or ""),
+        result["public_display_name"] = truncate_display_name(
+            public_display_name or result.get("user_display_name")
         )
         reply_to_message_id = await self._find_recent_user_message_id(ctx, chat_id, user_id)
         if reply_to_message_id is None:
@@ -1613,6 +1620,7 @@ class AIRedpacketPlugin(Plugin):
         chat_id: int,
         user_id: int,
         redpacket_id: str,
+        public_display_name: str = "",
     ) -> list[dict[str, Any]]:
         try:
             result = self.storage.get_user_successful_attempt_for_payout(
@@ -1630,6 +1638,7 @@ class AIRedpacketPlugin(Plugin):
             user_id=user_id,
             redpacket_id=redpacket_id,
             attempt_id=str(result["id"]),
+            public_display_name=public_display_name,
         )
 
     def _payout_key(self, ctx: PluginContext, redpacket_id: str, question_slot_id: int, user_id: int) -> str:
@@ -1703,29 +1712,6 @@ class AIRedpacketPlugin(Plugin):
         except Exception:
             pass
         return None
-
-    async def _public_display_name(
-        self,
-        ctx: PluginContext,
-        chat_id: int,
-        user_id: int,
-        recorded_name: str,
-    ) -> str:
-        """Return a public-safe name without exposing anonymous administrators.
-
-        Telegram callback queries identify the real clicking user. That identity is
-        still required for payout and idempotency, but it must not be rendered into
-        the group when the member currently acts as an anonymous administrator.
-        Regular-member tags are intentionally ignored.
-        """
-
-        identity = await resolve_public_sender_identity(
-            ctx,
-            chat_id=chat_id,
-            user_id=user_id,
-            fallback_display_name=recorded_name or f"用户{user_id}",
-        )
-        return truncate_display_name(identity.display_name)
 
     async def _public_display_names(
         self,
