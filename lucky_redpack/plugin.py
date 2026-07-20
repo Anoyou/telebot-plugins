@@ -68,7 +68,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.4"
+PLUGIN_VERSION = "1.4.5"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -599,32 +599,95 @@ def _load_password_font(password: str, size: int) -> Any:
     return ImageFont.load_default()
 
 
-def _fit_password_layers(layers: list[Any], work_width: int) -> tuple[list[Any], list[int], int]:
+def _layout_password_layers(
+    layers: list[Any],
+    work_width: int,
+    work_height: int,
+) -> list[list[tuple[Any, int, int]]]:
     if not layers:
-        return layers, [], 0
+        return []
 
-    gaps = [random.randint(4, 16) for _ in range(len(layers) - 1)]
-    total_width = sum(layer.size[0] for layer in layers) + sum(gaps)
-    horizontal_margin = 24
-    available_width = max(1, work_width - horizontal_margin * 2)
+    margin = 24
+    available_width = max(1, work_width - margin * 2)
+    available_height = max(1, work_height - margin * 2)
+    rows: list[tuple[list[Any], list[int]]] = []
+    row_layers: list[Any] = []
+    row_gaps: list[int] = []
+    row_width = 0
 
-    if total_width > available_width:
-        layer_width = sum(layer.size[0] for layer in layers)
-        ratio = max(0.01, (available_width - sum(gaps)) / max(1, layer_width))
+    for layer in layers:
+        gap = random.randint(4, 16) if row_layers else 0
+        candidate_width = row_width + gap + layer.size[0]
+        if row_layers and candidate_width > available_width:
+            rows.append((row_layers, row_gaps))
+            row_layers = [layer]
+            row_gaps = []
+            row_width = layer.size[0]
+            continue
+        if gap:
+            row_gaps.append(gap)
+        row_layers.append(layer)
+        row_width = candidate_width
+
+    if row_layers:
+        rows.append((row_layers, row_gaps))
+
+    horizontal_ratio = min(
+        1.0,
+        *(
+            max(0.01, (available_width - sum(gaps)) / max(1, sum(layer.size[0] for layer in row)))
+            for row, gaps in rows
+        ),
+    )
+    vertical_gaps = [random.randint(16, 28) for _ in range(len(rows) - 1)]
+    row_heights = [max(layer.size[1] for layer in row) for row, _ in rows]
+    vertical_ratio = min(
+        1.0,
+        max(0.01, (available_height - sum(vertical_gaps)) / max(1, sum(row_heights))),
+    )
+    resize_ratio = min(horizontal_ratio, vertical_ratio)
+
+    if resize_ratio < 1.0:
         resampling = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-        layers = [
-            layer.resize(
-                (
-                    max(1, int(layer.size[0] * ratio)),
-                    max(1, int(layer.size[1] * ratio)),
-                ),
-                resample=resampling,
+        rows = [
+            (
+                [
+                    layer.resize(
+                        (
+                            max(1, int(layer.size[0] * resize_ratio)),
+                            max(1, int(layer.size[1] * resize_ratio)),
+                        ),
+                        resample=resampling,
+                    )
+                    for layer in row
+                ],
+                gaps,
             )
-            for layer in layers
+            for row, gaps in rows
         ]
-        total_width = sum(layer.size[0] for layer in layers) + sum(gaps)
 
-    return layers, gaps, max(horizontal_margin, (work_width - total_width) // 2)
+    row_heights = [max(layer.size[1] for layer in row) for row, _ in rows]
+    total_height = sum(row_heights) + sum(vertical_gaps)
+    row_y = max(margin, (work_height - total_height) // 2)
+    placements: list[list[tuple[Any, int, int]]] = []
+
+    for row_index, ((row, gaps), row_height) in enumerate(zip(rows, row_heights)):
+        row_width = sum(layer.size[0] for layer in row) + sum(gaps)
+        layer_x = max(margin, (work_width - row_width) // 2)
+        placed_row: list[tuple[Any, int, int]] = []
+        for layer_index, layer in enumerate(row):
+            layer_y = row_y + (row_height - layer.size[1]) // 2 + random.randint(-8, 8)
+            layer_y = max(margin, min(layer_y, work_height - margin - layer.size[1]))
+            placed_row.append((layer, layer_x, layer_y))
+            layer_x += layer.size[0]
+            if layer_index < len(gaps):
+                layer_x += gaps[layer_index]
+        placements.append(placed_row)
+        row_y += row_height
+        if row_index < len(vertical_gaps):
+            row_y += vertical_gaps[row_index]
+
+    return placements
 
 
 def build_password_image(password: str) -> Path | None:
@@ -703,14 +766,9 @@ def build_password_image(password: str) -> Path | None:
             rotated = layer.rotate(random.randint(-14, 14), resample=Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC, expand=True)
             layers.append(rotated)
 
-        layers, gaps, x = _fit_password_layers(layers, work_width)
-        center_y = work_height // 2
-        for index, layer in enumerate(layers):
-            y = center_y - layer.size[1] // 2 + random.randint(-18, 18)
-            image.alpha_composite(layer, dest=(x, y))
-            x += layer.size[0]
-            if index < len(gaps):
-                x += gaps[index]
+        for row in _layout_password_layers(layers, work_width, work_height):
+            for layer, x, y in row:
+                image.alpha_composite(layer, dest=(x, y))
 
         for _ in range(240):
             x = random.randint(0, work_width - 1)

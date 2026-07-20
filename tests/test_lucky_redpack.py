@@ -540,21 +540,24 @@ class LuckyRedpackTest(unittest.TestCase):
         asyncio.run(run_case())
 
     @unittest.skipUnless(plugin_module.HAS_PIL, "Pillow is required")
-    def test_long_password_image_layers_fit_inside_canvas(self) -> None:
+    def test_long_password_image_layers_wrap_without_excessive_shrinking(self) -> None:
         layers = [plugin_module.Image.new("RGBA", (180, 220)) for _ in range(15)]
 
-        fitted_layers, gaps, start_x = plugin_module._fit_password_layers(
+        rows = plugin_module._layout_password_layers(
             layers,
             plugin_module.IMAGE_WIDTH * 2,
+            plugin_module.IMAGE_HEIGHT * 2,
         )
 
-        rendered_width = sum(layer.size[0] for layer in fitted_layers) + sum(gaps)
-        self.assertEqual(len(fitted_layers), len(layers))
-        self.assertGreaterEqual(start_x, 24)
-        self.assertLessEqual(
-            start_x + rendered_width,
-            plugin_module.IMAGE_WIDTH * 2 - 24,
-        )
+        placements = [placement for row in rows for placement in row]
+        self.assertGreater(len(rows), 1)
+        self.assertEqual(len(placements), len(layers))
+        self.assertGreaterEqual(min(layer.size[0] for layer, _, _ in placements), 170)
+        for layer, x, y in placements:
+            self.assertGreaterEqual(x, 24)
+            self.assertGreaterEqual(y, 24)
+            self.assertLessEqual(x + layer.size[0], plugin_module.IMAGE_WIDTH * 2 - 24)
+            self.assertLessEqual(y + layer.size[1], plugin_module.IMAGE_HEIGHT * 2 - 24)
 
     def test_text_redpack_edits_command_message_instead_of_replying(self) -> None:
         async def run_case() -> None:
