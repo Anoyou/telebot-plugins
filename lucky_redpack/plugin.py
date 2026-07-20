@@ -68,7 +68,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.6"
+PLUGIN_VERSION = "1.4.7"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -806,7 +806,7 @@ def render_redpack_message(pack: LuckyRedpack) -> str:
     password_line = "财富密码：见图片" if pack.image_mode else f"财富密码：{_html(pack.current_password)}"
     text = (
         "🧧 拼手气红包\n"
-        f"红包代码：{pack.pack_code}\n"
+        f"红包代码：<code>{_html(pack.pack_code)}</code>\n"
         f"总额：{pack.total_amount}｜剩余：{pack.remaining_count}/{pack.total_count}\n"
         f"{password_line}\n"
         "发送财富密码即可领取\n"
@@ -823,7 +823,7 @@ def render_settlement(pack: LuckyRedpack, *, expired: bool = False) -> str:
     title = "🕒 拼手气红包已超时" if expired else "🧧 拼手气红包已领完"
     text = "\n".join([
         title,
-        f"红包代码：{pack.pack_code}",
+        f"红包代码：<code>{_html(pack.pack_code)}</code>",
         f"总额：{pack.total_amount}｜已领：{len(pack.claims)}/{pack.total_count}｜剩余：{pack.remaining_amount}",
     ])
     if not pack.claims:
@@ -1543,7 +1543,7 @@ class LuckyRedpackPlugin(Plugin):
                     pack = next((item for item in packs if item.pack_code.casefold() == pack_code.casefold()), None)
                     if not pack:
                         return await edit_temporary(
-                            f"未找到进行中的红包：{pack_code}",
+                            f"未找到进行中的红包：<code>{_html(pack_code)}</code>",
                             COMMAND_RESULT_DELETE_DELAY_SECONDS,
                         )
                     await self._save_active_packs(
@@ -1553,7 +1553,10 @@ class LuckyRedpackPlugin(Plugin):
                     )
             if pack.message_id:
                 await self._delete_message(ctx, chat_id, pack.message_id)
-            return await edit_temporary(f"已关闭红包 {pack.pack_code}。", COMMAND_RESULT_DELETE_DELAY_SECONDS)
+            return await edit_temporary(
+                f"已关闭红包 <code>{_html(pack.pack_code)}</code>。",
+                COMMAND_RESULT_DELETE_DELAY_SECONDS,
+            )
         if action in {"clear", "清空"}:
             async with self._get_lock(chat_id):
                 with self._state_file_lock(ctx.account_id, chat_id):
@@ -1659,7 +1662,7 @@ class LuckyRedpackPlugin(Plugin):
             await self._reply(event, self._help_text())
             return
         if action in {"active", "状态"}:
-            await self._reply(event, await self._active_text(ctx, chat_id))
+            await self._reply(event, await self._active_text(ctx, chat_id), parse_mode="html")
             return
         if action in {"list", "列表"}:
             text = await self._active_text(ctx, chat_id)
@@ -1670,7 +1673,7 @@ class LuckyRedpackPlugin(Plugin):
                 text=text,
                 delete_after=LIST_DELETE_DELAY_SECONDS,
             ):
-                await self._reply(event, text)
+                await self._reply(event, text, parse_mode="html")
             return
         if action in {"off", "关闭"}:
             pack_code = tokens[1] if len(tokens) >= 2 else ""
@@ -1690,7 +1693,7 @@ class LuckyRedpackPlugin(Plugin):
                     packs = await self._load_active_packs(ctx, chat_id)
                     pack = next((item for item in packs if item.pack_code.casefold() == pack_code.casefold()), None)
                     if not pack:
-                        text = f"未找到进行中的红包：{pack_code}"
+                        text = f"未找到进行中的红包：<code>{_html(pack_code)}</code>"
                         if not await self._edit_command_response(
                             ctx,
                             chat_id=chat_id,
@@ -1698,13 +1701,13 @@ class LuckyRedpackPlugin(Plugin):
                             text=text,
                             delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
                         ):
-                            await self._reply(event, text)
+                            await self._reply(event, text, parse_mode="html")
                         return
                     packs = [item for item in packs if item is not pack]
                     await self._save_active_packs(ctx, chat_id, packs)
             if pack.message_id:
                 await self._delete_message(ctx, chat_id, pack.message_id)
-            text = f"已关闭红包 {pack.pack_code}。"
+            text = f"已关闭红包 <code>{_html(pack.pack_code)}</code>。"
             if not await self._edit_command_response(
                 ctx,
                 chat_id=chat_id,
@@ -1712,7 +1715,7 @@ class LuckyRedpackPlugin(Plugin):
                 text=text,
                 delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
             ):
-                await self._reply(event, text)
+                await self._reply(event, text, parse_mode="html")
             return
         if action in {"clear", "清空"}:
             async with self._get_lock(chat_id):
@@ -1963,9 +1966,10 @@ class LuckyRedpackPlugin(Plugin):
             mode = "图片" if pack.image_mode else "文字"
             claimed = pack.total_count - pack.remaining_count
             lines.append(
-                f"{index}. {pack.pack_code}｜{mode}｜剩余 {pack.remaining_count}/{pack.total_count}｜已领 {claimed}｜总额 {pack.total_amount}"
+                f"{index}. <code>{_html(pack.pack_code)}</code>｜{mode}｜剩余 {pack.remaining_count}/{pack.total_count}｜已领 {claimed}｜总额 {pack.total_amount}"
             )
-        lines.append(f"关闭红包：{current_command_prefix(fallback=',')}{self._command} off <红包代码>")
+        prefix = _html(current_command_prefix(fallback=","))
+        lines.append(f"关闭红包：{prefix}{_html(self._command)} off &lt;红包代码&gt;")
         return "\n".join(lines)
 
     async def _reply(self, event: Any, text: str, **kwargs: Any) -> Any:

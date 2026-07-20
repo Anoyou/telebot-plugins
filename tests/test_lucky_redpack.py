@@ -211,7 +211,7 @@ class LuckyRedpackTest(unittest.TestCase):
         text = plugin_module.render_redpack_message(pack)
 
         self.assertIn("🧧 拼手气红包", text)
-        self.assertIn("红包代码：ABC123", text)
+        self.assertIn("红包代码：<code>ABC123</code>", text)
         self.assertIn("总额：88888｜剩余：7/10", text)
         self.assertIn("财富密码：发财A7K9", text)
         self.assertIn("发送财富密码即可领取\n提示：财富密码被领一次会随机变动", text)
@@ -288,6 +288,7 @@ class LuckyRedpackTest(unittest.TestCase):
         text = plugin_module.render_settlement(pack)
 
         self.assertIn("🧧 拼手气红包已领完", text)
+        self.assertIn("红包代码：<code>ABC123</code>", text)
         self.assertIn("<blockquote expandable>领取详情：", text)
         self.assertIn("1. 这是一个超过十个字的 +222", text)
         self.assertIn("2. 用户&lt;3&gt; +444 🏆", text)
@@ -613,15 +614,17 @@ class LuckyRedpackTest(unittest.TestCase):
             list_event = FakeMessage(",rp list", chat_id=100, sender_id=1, outgoing=True)
             await plugin._cmd_handler(ctx.client, list_event, ["list"], 1, ctx)
             list_edit = next(item for item in ctx.client.edited if item["message_id"] == list_event.id)
-            self.assertIn(first_pack.pack_code, list_edit["text"])
-            self.assertIn(second_pack.pack_code, list_edit["text"])
+            self.assertIn(f"<code>{first_pack.pack_code}</code>", list_edit["text"])
+            self.assertIn(f"<code>{second_pack.pack_code}</code>", list_edit["text"])
+            self.assertIn("off &lt;红包代码&gt;", list_edit["text"])
+            self.assertNotIn("off <红包代码>", list_edit["text"])
             self.assertEqual(list_event.replies, [])
 
             off_event = FakeMessage(f",rp off {first_pack.pack_code}", chat_id=100, sender_id=1, outgoing=True)
             await plugin._cmd_handler(ctx.client, off_event, ["off", first_pack.pack_code], 1, ctx)
             self.assertEqual([pack.pack_code for pack in plugin._packs[100]], [second_pack.pack_code])
             off_edit = next(item for item in ctx.client.edited if item["message_id"] == off_event.id)
-            self.assertIn(f"已关闭红包 {first_pack.pack_code}", off_edit["text"])
+            self.assertIn(f"已关闭红包 <code>{first_pack.pack_code}</code>", off_edit["text"])
             self.assertEqual(off_event.replies, [])
             self.assertTrue(plugin._is_chat_active(100))
 
@@ -1074,9 +1077,9 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertEqual(off_actions, [])
             self.assertEqual(clear_actions, [])
             edits = {item["message_id"]: item["text"] for item in ctx.client.edited}
-            self.assertIn(first_pack.pack_code, edits[3001])
-            self.assertIn(second_pack.pack_code, edits[3001])
-            self.assertIn(f"已关闭红包 {first_pack.pack_code}", edits[3002])
+            self.assertIn(f"<code>{first_pack.pack_code}</code>", edits[3001])
+            self.assertIn(f"<code>{second_pack.pack_code}</code>", edits[3001])
+            self.assertIn(f"已关闭红包 <code>{first_pack.pack_code}</code>", edits[3002])
             self.assertIn("已清空当前聊天的 1 个进行中红包", edits[3003])
             self.assertEqual(
                 scheduled,
