@@ -16,6 +16,9 @@ def _install_telepilot_stubs() -> None:
     base = types.ModuleType("app.worker.plugins.base")
     events = types.ModuleType("app.worker.plugins.events")
     manifest = types.ModuleType("app.worker.plugins.manifest")
+    telethon = types.ModuleType("telethon")
+    telethon_tl = types.ModuleType("telethon.tl")
+    telethon_types = types.ModuleType("telethon.tl.types")
 
     class Plugin:
         pass
@@ -26,6 +29,14 @@ def _install_telepilot_stubs() -> None:
     class Manifest:
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
+
+    class PeerUser:
+        def __init__(self, user_id):
+            self.user_id = user_id
+
+    class PeerChannel:
+        def __init__(self, channel_id):
+            self.channel_id = channel_id
 
     def register(cls):
         return cls
@@ -45,6 +56,7 @@ def _install_telepilot_stubs() -> None:
                 chat_id=payload["message"]["chat_id"],
                 message_id=payload["message"]["message_id"],
                 text=payload["message"].get("text", ""),
+                reply_to_message_id=payload["message"].get("reply_to_message_id"),
             ),
         )
 
@@ -54,9 +66,14 @@ def _install_telepilot_stubs() -> None:
     base.resolve_public_sender_identity = resolve_public_sender_identity
     events.event_from_interaction_payload = event_from_interaction_payload
     manifest.Manifest = Manifest
+    telethon_types.PeerUser = PeerUser
+    telethon_types.PeerChannel = PeerChannel
     sys.modules["app.worker.plugins.base"] = base
     sys.modules["app.worker.plugins.events"] = events
     sys.modules["app.worker.plugins.manifest"] = manifest
+    sys.modules["telethon"] = telethon
+    sys.modules["telethon.tl"] = telethon_tl
+    sys.modules["telethon.tl.types"] = telethon_types
     app.worker = worker
     worker.plugins = plugins
 
@@ -80,7 +97,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
         self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.3")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.4")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
 
     def test_payout_contains_platform_sanitized_public_name(self) -> None:
@@ -166,6 +183,67 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             self.assertIn("解析状态：已确认", actions[0]["text"])
             self.assertNotIn("payout", [action["type"] for action in actions])
             self.assertEqual(actions[1]["result"]["target_display_name"], "人")
+
+        asyncio.run(run_case())
+
+    def test_name_command_uses_replied_peer_user_without_user_id(self) -> None:
+        async def run_case() -> None:
+            class Client:
+                async def get_messages(self, chat_id, *, ids):
+                    self.lookup = (chat_id, ids)
+                    return types.SimpleNamespace(from_id=sys.modules["telethon.tl.types"].PeerUser(456))
+
+            client = Client()
+            plugin = plugin_module.ReplyAnchorTestPlugin()
+            ctx = types.SimpleNamespace(config={}, client=client)
+            actions = await plugin.on_interaction(
+                ctx,
+                plugin_module.NAME_ENTRY_KEY,
+                {
+                    "message": {
+                        "chat_id": -1001,
+                        "message_id": 91,
+                        "reply_to_message_id": 77,
+                        "text": "name",
+                    },
+                    "trigger": {"args": []},
+                },
+            )
+
+            assert actions is not None
+            self.assertEqual(client.lookup, (-1001, 77))
+            self.assertEqual(actions[1]["result"]["target_user_id"], 456)
+            self.assertEqual(actions[1]["result"]["target_source"], "reply_message")
+
+        asyncio.run(run_case())
+
+    def test_name_command_rejects_replied_channel_identity(self) -> None:
+        async def run_case() -> None:
+            class Client:
+                async def get_messages(self, chat_id, *, ids):
+                    return types.SimpleNamespace(
+                        from_id=sys.modules["telethon.tl.types"].PeerChannel(999)
+                    )
+
+            plugin = plugin_module.ReplyAnchorTestPlugin()
+            ctx = types.SimpleNamespace(config={}, client=Client())
+            actions = await plugin.on_interaction(
+                ctx,
+                plugin_module.NAME_ENTRY_KEY,
+                {
+                    "message": {
+                        "chat_id": -1001,
+                        "message_id": 92,
+                        "reply_to_message_id": 78,
+                        "text": "name",
+                    },
+                    "trigger": {"args": []},
+                },
+            )
+
+            assert actions is not None
+            self.assertEqual([action["type"] for action in actions], ["send_message"])
+            self.assertIn("回复目标用户的消息", actions[0]["text"])
 
         asyncio.run(run_case())
 

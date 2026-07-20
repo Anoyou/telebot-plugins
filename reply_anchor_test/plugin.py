@@ -7,6 +7,7 @@ from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register, resolve_public_sender_identity
 from app.worker.plugins.events import event_from_interaction_payload
+from telethon.tl.types import PeerUser
 
 PLUGIN_KEY = "reply_anchor_test"
 ENTRY_KEY = "reply_to_recent_message"
@@ -80,6 +81,25 @@ def _parse_user_id(args: list[str], *, fallback_text: str = "") -> int | None:
     return _positive_int(numbers[0]) if numbers else None
 
 
+async def _reply_target_user_id(ctx: PluginContext, chat_id: int, message_id: int | None) -> int | None:
+    if message_id is None:
+        return None
+    client = getattr(ctx, "client", None)
+    get_messages = getattr(client, "get_messages", None) if client is not None else None
+    if not callable(get_messages):
+        return None
+    try:
+        message = await get_messages(chat_id, ids=message_id)
+    except Exception:
+        return None
+    if isinstance(message, list):
+        message = message[0] if message else None
+    from_id = getattr(message, "from_id", None)
+    if not isinstance(from_id, PeerUser):
+        return None
+    return _positive_int(getattr(from_id, "user_id", None))
+
+
 def _usage_text(command: str, limit: int) -> str:
     return (
         f"用法：{command} 用户ID 金额\n"
@@ -91,7 +111,8 @@ def _usage_text(command: str, limit: int) -> str:
 
 def _name_usage_text() -> str:
     return (
-        f"用法：{NAME_COMMAND} 用户ID\n"
+        f"用法一：回复目标用户的消息后发送 {NAME_COMMAND}\n"
+        f"用法二：{NAME_COMMAND} 用户ID\n"
         f"示例：{NAME_COMMAND} 123456789\n"
         "平台只返回经过安全身份解析和 Unicode 清洗后的公开姓名，不会回显原始姓名。"
     )
@@ -166,10 +187,16 @@ class ReplyAnchorTestPlugin(Plugin):
             return []
 
         if entry_key == NAME_ENTRY_KEY:
-            user_id = _parse_user_id(
-                _args_from_payload(payload),
-                fallback_text=event.message.text or "",
-            )
+            args = _args_from_payload(payload)
+            user_id = _parse_user_id(args, fallback_text=event.message.text or "")
+            target_source = "user_id"
+            if user_id is None:
+                user_id = await _reply_target_user_id(
+                    ctx,
+                    int(event.message.chat_id),
+                    event.message.reply_to_message_id,
+                )
+                target_source = "reply_message"
             if user_id is None:
                 return [
                     {
@@ -201,6 +228,7 @@ class ReplyAnchorTestPlugin(Plugin):
                         "is_anonymous_admin": bool(identity.is_anonymous_admin),
                         "tag": identity.tag,
                         "resolved": bool(identity.resolved),
+                        "target_source": target_source,
                     },
                 },
             ]

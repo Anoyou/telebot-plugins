@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "reply_anchor_test"
-PLUGIN_VERSION = "0.1.3"
+PLUGIN_VERSION = "0.1.4"
 ENTRY_KEY = "reply_to_recent_message"
 NAME_ENTRY_KEY = "resolve_public_name"
 DEFAULT_COMMAND = "send"
@@ -24,7 +24,8 @@ USAGE = (
     "`{prefix}{command} 用户ID 金额`，插件返回 `payout`，由平台 userbot 在当前群搜索该用户最近一次发言并回复 "
     "`+金额`。示例：`{prefix}send 123456789 88`。目标用户必须在当前群近期发过言；找不到锚点时，"
     "平台会让本次动作失败并在日志里记录原因，不会退化成普通群消息。"
-    "独立发送 `{prefix}name 用户ID` 可测试 TelePilot 实际解析出的安全公开姓名、匿名状态、标签和解析状态；"
+    "独立发送 `{prefix}name 用户ID`，或回复目标用户消息后发送 `{prefix}name`，可测试 TelePilot 实际解析出的"
+    "安全公开姓名、匿名状态、标签和解析状态；"
     "该入口不发奖，也不搜索近期发言。支持在配置页编辑姓名解析结果模板。"
 )
 
@@ -86,7 +87,7 @@ INTERACTION_ENTRIES = [
     {
         "key": NAME_ENTRY_KEY,
         "title": "公开姓名解析测试",
-        "description": "按用户 ID 获取 TelePilot 清洗后的安全公开姓名、匿名状态和标签。",
+        "description": "回复目标用户消息或提供用户 ID，获取 TelePilot 清洗后的安全公开姓名、匿名状态和标签。",
         "interaction_profile": "utility_trigger",
         "launch_mode": "userbot_command",
         "session_scope": "chat",
@@ -106,10 +107,10 @@ INTERACTION_ENTRIES = [
                 "user_id": {
                     "type": "integer",
                     "title": "目标用户 ID",
-                    "description": "需要测试公开姓名解析的 Telegram 用户 ID。",
+                    "description": "可选；未填写时从被回复的真实用户消息读取。",
                 },
             },
-            "required": ["user_id"],
+            "required": [],
         },
     },
 ]
@@ -154,7 +155,7 @@ CONFIG_SCHEMA = {
         "name_result_template": {
             "type": "string",
             "title": "公开姓名解析结果模板",
-            "description": "用于 name 用户ID 的回复。只提供安全公开字段，不提供原始姓名。",
+            "description": "用于 name 测试命令的回复。只提供安全公开字段，不提供原始姓名。",
             "default": DEFAULT_NAME_RESULT_TEMPLATE,
             "x-ui-widget": "textarea",
             "minLength": 1,

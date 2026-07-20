@@ -3,7 +3,7 @@
   "display_name": "近期发言回复测试",
   "description": "测试近期发言回复和 TelePilot 安全公开姓名解析。",
   "author": "Anoyou",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "entry": "plugin.py",
   "min_telepilot_version": "0.70.9",
   "category": "utility",
@@ -15,7 +15,7 @@
     "command": "send"
   },
   "default_trigger_modes": "all",
-  "usage": "用于验证 TelePilot 的 payout 近期发言锚点搜索能力。账号本人或授权管理员在已允许群里发送 `{prefix}{command} 用户ID 金额`，插件返回 `payout`，由平台 userbot 在当前群搜索该用户最近一次发言并回复 `+金额`。示例：`{prefix}send 123456789 88`。目标用户必须在当前群近期发过言；找不到锚点时，平台会让本次动作失败并在日志里记录原因，不会退化成普通群消息。独立发送 `{prefix}name 用户ID` 可测试 TelePilot 实际解析出的安全公开姓名、匿名状态、标签和解析状态；该入口不发奖，也不搜索近期发言。支持在配置页编辑姓名解析结果模板。",
+  "usage": "用于验证 TelePilot 的 payout 近期发言锚点搜索能力。账号本人或授权管理员在已允许群里发送 `{prefix}{command} 用户ID 金额`，插件返回 `payout`，由平台 userbot 在当前群搜索该用户最近一次发言并回复 `+金额`。示例：`{prefix}send 123456789 88`。目标用户必须在当前群近期发过言；找不到锚点时，平台会让本次动作失败并在日志里记录原因，不会退化成普通群消息。独立发送 `{prefix}name 用户ID`，或回复目标用户消息后发送 `{prefix}name`，可测试 TelePilot 实际解析出的安全公开姓名、匿名状态、标签和解析状态；该入口不发奖，也不搜索近期发言。支持在配置页编辑姓名解析结果模板。",
   "event_subscriptions": [
     {
       "events": [
@@ -112,7 +112,7 @@
     {
       "key": "resolve_public_name",
       "title": "公开姓名解析测试",
-      "description": "按用户 ID 获取 TelePilot 清洗后的安全公开姓名、匿名状态和标签。",
+      "description": "回复目标用户消息或提供用户 ID，获取 TelePilot 清洗后的安全公开姓名、匿名状态和标签。",
       "interaction_profile": "utility_trigger",
       "launch_mode": "userbot_command",
       "session_scope": "chat",
@@ -150,12 +150,10 @@
           "user_id": {
             "type": "integer",
             "title": "目标用户 ID",
-            "description": "需要测试公开姓名解析的 Telegram 用户 ID。"
+            "description": "可选；未填写时从被回复的真实用户消息读取。"
           }
         },
-        "required": [
-          "user_id"
-        ]
+        "required": []
       }
     }
   ],
@@ -163,7 +161,7 @@
     "type": "object",
     "x-ui-mode": "single",
     "x-category": "utility",
-    "x-usage-guide": "用于验证 TelePilot 的 payout 近期发言锚点搜索能力。账号本人或授权管理员在已允许群里发送 `{prefix}{command} 用户ID 金额`，插件返回 `payout`，由平台 userbot 在当前群搜索该用户最近一次发言并回复 `+金额`。示例：`{prefix}send 123456789 88`。目标用户必须在当前群近期发过言；找不到锚点时，平台会让本次动作失败并在日志里记录原因，不会退化成普通群消息。独立发送 `{prefix}name 用户ID` 可测试 TelePilot 实际解析出的安全公开姓名、匿名状态、标签和解析状态；该入口不发奖，也不搜索近期发言。支持在配置页编辑姓名解析结果模板。",
+    "x-usage-guide": "用于验证 TelePilot 的 payout 近期发言锚点搜索能力。账号本人或授权管理员在已允许群里发送 `{prefix}{command} 用户ID 金额`，插件返回 `payout`，由平台 userbot 在当前群搜索该用户最近一次发言并回复 `+金额`。示例：`{prefix}send 123456789 88`。目标用户必须在当前群近期发过言；找不到锚点时，平台会让本次动作失败并在日志里记录原因，不会退化成普通群消息。独立发送 `{prefix}name 用户ID`，或回复目标用户消息后发送 `{prefix}name`，可测试 TelePilot 实际解析出的安全公开姓名、匿名状态、标签和解析状态；该入口不发奖，也不搜索近期发言。支持在配置页编辑姓名解析结果模板。",
     "additionalProperties": false,
     "properties": {
       "command": {
@@ -194,7 +192,7 @@
       "name_result_template": {
         "type": "string",
         "title": "公开姓名解析结果模板",
-        "description": "用于 name 用户ID 的回复。只提供安全公开字段，不提供原始姓名。",
+        "description": "用于 name 测试命令的回复。只提供安全公开字段，不提供原始姓名。",
         "default": "TelePilot 公开姓名解析结果\n公开姓名：{display_name}\n身份状态：{identity_status}\n管理员/成员标签：{tag}\n解析状态：{resolved_status}",
         "x-ui-widget": "textarea",
         "minLength": 1,
