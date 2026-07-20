@@ -154,9 +154,12 @@ class PermissionDeniedEntityClient(FakeClient):
 class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
+        self.get_calls: list[str] = []
 
     async def get(self, key):
-        return self.store.get(str(key))
+        key = str(key)
+        self.get_calls.append(key)
+        return self.store.get(key)
 
     async def set(self, key, value, **kwargs):
         self.store[str(key)] = str(value)
@@ -595,6 +598,12 @@ class LuckyRedpackTest(unittest.TestCase):
             await plugin._cmd_handler(ctx.client, off_event, ["off", first_pack.pack_code], 1, ctx)
             self.assertEqual([pack.pack_code for pack in plugin._packs[100]], [second_pack.pack_code])
             self.assertIn(f"已关闭红包 {first_pack.pack_code}", off_event.replies[-1].text)
+            self.assertTrue(plugin._is_chat_active(100))
+
+            last_off_event = FakeMessage(f",rp off {second_pack.pack_code}", chat_id=100, sender_id=1, outgoing=True)
+            await plugin._cmd_handler(ctx.client, last_off_event, ["off", second_pack.pack_code], 1, ctx)
+            self.assertNotIn(100, plugin._packs)
+            self.assertFalse(plugin._is_chat_active(100))
 
             await plugin.on_shutdown(ctx)
 
@@ -715,6 +724,163 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertEqual(ctx.client.get_entity_calls, [])
 
             await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_inactive_chat_message_is_silent_without_state_lookup(self) -> None:
+        async def run_case() -> None:
+            redis = FakeRedis()
+            plugin = plugin_module.LuckyRedpackPlugin()
+            ctx = PluginContext(redis=redis)
+            ctx.client = FakeClient()
+            ctx.config = {
+                "command": "rp",
+                "allowed_chat_ids": [-100111, -100222],
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await plugin.on_startup(ctx)
+            redis.get_calls.clear()
+
+            actions = await plugin.on_event(
+                ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -100111, "message_id": 2814, "text": "这个线路只有10mbps"},
+                    "chat": {"id": -100111},
+                    "sender": {"user_id": 8629045843, "display_name": "普通用户"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+
+            self.assertEqual(actions, [])
+            self.assertEqual(redis.get_calls, [])
+            self.assertEqual(ctx.client.get_entity_calls, [])
+
+            await plugin.on_shutdown(ctx)
+
+        asyncio.run(run_case())
+
+    def test_active_chat_gate_starts_on_create_and_stops_after_last_claim(self) -> None:
+        async def run_case() -> None:
+            redis = FakeRedis()
+            creator_plugin = plugin_module.LuckyRedpackPlugin()
+            claim_plugin = plugin_module.LuckyRedpackPlugin()
+            create_ctx = PluginContext(redis=redis)
+            claim_ctx = PluginContext(redis=redis)
+            create_ctx.client = FakeClient()
+            claim_ctx.client = FakeClient()
+            shared_config = {
+                "command": "rp",
+                "allowed_chat_ids": [-100111, -100222],
+                "default_amount": 100,
+                "default_count": 1,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            create_ctx.config = dict(shared_config)
+            claim_ctx.config = dict(shared_config)
+            await creator_plugin.on_startup(create_ctx)
+            await claim_plugin.on_startup(claim_ctx)
+
+            command_event = FakeMessage(",rp 测试 100 1", chat_id=-100111, sender_id=1, outgoing=True)
+            await creator_plugin._cmd_handler(create_ctx.client, command_event, ["测试", "100", "1"], 1, create_ctx)
+            pack = creator_plugin._packs[-100111][0]
+
+            self.assertTrue(creator_plugin._is_chat_active(-100111))
+            self.assertTrue(claim_plugin._is_chat_active(-100111))
+            self.assertFalse(claim_plugin._is_chat_active(-100222))
+
+            redis.get_calls.clear()
+            ignored_actions = await claim_plugin.on_event(
+                claim_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -100222, "message_id": 2814, "text": pack.current_password},
+                    "chat": {"id": -100222},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+            self.assertEqual(ignored_actions, [])
+            self.assertNotIn("packs:-100222", redis.get_calls)
+
+            claim_actions = await claim_plugin.on_event(
+                claim_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -100111, "message_id": 2815, "text": pack.current_password},
+                    "chat": {"id": -100111},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+            self.assertEqual(len(claim_actions), 1)
+            self.assertFalse(creator_plugin._is_chat_active(-100111))
+            self.assertFalse(claim_plugin._is_chat_active(-100111))
+
+            redis.get_calls.clear()
+            after_finish_actions = await creator_plugin.on_event(
+                create_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -100111, "message_id": 2816, "text": "普通消息ABCD"},
+                    "chat": {"id": -100111},
+                    "sender": {"user_id": 999, "display_name": "另一个人"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+            self.assertEqual(after_finish_actions, [])
+            self.assertEqual(redis.get_calls, [])
+
+            await creator_plugin.on_shutdown(create_ctx)
+            await claim_plugin.on_shutdown(claim_ctx)
+
+        asyncio.run(run_case())
+
+    def test_startup_restores_active_chat_gate_from_account_index(self) -> None:
+        async def run_case() -> None:
+            redis = FakeRedis()
+            creator_plugin = plugin_module.LuckyRedpackPlugin()
+            create_ctx = PluginContext(redis=redis)
+            create_ctx.client = FakeClient()
+            create_ctx.config = {
+                "command": "rp",
+                "default_amount": 100,
+                "default_count": 2,
+                "min_share_amount": 1,
+                "ttl_seconds": 60,
+            }
+            await creator_plugin.on_startup(create_ctx)
+
+            command_event = FakeMessage(",rp 测试 100 2", chat_id=-100111, sender_id=1, outgoing=True)
+            await creator_plugin._cmd_handler(create_ctx.client, command_event, ["测试", "100", "2"], 1, create_ctx)
+            password = creator_plugin._packs[-100111][0].current_password
+            await creator_plugin.on_shutdown(create_ctx)
+
+            plugin_module._ACTIVE_CHAT_REGISTRY.clear()
+            restored_plugin = plugin_module.LuckyRedpackPlugin()
+            restored_ctx = PluginContext(redis=redis)
+            restored_ctx.client = FakeClient()
+            restored_ctx.config = dict(create_ctx.config)
+            await restored_plugin.on_startup(restored_ctx)
+
+            self.assertTrue(restored_plugin._is_chat_active(-100111))
+            actions = await restored_plugin.on_event(
+                restored_ctx,
+                {
+                    "source": {"type": "message", "channel": "userbot", "account_id": 1},
+                    "message": {"chat_id": -100111, "message_id": 2817, "text": password},
+                    "chat": {"id": -100111},
+                    "sender": {"user_id": 8629045843, "display_name": "领取者"},
+                    "trigger": {"entry_key": "claim_lucky_redpack"},
+                },
+            )
+            self.assertEqual(len(actions), 1)
+
+            await restored_plugin.on_shutdown(restored_ctx)
 
         asyncio.run(run_case())
 

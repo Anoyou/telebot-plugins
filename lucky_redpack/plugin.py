@@ -68,7 +68,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.2"
+PLUGIN_VERSION = "1.4.3"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -116,6 +116,7 @@ FONT_EXTENSIONS = {".ttf", ".ttc", ".otf"}
 _font_path_cache: str | None = None
 _font_search_done = False
 _image_last_error = ""
+_ACTIVE_CHAT_REGISTRY: dict[tuple[int, str], set[int]] = {}
 
 
 @dataclass
@@ -900,14 +901,6 @@ def _packs_to_json(packs: list[LuckyRedpack]) -> str:
     return json.dumps([_pack_to_payload(pack) for pack in packs], ensure_ascii=False)
 
 
-def _looks_like_password_attempt(text: str, suffix_length: int) -> bool:
-    normalized = _normalize_password(text)
-    if len(normalized) <= suffix_length or len(normalized) > 80:
-        return False
-    suffix = normalized[-suffix_length:].upper()
-    return all(char in SUFFIX_CHARS for char in suffix)
-
-
 @register
 class LuckyRedpackPlugin(Plugin):
     key = PLUGIN_KEY
@@ -939,6 +932,8 @@ class LuckyRedpackPlugin(Plugin):
         self._delete_command_message = False
         self._allow_owner_claim = DEFAULT_ALLOW_OWNER_CLAIM
         self._allowed_chat_ids: set[int] = set()
+        self._active_chat_ids: set[int] = set()
+        self._registry_key: tuple[int, str] | None = None
         self._packs: dict[int, list[LuckyRedpack]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -959,7 +954,32 @@ class LuckyRedpackPlugin(Plugin):
     def _chat_not_allowed_text(self) -> str:
         return "当前群聊未启用拼手气口令红包，请先在插件配置的群聊白名单中选择本群。"
 
+    def _set_chat_active(self, chat_id: int, active: bool) -> None:
+        chat_id = int(chat_id)
+        if active:
+            self._active_chat_ids.add(chat_id)
+        else:
+            self._active_chat_ids.discard(chat_id)
+        if self._registry_key is None:
+            return
+        registry = _ACTIVE_CHAT_REGISTRY.setdefault(self._registry_key, set())
+        if active:
+            registry.add(chat_id)
+        else:
+            registry.discard(chat_id)
+
+    def _is_chat_active(self, chat_id: int) -> bool:
+        if self._registry_key is not None:
+            return int(chat_id) in _ACTIVE_CHAT_REGISTRY.get(self._registry_key, set())
+        return int(chat_id) in self._active_chat_ids
+
+    def _registry_key_for(self, ctx: PluginContext) -> tuple[int, str]:
+        data_dir = str(self._data_dir.resolve()) if self._data_dir is not None else ""
+        return int(ctx.account_id), data_dir
+
     async def _message_can_claim(self, ctx: PluginContext, *, chat_id: int, text: str) -> bool:
+        if not self._is_chat_active(chat_id):
+            return False
         normalized_text = _normalize_password(text)
         if not normalized_text:
             return False
@@ -967,8 +987,10 @@ class LuckyRedpackPlugin(Plugin):
             with self._state_file_lock(ctx.account_id, chat_id):
                 packs = await self._load_active_packs(ctx, chat_id)
                 if packs:
+                    self._set_chat_active(chat_id, True)
                     return any(normalized_text == _normalize_password(pack.current_password) for pack in packs)
-        return _looks_like_password_attempt(text, self._suffix_length)
+                self._set_chat_active(chat_id, False)
+        return False
 
     def _new_suffix(self, pack: LuckyRedpack | None = None) -> str:
         used = pack.used_passwords if pack is not None else set()
@@ -1130,6 +1152,7 @@ class LuckyRedpackPlugin(Plugin):
             self._packs[chat_id] = packs
         else:
             self._packs.pop(chat_id, None)
+        self._set_chat_active(chat_id, bool(packs))
 
     def _sync_loaded_packs(self, chat_id: int, packs: list[LuckyRedpack]) -> list[LuckyRedpack]:
         existing_by_code = {pack.pack_code: pack for pack in self._packs.get(chat_id, [])}
@@ -1301,6 +1324,8 @@ class LuckyRedpackPlugin(Plugin):
     async def on_startup(self, ctx: PluginContext) -> None:
         data_dir = getattr(ctx, "data_dir", None)
         self._data_dir = Path(data_dir) if data_dir is not None else None
+        self._registry_key = self._registry_key_for(ctx)
+        self._active_chat_ids = set(_ACTIVE_CHAT_REGISTRY.get(self._registry_key, set()))
         migrated_files = self._migrate_legacy_state_files(ctx.account_id)
         cfg = ctx.config or {}
         self._command = str(cfg.get("command") or DEFAULT_COMMAND).strip() or DEFAULT_COMMAND
@@ -1313,6 +1338,10 @@ class LuckyRedpackPlugin(Plugin):
         self._delete_command_message = bool(cfg.get("delete_command_message", False))
         self._allow_owner_claim = bool(cfg.get("allow_owner_claim", DEFAULT_ALLOW_OWNER_CLAIM))
         self._allowed_chat_ids = _int_set(cfg.get("allowed_chat_ids"))
+        restored_packs = await self._load_account_index_packs(ctx)
+        restored_chat_ids = {int(pack.chat_id) for pack in restored_packs}
+        self._active_chat_ids = restored_chat_ids
+        _ACTIVE_CHAT_REGISTRY[self._registry_key] = set(restored_chat_ids)
         self.commands = {self._command: self._cmd_handler}
         if ctx.log:
             storage = "redis+data_dir" if getattr(ctx, "redis", None) is not None else "data_dir"
@@ -1331,6 +1360,7 @@ class LuckyRedpackPlugin(Plugin):
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         self._packs.clear()
+        self._active_chat_ids.clear()
         self._locks.clear()
         if ctx.log:
             await ctx.log("info", "[lucky_redpack] 已停止")
@@ -1349,6 +1379,8 @@ class LuckyRedpackPlugin(Plugin):
         if not chat_id:
             return []
         if not self._chat_allowed(chat_id):
+            return []
+        if not self._is_chat_active(chat_id):
             return []
         if not await self._message_can_claim(ctx, chat_id=chat_id, text=text):
             return []
@@ -1637,6 +1669,8 @@ class LuckyRedpackPlugin(Plugin):
             return
         if not self._chat_allowed(chat_id):
             return
+        if not self._is_chat_active(chat_id):
+            return
         if not await self._message_can_claim(ctx, chat_id=chat_id, text=text):
             return
         sender = await self._sender(event)
@@ -1684,18 +1718,6 @@ class LuckyRedpackPlugin(Plugin):
                             await ctx.log(
                                 "info",
                                 f"[lucky_redpack] 领取口令未命中：chat={chat_id} msg={claim_message_id} active={active_codes}",
-                            )
-                        elif not packs and _looks_like_password_attempt(text, self._suffix_length):
-                            account_packs = await self._load_account_index_packs(ctx)
-                            account_count = len(account_packs)
-                            memory_count = len(self._all_memory_packs())
-                            await ctx.log(
-                                "warn",
-                                (
-                                    f"[lucky_redpack] 领取口令未找到红包状态：chat={chat_id} "
-                                    f"msg={claim_message_id} account={ctx.account_id} "
-                                    f"account_index={account_count} memory={memory_count}"
-                                ),
                             )
                     return [], None
                 if pack.is_expired():
