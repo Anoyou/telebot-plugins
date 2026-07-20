@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "reply_anchor_test"
-PLUGIN_VERSION = "0.1.4"
+PLUGIN_VERSION = "0.1.5"
 ENTRY_KEY = "reply_to_recent_message"
 NAME_ENTRY_KEY = "resolve_public_name"
 DEFAULT_COMMAND = "send"
@@ -55,7 +55,7 @@ INTERACTION_ENTRIES = [
         "description": "按用户 ID 在当前群搜索近期发言，并返回 payout 回复 +金额。",
         "interaction_profile": "utility_trigger",
         "launch_mode": "userbot_command",
-        "session_scope": "chat",
+        "session_scope": "none",
         "events": ["command"],
         "preserve_command_trigger": True,
         "triggers": {"command": DEFAULT_COMMAND},
@@ -64,7 +64,7 @@ INTERACTION_ENTRIES = [
             "required_envelope": ["source", "sender", "message", "trigger"],
             "required_event_fields": ["type", "chat_id", "message_id"],
         },
-        "result_contract": {"actions": ["payout", "send_message", "result"]},
+        "result_contract": {"actions": ["payout", "send_message", "result", "end_session"]},
         "input_schema": {
             "type": "object",
             "additionalProperties": False,
@@ -90,7 +90,7 @@ INTERACTION_ENTRIES = [
         "description": "回复目标用户消息或提供用户 ID，获取 TelePilot 清洗后的安全公开姓名、匿名状态和标签。",
         "interaction_profile": "utility_trigger",
         "launch_mode": "userbot_command",
-        "session_scope": "chat",
+        "session_scope": "none",
         "events": ["command"],
         "preserve_command_trigger": True,
         "triggers": {"command": NAME_COMMAND},
@@ -99,7 +99,7 @@ INTERACTION_ENTRIES = [
             "required_envelope": ["source", "sender", "message", "trigger"],
             "required_event_fields": ["type", "chat_id", "message_id"],
         },
-        "result_contract": {"actions": ["send_message", "result"]},
+        "result_contract": {"actions": ["send_message", "result", "end_session"]},
         "input_schema": {
             "type": "object",
             "additionalProperties": False,

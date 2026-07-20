@@ -184,7 +184,7 @@ class ReplyAnchorTestPlugin(Plugin):
             return None
         event = event_from_interaction_payload(payload)
         if event.type != "command":
-            return []
+            return [{"type": "end_session"}]
 
         if entry_key == NAME_ENTRY_KEY:
             args = _args_from_payload(payload)
@@ -204,7 +204,8 @@ class ReplyAnchorTestPlugin(Plugin):
                         "chat_id": event.message.chat_id,
                         "reply_to_message_id": event.message.message_id,
                         "text": _name_usage_text(),
-                    }
+                    },
+                    {"type": "end_session"},
                 ]
             identity = await resolve_public_sender_identity(
                 ctx,
@@ -231,6 +232,7 @@ class ReplyAnchorTestPlugin(Plugin):
                         "target_source": target_source,
                     },
                 },
+                {"type": "end_session"},
             ]
 
         limit = _search_limit(ctx.config)
@@ -242,7 +244,8 @@ class ReplyAnchorTestPlugin(Plugin):
                     "chat_id": event.message.chat_id,
                     "reply_to_message_id": event.message.message_id,
                     "text": _usage_text(DEFAULT_COMMAND, limit),
-                }
+                },
+                {"type": "end_session"},
             ]
 
         identity = await resolve_public_sender_identity(
@@ -272,6 +275,7 @@ class ReplyAnchorTestPlugin(Plugin):
                     "reply_to_search_limit": limit,
                 },
             },
+            {"type": "end_session"},
         ]
 
     async def _handle_configured_command(

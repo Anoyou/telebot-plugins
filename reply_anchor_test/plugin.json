@@ -3,7 +3,7 @@
   "display_name": "近期发言回复测试",
   "description": "测试近期发言回复和 TelePilot 安全公开姓名解析。",
   "author": "Anoyou",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "entry": "plugin.py",
   "min_telepilot_version": "0.70.9",
   "category": "utility",
@@ -58,7 +58,7 @@
       "description": "按用户 ID 在当前群搜索近期发言，并返回 payout 回复 +金额。",
       "interaction_profile": "utility_trigger",
       "launch_mode": "userbot_command",
-      "session_scope": "chat",
+      "session_scope": "none",
       "events": [
         "command"
       ],
@@ -84,7 +84,8 @@
         "actions": [
           "payout",
           "send_message",
-          "result"
+          "result",
+          "end_session"
         ]
       },
       "input_schema": {
@@ -115,7 +116,7 @@
       "description": "回复目标用户消息或提供用户 ID，获取 TelePilot 清洗后的安全公开姓名、匿名状态和标签。",
       "interaction_profile": "utility_trigger",
       "launch_mode": "userbot_command",
-      "session_scope": "chat",
+      "session_scope": "none",
       "events": [
         "command"
       ],
@@ -140,7 +141,8 @@
       "result_contract": {
         "actions": [
           "send_message",
-          "result"
+          "result",
+          "end_session"
         ]
       },
       "input_schema": {

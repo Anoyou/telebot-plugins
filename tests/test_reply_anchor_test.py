@@ -51,7 +51,7 @@ def _install_telepilot_stubs() -> None:
 
     def event_from_interaction_payload(payload):
         return types.SimpleNamespace(
-            type="command",
+            type=payload.get("event_type", "command"),
             message=types.SimpleNamespace(
                 chat_id=payload["message"]["chat_id"],
                 message_id=payload["message"]["message_id"],
@@ -97,8 +97,12 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
         self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.4")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.5")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
+        self.assertTrue(all(entry["session_scope"] == "none" for entry in raw["interaction_entries"]))
+        self.assertTrue(
+            all("end_session" in entry["result_contract"]["actions"] for entry in raw["interaction_entries"])
+        )
 
     def test_payout_contains_platform_sanitized_public_name(self) -> None:
         async def run_case() -> None:
@@ -117,6 +121,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             assert actions is not None
             self.assertEqual(actions[0]["reply_to_display_name"], "人")
             self.assertEqual(actions[1]["result"]["target_display_name"], "人")
+            self.assertEqual(actions[-1], {"type": "end_session"})
 
         asyncio.run(run_case())
 
@@ -177,7 +182,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
 
             self.assertIsNotNone(actions)
             assert actions is not None
-            self.assertEqual([action["type"] for action in actions], ["send_message", "result"])
+            self.assertEqual([action["type"] for action in actions], ["send_message", "result", "end_session"])
             self.assertIn("公开姓名：人", actions[0]["text"])
             self.assertIn("身份状态：非匿名公开身份", actions[0]["text"])
             self.assertIn("解析状态：已确认", actions[0]["text"])
@@ -242,8 +247,27 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             )
 
             assert actions is not None
-            self.assertEqual([action["type"] for action in actions], ["send_message"])
+            self.assertEqual([action["type"] for action in actions], ["send_message", "end_session"])
             self.assertIn("回复目标用户的消息", actions[0]["text"])
+
+        asyncio.run(run_case())
+
+    def test_stale_session_message_closes_without_feedback(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.ReplyAnchorTestPlugin()
+            ctx = types.SimpleNamespace(config={})
+
+            actions = await plugin.on_interaction(
+                ctx,
+                plugin_module.NAME_ENTRY_KEY,
+                {
+                    "event_type": "message",
+                    "message": {"chat_id": -1001, "message_id": 93, "text": "普通群消息"},
+                    "trigger": {},
+                },
+            )
+
+            self.assertEqual(actions, [{"type": "end_session"}])
 
         asyncio.run(run_case())
 
