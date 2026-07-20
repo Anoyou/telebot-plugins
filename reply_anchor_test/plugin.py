@@ -8,9 +8,9 @@ from typing import Any
 from app.worker.plugins.base import (
     Plugin,
     PluginContext,
-    public_entity_display_name,
     register,
     resolve_public_sender_identity,
+    sanitize_public_display_name,
 )
 from app.worker.plugins.events import event_from_interaction_payload
 from telethon.tl.types import PeerUser
@@ -120,7 +120,15 @@ async def _reply_target_identity(
             sender = None
     if sender is not None and int(getattr(sender, "id", 0) or 0) != user_id:
         sender = None
-    display_name = public_entity_display_name(sender, default="") if sender is not None else ""
+    raw_name = " ".join(
+        value
+        for value in (
+            str(getattr(sender, "first_name", "") or "").strip(),
+            str(getattr(sender, "last_name", "") or "").strip(),
+        )
+        if value
+    )
+    display_name = sanitize_public_display_name(raw_name, fallback="")
     return user_id, display_name
 
 
