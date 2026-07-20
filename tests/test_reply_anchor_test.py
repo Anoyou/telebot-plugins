@@ -41,9 +41,22 @@ def _install_telepilot_stubs() -> None:
     def register(cls):
         return cls
 
+    def public_entity_display_name(entity, *, default="用户", **kwargs):
+        if entity is None:
+            return default
+        name = " ".join(
+            value
+            for value in (
+                str(getattr(entity, "first_name", "") or "").strip(),
+                str(getattr(entity, "last_name", "") or "").strip(),
+            )
+            if value
+        )
+        return (name or str(getattr(entity, "username", "") or default)).replace(" ", "")
+
     async def resolve_public_sender_identity(ctx, *, chat_id, user_id, **kwargs):
         return types.SimpleNamespace(
-            display_name="人",
+            display_name=kwargs.get("fallback_display_name") or "人",
             is_anonymous_admin=False,
             tag=None,
             resolved=True,
@@ -62,6 +75,7 @@ def _install_telepilot_stubs() -> None:
 
     base.Plugin = Plugin
     base.PluginContext = PluginContext
+    base.public_entity_display_name = public_entity_display_name
     base.register = register
     base.resolve_public_sender_identity = resolve_public_sender_identity
     events.event_from_interaction_payload = event_from_interaction_payload
@@ -97,7 +111,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
         self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.5")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.6")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
         self.assertTrue(all(entry["session_scope"] == "none" for entry in raw["interaction_entries"]))
         self.assertTrue(
@@ -196,7 +210,15 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             class Client:
                 async def get_messages(self, chat_id, *, ids):
                     self.lookup = (chat_id, ids)
-                    return types.SimpleNamespace(from_id=sys.modules["telethon.tl.types"].PeerUser(456))
+                    return types.SimpleNamespace(
+                        from_id=sys.modules["telethon.tl.types"].PeerUser(456),
+                        sender=types.SimpleNamespace(
+                            id=456,
+                            first_name="真实",
+                            last_name="公开姓名",
+                            username="public_user",
+                        ),
+                    )
 
             client = Client()
             plugin = plugin_module.ReplyAnchorTestPlugin()
@@ -218,6 +240,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             assert actions is not None
             self.assertEqual(client.lookup, (-1001, 77))
             self.assertEqual(actions[1]["result"]["target_user_id"], 456)
+            self.assertEqual(actions[1]["result"]["target_display_name"], "真实公开姓名")
             self.assertEqual(actions[1]["result"]["target_source"], "reply_message")
 
         asyncio.run(run_case())

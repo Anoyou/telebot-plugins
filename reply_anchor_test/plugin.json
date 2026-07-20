@@ -3,7 +3,7 @@
   "display_name": "近期发言回复测试",
   "description": "测试近期发言回复和 TelePilot 安全公开姓名解析。",
   "author": "Anoyou",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "entry": "plugin.py",
   "min_telepilot_version": "0.70.9",
   "category": "utility",

@@ -5,7 +5,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.worker.plugins.base import Plugin, PluginContext, register, resolve_public_sender_identity
+from app.worker.plugins.base import (
+    Plugin,
+    PluginContext,
+    public_entity_display_name,
+    register,
+    resolve_public_sender_identity,
+)
 from app.worker.plugins.events import event_from_interaction_payload
 from telethon.tl.types import PeerUser
 
@@ -81,23 +87,41 @@ def _parse_user_id(args: list[str], *, fallback_text: str = "") -> int | None:
     return _positive_int(numbers[0]) if numbers else None
 
 
-async def _reply_target_user_id(ctx: PluginContext, chat_id: int, message_id: int | None) -> int | None:
+async def _reply_target_identity(
+    ctx: PluginContext,
+    chat_id: int,
+    message_id: int | None,
+) -> tuple[int | None, str]:
     if message_id is None:
-        return None
+        return None, ""
     client = getattr(ctx, "client", None)
     get_messages = getattr(client, "get_messages", None) if client is not None else None
     if not callable(get_messages):
-        return None
+        return None, ""
     try:
         message = await get_messages(chat_id, ids=message_id)
     except Exception:
-        return None
+        return None, ""
     if isinstance(message, list):
         message = message[0] if message else None
     from_id = getattr(message, "from_id", None)
     if not isinstance(from_id, PeerUser):
-        return None
-    return _positive_int(getattr(from_id, "user_id", None))
+        return None, ""
+    user_id = _positive_int(getattr(from_id, "user_id", None))
+    if user_id is None:
+        return None, ""
+
+    sender = getattr(message, "sender", None)
+    get_sender = getattr(message, "get_sender", None)
+    if sender is None and callable(get_sender):
+        try:
+            sender = await get_sender()
+        except Exception:
+            sender = None
+    if sender is not None and int(getattr(sender, "id", 0) or 0) != user_id:
+        sender = None
+    display_name = public_entity_display_name(sender, default="") if sender is not None else ""
+    return user_id, display_name
 
 
 def _usage_text(command: str, limit: int) -> str:
@@ -189,9 +213,10 @@ class ReplyAnchorTestPlugin(Plugin):
         if entry_key == NAME_ENTRY_KEY:
             args = _args_from_payload(payload)
             user_id = _parse_user_id(args, fallback_text=event.message.text or "")
+            fallback_display_name = ""
             target_source = "user_id"
             if user_id is None:
-                user_id = await _reply_target_user_id(
+                user_id, fallback_display_name = await _reply_target_identity(
                     ctx,
                     int(event.message.chat_id),
                     event.message.reply_to_message_id,
@@ -211,6 +236,7 @@ class ReplyAnchorTestPlugin(Plugin):
                 ctx,
                 chat_id=int(event.message.chat_id),
                 user_id=user_id,
+                fallback_display_name=fallback_display_name,
             )
             return [
                 {
