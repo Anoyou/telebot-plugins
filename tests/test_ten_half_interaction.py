@@ -18,6 +18,7 @@ def _load_plugin_module():
     command_module = types.ModuleType("app.worker.command")
     plugins_module = types.ModuleType("app.worker.plugins")
     base_module = types.ModuleType("app.worker.plugins.base")
+    events_module = types.ModuleType("app.worker.plugins.events")
 
     class Plugin:
         pass
@@ -44,16 +45,70 @@ def _load_plugin_module():
     def current_command_prefix(*, fallback=None):
         return "。"
 
+    def event_from_interaction_payload(payload):
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        event_type = str(event.get("type") or payload.get("event_type") or source.get("type") or "")
+        actor_ns = types.SimpleNamespace(
+            user_id=actor.get("user_id") or payload.get("sender_user_id"),
+            display_name=actor.get("display_name") or payload.get("sender_name") or "玩家",
+        )
+        return types.SimpleNamespace(
+            type=event_type,
+            message=types.SimpleNamespace(
+                chat_id=(
+                    message.get("chat_id")
+                    or payload.get("chat_id")
+                    or source.get("chat_id")
+                    or event.get("chat_id")
+                ),
+                message_id=(
+                    message.get("message_id")
+                    or payload.get("message_id")
+                    or source.get("message_id")
+                    or event.get("message_id")
+                ),
+                text=(
+                    message.get("text")
+                    or payload.get("message_text")
+                    or payload.get("text")
+                    or source.get("text")
+                    or event.get("text")
+                    or ""
+                ),
+                reply_to_message_id=message.get("reply_to_message_id"),
+            ),
+            sender=actor_ns,
+            actor=actor_ns,
+            callback=types.SimpleNamespace(
+                id=(
+                    source.get("callback_query_id")
+                    or event.get("callback_query_id")
+                    or payload.get("callback_query_id")
+                ),
+                data=(
+                    source.get("callback_data")
+                    or event.get("callback_data")
+                    or payload.get("callback_data")
+                    or ""
+                ),
+            ),
+        )
+
     command_module.current_command_prefix = current_command_prefix
     base_module.Plugin = Plugin
     base_module.PluginContext = PluginContext
     base_module.register = register
     base_module.public_entity_display_name = public_entity_display_name
+    events_module.event_from_interaction_payload = event_from_interaction_payload
     sys.modules.setdefault("app", app_module)
     sys.modules.setdefault("app.worker", worker_module)
     sys.modules["app.worker.command"] = command_module
     sys.modules.setdefault("app.worker.plugins", plugins_module)
     sys.modules["app.worker.plugins.base"] = base_module
+    sys.modules["app.worker.plugins.events"] = events_module
 
     spec = importlib.util.spec_from_file_location(
         "ten_half_plugin_under_test",
