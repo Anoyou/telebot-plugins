@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.29"
+PLUGIN_VERSION = "0.1.30"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -331,20 +331,20 @@ CONFIG_SCHEMA = {
         "question_message_template": {
             "type": "string",
             "title": "答题题面模板",
-            "default": "<h1>AI 红包题目</h1><p>{question}</p>{options}<p>请选择唯一正确答案。</p>",
-            "description": "场景占位符：{question} 题目、{options} 三个选项；另可使用全部通用占位符。新模板使用 Telegram Rich HTML；旧自定义模板保持普通 Telegram HTML。",
+            "default": "<p><b>{answerer_name} 这是你的专属雨露</b></p><h1>AI 红包题目</h1><p>{question}</p>{options}<p>请选择唯一正确答案。</p>",
+            "description": "场景占位符：{answerer_name} 答题者姓名、{question} 题目、{options} 三个选项；另可使用全部通用占位符。新模板使用 Telegram Rich HTML；旧自定义模板保持普通 Telegram HTML。",
         },
         "success_message_template": {
             "type": "string",
             "title": "答对结果模板",
-            "default": "<h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答对了，获得 {reward}</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
-            "description": "场景占位符：{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。",
+            "default": "<p><b>答题者：{answerer_name}</b></p><h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答对了，获得 {reward}</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
+            "description": "场景占位符：{answerer_name} 答题者姓名、{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。",
         },
         "failed_message_template": {
             "type": "string",
             "title": "挑战失败模板",
-            "default": "<h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答题机会已用完，今天的挑战已结束</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
-            "description": "场景占位符：{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。",
+            "default": "<p><b>答题者：{answerer_name}</b></p><h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答题机会已用完，今天的挑战已结束</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
+            "description": "场景占位符：{answerer_name} 答题者姓名、{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。",
         },
         "settlement_message_template": {
             "type": "string",
@@ -368,7 +368,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "模板占位符（只读）",
             "readOnly": True,
-            "default": "通用（所有模板均可用）：{date} {daily_limit} {retry_count} {prefix} {command}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{question} {options}\n结果：{question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}",
+            "default": "通用（所有模板均可用）：{date} {daily_limit} {retry_count} {prefix} {command}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{answerer_name} {question} {options}\n结果：{answerer_name} {question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}",
         },
         "packet_message_preview": {
             "type": "string",

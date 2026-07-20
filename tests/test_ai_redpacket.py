@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.29")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.29")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.30")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.30")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -3376,9 +3376,9 @@ class PluginActionTest(unittest.TestCase):
             config = {
                 "daily_limit": 3,
                 "retry_count": 2,
-                "question_message_template": "题面 {date} {daily_limit}/{retry_count} {question} {options}",
-                "success_message_template": "成功 {date} {daily_limit}/{retry_count} {question} {reward}",
-                "failed_message_template": "失败 {date} {daily_limit}/{retry_count} {question} {answer}",
+                "question_message_template": "题面 {answerer_name} {date} {daily_limit}/{retry_count} {question} {options}",
+                "success_message_template": "成功 {answerer_name} {date} {daily_limit}/{retry_count} {question} {reward}",
+                "failed_message_template": "失败 {answerer_name} {date} {daily_limit}/{retry_count} {question} {answer}",
             }
 
         payload = {
@@ -3392,15 +3392,68 @@ class PluginActionTest(unittest.TestCase):
             "user_id": 77,
             "user_display_name": "张三",
         }
-        self.assertIn("题面 2026-07-14 3/2", plugin._render_question(Context(), payload))
+        self.assertIn("题面 张三 2026-07-14 3/2", plugin._render_question(Context(), payload))
         success = plugin._render_result(Context(), payload, correct=True)
         failed = plugin._render_result(Context(), payload, correct=False)
-        self.assertIn("答题者：张三", success)
-        self.assertIn("成功 2026-07-14 3/2", success)
+        self.assertIn("成功 张三 2026-07-14 3/2", success)
         self.assertNotIn("申请补发奖励", success)
         self.assertNotIn("若未收到奖励", success)
-        self.assertIn("答题者：张三", failed)
-        self.assertIn("失败 2026-07-14 3/2", failed)
+        self.assertIn("失败 张三 2026-07-14 3/2", failed)
+
+    def test_custom_templates_do_not_receive_hardcoded_answerer_labels(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+
+        class Context:
+            config = {
+                "question_message_template": "只显示题目：{question}\n{options}",
+                "success_message_template": "只显示奖励：{reward}",
+                "failed_message_template": "只显示答案：{answer}",
+            }
+
+        payload = {
+            "question": "测试题",
+            "source_options_json": json.dumps(["正确", "错误一", "错误二"]),
+            "option_order_json": json.dumps([0, 1, 2]),
+            "answer_index": 0,
+            "reward": 10,
+            "explanation": "解析",
+            "source": "https://example.com/source",
+            "user_id": 77,
+            "user_display_name": "张三",
+        }
+
+        self.assertNotIn("张三", plugin._render_question(Context(), payload))
+        self.assertNotIn("张三", plugin._render_result(Context(), payload, correct=True))
+        self.assertNotIn("张三", plugin._render_result(Context(), payload, correct=False))
+
+    def test_saved_previous_rich_defaults_migrate_to_answerer_placeholder(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+        payload = {
+            "question": "测试题",
+            "source_options_json": json.dumps(["正确", "错误一", "错误二"]),
+            "option_order_json": json.dumps([0, 1, 2]),
+            "answer_index": 0,
+            "reward": 10,
+            "explanation": "解析",
+            "source": "https://example.com/source",
+            "user_id": 77,
+            "user_display_name": "张三",
+        }
+
+        for key, previous_default in plugin_module.PREVIOUS_RICH_TEMPLATE_DEFAULTS.items():
+            class Context:
+                config = {key: previous_default}
+
+            rendered = (
+                plugin._render_question(Context(), payload)
+                if key == "question_message_template"
+                else plugin._render_result(
+                    Context(),
+                    payload,
+                    correct=key == "success_message_template",
+                )
+            )
+            self.assertIn("张三", rendered)
 
     def test_question_and_result_messages_keep_public_claim_button_and_owner_label(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

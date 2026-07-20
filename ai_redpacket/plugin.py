@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.29"
+PLUGIN_VERSION = "0.1.30"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -114,12 +114,41 @@ PACKET_MESSAGE_TEMPLATE = (
     "<p>每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>"
 )
 QUESTION_MESSAGE_TEMPLATE = (
+    "<p><b>{answerer_name} 这是你的专属雨露</b></p>"
     "<h1>AI 红包题目</h1>"
     "<p>{question}</p>"
     "{options}"
     "<p>请选择唯一正确答案。</p>"
 )
+
+PREVIOUS_RICH_TEMPLATE_DEFAULTS = {
+    "question_message_template": (
+        "<h1>AI 红包题目</h1>"
+        "<p>{question}</p>"
+        "{options}"
+        "<p>请选择唯一正确答案。</p>"
+    ),
+    "success_message_template": (
+        "<h1>AI 红包答题结果</h1>"
+        "<p>{question}</p>"
+        "<details open><summary>答对了，获得 {reward}</summary>"
+        "<p><b>正确答案：</b>{answer}</p>"
+        "<p><b>解析：</b>{explanation}</p>"
+        "<p><b>来源：</b>{source}</p>"
+        "</details>"
+    ),
+    "failed_message_template": (
+        "<h1>AI 红包答题结果</h1>"
+        "<p>{question}</p>"
+        "<details open><summary>答题机会已用完，今天的挑战已结束</summary>"
+        "<p><b>正确答案：</b>{answer}</p>"
+        "<p><b>解析：</b>{explanation}</p>"
+        "<p><b>来源：</b>{source}</p>"
+        "</details>"
+    ),
+}
 SUCCESS_MESSAGE_TEMPLATE = (
+    "<p><b>答题者：{answerer_name}</b></p>"
     "<h1>AI 红包答题结果</h1>"
     "<p>{question}</p>"
     "<details open><summary>答对了，获得 {reward}</summary>"
@@ -129,6 +158,7 @@ SUCCESS_MESSAGE_TEMPLATE = (
     "</details>"
 )
 FAILED_MESSAGE_TEMPLATE = (
+    "<p><b>答题者：{answerer_name}</b></p>"
     "<h1>AI 红包答题结果</h1>"
     "<p>{question}</p>"
     "<details open><summary>答题机会已用完，今天的挑战已结束</summary>"
@@ -1785,17 +1815,6 @@ class AIRedpacketPlugin(Plugin):
                 f"{chr(65 + index)}. {html.escape(str(option))}"
                 for index, option in enumerate(options)
             )
-        body = self._render_business_template(
-            ctx,
-            "question_message_template",
-            QUESTION_MESSAGE_TEMPLATE,
-            LEGACY_QUESTION_MESSAGE_TEMPLATE,
-            question=html.escape(str(attempt["question"])),
-            options=option_text,
-            date=self._today(ctx),
-            daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
-            retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
-        )
         owner = html.escape(
             str(
                 attempt.get("public_display_name")
@@ -1803,9 +1822,18 @@ class AIRedpacketPlugin(Plugin):
                 or f"用户{attempt.get('user_id') or ''}"
             )
         )
-        if rich:
-            return f"<p><b>{owner} 这是你的专属雨露</b></p>{body}"
-        return f"<b>{owner} 这是你的专属雨露</b>\n{body}"
+        return self._render_business_template(
+            ctx,
+            "question_message_template",
+            QUESTION_MESSAGE_TEMPLATE,
+            LEGACY_QUESTION_MESSAGE_TEMPLATE,
+            question=html.escape(str(attempt["question"])),
+            options=option_text,
+            answerer_name=owner,
+            date=self._today(ctx),
+            daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
+            retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
+        )
 
     def _render_result(self, ctx: PluginContext, result: dict[str, Any], *, correct: bool) -> str:
         source_options = json.loads(str(result["source_options_json"]))
@@ -1815,8 +1843,14 @@ class AIRedpacketPlugin(Plugin):
         key = "success_message_template" if correct else "failed_message_template"
         rich_default = SUCCESS_MESSAGE_TEMPLATE if correct else FAILED_MESSAGE_TEMPLATE
         legacy_default = LEGACY_SUCCESS_MESSAGE_TEMPLATE if correct else LEGACY_FAILED_MESSAGE_TEMPLATE
-        rich = self._uses_rich_template(ctx, key, rich_default, legacy_default)
-        body = self._render_business_template(
+        owner = html.escape(
+            str(
+                result.get("public_display_name")
+                or result.get("user_display_name")
+                or f"用户{result.get('user_id') or ''}"
+            )
+        )
+        return self._render_business_template(
             ctx,
             key,
             rich_default,
@@ -1826,20 +1860,11 @@ class AIRedpacketPlugin(Plugin):
             answer=f"{chr(65 + answer_index)}. {html.escape(str(options[answer_index]))}",
             explanation=html.escape(str(result.get("explanation") or "无")),
             source=html.escape(str(result.get("source") or "无")),
+            answerer_name=owner,
             date=self._today(ctx),
             daily_limit=self._int_config(ctx, "daily_limit", 1, 1, 100),
             retry_count=self._int_config(ctx, "retry_count", 1, 0, 10),
         )
-        owner = html.escape(
-            str(
-                result.get("public_display_name")
-                or result.get("user_display_name")
-                or f"用户{result.get('user_id') or ''}"
-            )
-        )
-        if rich:
-            return f"<p><b>答题者：{owner}</b></p>{body}"
-        return f"<b>答题者：{owner}</b>\n{body}"
 
     def _answer_markup(self, redpacket_id: str, attempt_id: str, token: str, attempt: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -2803,7 +2828,8 @@ class AIRedpacketPlugin(Plugin):
     ) -> str:
         configured = str((getattr(ctx, "config", None) or {}).get(key) or "")
         normalized = configured.strip()
-        if not normalized or normalized == legacy_default.strip():
+        previous_default = PREVIOUS_RICH_TEMPLATE_DEFAULTS.get(key, "").strip()
+        if not normalized or normalized in {legacy_default.strip(), previous_default}:
             template = rich_default
         else:
             template = configured
