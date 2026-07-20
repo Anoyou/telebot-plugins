@@ -86,6 +86,7 @@ CONFIG_SCHEMA = {
             "type": "boolean",
             "title": "发出后删除原指令",
             "default": False,
+            "description": "兼容旧配置；当前创建红包后固定删除原指令。",
         },
     },
     "required": [
@@ -120,7 +121,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.4.5",
+    version="1.4.6",
     min_telepilot_version="0.59.1",
     min_telebot_version="0.10.0",
     author="Anoyou",

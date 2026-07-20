@@ -68,7 +68,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.5"
+PLUGIN_VERSION = "1.4.6"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -97,6 +97,8 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 LEGACY_STATE_DIR_ENV = "LUCKY_REDPACK_STATE_DIR"
 LEGACY_DEFAULT_STATE_DIR = Path(tempfile.gettempdir()) / "telepilot_lucky_redpack_state"
 SETTLEMENT_DELETE_DELAY_SECONDS = 60
+LIST_DELETE_DELAY_SECONDS = 30
+COMMAND_RESULT_DELETE_DELAY_SECONDS = 3
 BUNDLED_FONT_CANDIDATES = [
     PLUGIN_DIR.parent / "redpack-byRBQ" / "assets" / "font.ttf",
 ]
@@ -1001,7 +1003,6 @@ class LuckyRedpackPlugin(Plugin):
         "suffix_length",
         "ttl_seconds",
         "image_password_enabled",
-        "delete_command_message",
         "allow_owner_claim",
         "allowed_chat_ids",
     }
@@ -1015,7 +1016,6 @@ class LuckyRedpackPlugin(Plugin):
         self._suffix_length = DEFAULT_SUFFIX_LENGTH
         self._ttl_seconds = DEFAULT_TTL_SECONDS
         self._image_password_enabled = DEFAULT_IMAGE_PASSWORD_ENABLED
-        self._delete_command_message = False
         self._allow_owner_claim = DEFAULT_ALLOW_OWNER_CLAIM
         self._allowed_chat_ids: set[int] = set()
         self._active_chat_ids: set[int] = set()
@@ -1421,7 +1421,6 @@ class LuckyRedpackPlugin(Plugin):
         self._suffix_length = _clamp_int(cfg.get("suffix_length"), DEFAULT_SUFFIX_LENGTH, 1, 12)
         self._ttl_seconds = _clamp_int(cfg.get("ttl_seconds"), DEFAULT_TTL_SECONDS, 30, 86400)
         self._image_password_enabled = bool(cfg.get("image_password_enabled", DEFAULT_IMAGE_PASSWORD_ENABLED))
-        self._delete_command_message = bool(cfg.get("delete_command_message", False))
         self._allow_owner_claim = bool(cfg.get("allow_owner_claim", DEFAULT_ALLOW_OWNER_CLAIM))
         self._allowed_chat_ids = _int_set(cfg.get("allowed_chat_ids"))
         restored_packs = await self._load_account_index_packs(ctx)
@@ -1515,20 +1514,38 @@ class LuckyRedpackPlugin(Plugin):
                 )
             ]
 
+        async def edit_temporary(text: str, delay_seconds: int) -> list[dict[str, Any]]:
+            edited = await self._edit_command_response(
+                ctx,
+                chat_id=chat_id,
+                message_id=command_message_id,
+                text=text,
+                delete_after=delay_seconds,
+            )
+            return [] if edited else reply_action(text)
+
         if action in {"help", "帮助"}:
             return reply_action(self._help_text())
-        if action in {"active", "状态", "list", "列表"}:
+        if action in {"active", "状态"}:
             return reply_action(await self._active_text(ctx, chat_id))
+        if action in {"list", "列表"}:
+            return await edit_temporary(await self._active_text(ctx, chat_id), LIST_DELETE_DELAY_SECONDS)
         if action in {"off", "关闭"}:
             pack_code = tokens[1] if len(tokens) >= 2 else ""
             if not pack_code:
-                return reply_action(f"请指定红包代码。例：{current_command_prefix(fallback=',')}{self._command} off ABC123")
+                return await edit_temporary(
+                    f"请指定红包代码。例：{current_command_prefix(fallback=',')}{self._command} off ABC123",
+                    COMMAND_RESULT_DELETE_DELAY_SECONDS,
+                )
             async with self._get_lock(chat_id):
                 with self._state_file_lock(ctx.account_id, chat_id):
                     packs = await self._load_active_packs(ctx, chat_id)
                     pack = next((item for item in packs if item.pack_code.casefold() == pack_code.casefold()), None)
                     if not pack:
-                        return reply_action(f"未找到进行中的红包：{pack_code}")
+                        return await edit_temporary(
+                            f"未找到进行中的红包：{pack_code}",
+                            COMMAND_RESULT_DELETE_DELAY_SECONDS,
+                        )
                     await self._save_active_packs(
                         ctx,
                         chat_id,
@@ -1536,7 +1553,7 @@ class LuckyRedpackPlugin(Plugin):
                     )
             if pack.message_id:
                 await self._delete_message(ctx, chat_id, pack.message_id)
-            return reply_action(f"已关闭红包 {pack.pack_code}。")
+            return await edit_temporary(f"已关闭红包 {pack.pack_code}。", COMMAND_RESULT_DELETE_DELAY_SECONDS)
         if action in {"clear", "清空"}:
             async with self._get_lock(chat_id):
                 with self._state_file_lock(ctx.account_id, chat_id):
@@ -1545,7 +1562,10 @@ class LuckyRedpackPlugin(Plugin):
             for pack in existed:
                 if pack.message_id:
                     await self._delete_message(ctx, chat_id, pack.message_id)
-            return reply_action(f"已清空当前聊天的 {len(existed)} 个进行中红包。" if existed else "当前聊天没有进行中的红包。")
+            return await edit_temporary(
+                f"已清空当前聊天的 {len(existed)} 个进行中红包。" if existed else "当前聊天没有进行中的红包。",
+                COMMAND_RESULT_DELETE_DELAY_SECONDS,
+            )
 
         image_mode = self._image_password_enabled
         create_args = tokens
@@ -1603,7 +1623,7 @@ class LuckyRedpackPlugin(Plugin):
                     )
 
         try:
-            sent = await self._send_pack_message(ctx, pack, edit_message_id=command_message_id)
+            sent = await self._send_pack_message(ctx, pack)
         except RuntimeError as exc:
             await self._remove_pack_by_code(ctx, chat_id, pack.pack_code)
             if ctx.log:
@@ -1614,7 +1634,7 @@ class LuckyRedpackPlugin(Plugin):
         pack.message_id = sent_message_id
         await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
-        if self._delete_command_message and command_message_id and sent_message_id != command_message_id:
+        if command_message_id:
             await self._delete_message(ctx, chat_id, command_message_id)
         return []
 
@@ -1642,25 +1662,57 @@ class LuckyRedpackPlugin(Plugin):
             await self._reply(event, await self._active_text(ctx, chat_id))
             return
         if action in {"list", "列表"}:
-            await self._reply(event, await self._active_text(ctx, chat_id))
+            text = await self._active_text(ctx, chat_id)
+            if not await self._edit_command_response(
+                ctx,
+                chat_id=chat_id,
+                message_id=_message_id_from_event(event),
+                text=text,
+                delete_after=LIST_DELETE_DELAY_SECONDS,
+            ):
+                await self._reply(event, text)
             return
         if action in {"off", "关闭"}:
             pack_code = tokens[1] if len(tokens) >= 2 else ""
             if not pack_code:
-                await self._reply(event, f"请指定红包代码。例：{current_command_prefix(fallback=',')}{self._command} off ABC123")
+                text = f"请指定红包代码。例：{current_command_prefix(fallback=',')}{self._command} off ABC123"
+                if not await self._edit_command_response(
+                    ctx,
+                    chat_id=chat_id,
+                    message_id=_message_id_from_event(event),
+                    text=text,
+                    delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
+                ):
+                    await self._reply(event, text)
                 return
             async with self._get_lock(chat_id):
                 with self._state_file_lock(ctx.account_id, chat_id):
                     packs = await self._load_active_packs(ctx, chat_id)
                     pack = next((item for item in packs if item.pack_code.casefold() == pack_code.casefold()), None)
                     if not pack:
-                        await self._reply(event, f"未找到进行中的红包：{pack_code}")
+                        text = f"未找到进行中的红包：{pack_code}"
+                        if not await self._edit_command_response(
+                            ctx,
+                            chat_id=chat_id,
+                            message_id=_message_id_from_event(event),
+                            text=text,
+                            delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
+                        ):
+                            await self._reply(event, text)
                         return
                     packs = [item for item in packs if item is not pack]
                     await self._save_active_packs(ctx, chat_id, packs)
             if pack.message_id:
                 await self._delete_message(ctx, chat_id, pack.message_id)
-            await self._reply(event, f"已关闭红包 {pack.pack_code}。")
+            text = f"已关闭红包 {pack.pack_code}。"
+            if not await self._edit_command_response(
+                ctx,
+                chat_id=chat_id,
+                message_id=_message_id_from_event(event),
+                text=text,
+                delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
+            ):
+                await self._reply(event, text)
             return
         if action in {"clear", "清空"}:
             async with self._get_lock(chat_id):
@@ -1670,7 +1722,15 @@ class LuckyRedpackPlugin(Plugin):
             for pack in existed:
                 if pack.message_id:
                     await self._delete_message(ctx, chat_id, pack.message_id)
-            await self._reply(event, f"已清空当前聊天的 {len(existed)} 个进行中红包。" if existed else "当前聊天没有进行中的红包。")
+            text = f"已清空当前聊天的 {len(existed)} 个进行中红包。" if existed else "当前聊天没有进行中的红包。"
+            if not await self._edit_command_response(
+                ctx,
+                chat_id=chat_id,
+                message_id=_message_id_from_event(event),
+                text=text,
+                delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
+            ):
+                await self._reply(event, text)
             return
 
         image_mode = self._image_password_enabled
@@ -1730,7 +1790,7 @@ class LuckyRedpackPlugin(Plugin):
 
         command_message_id = _message_id_from_event(event)
         try:
-            sent = await self._send_pack_message(ctx, pack, edit_message_id=command_message_id)
+            sent = await self._send_pack_message(ctx, pack)
         except RuntimeError as exc:
             await self._remove_pack_by_code(ctx, chat_id, pack.pack_code)
             if ctx.log:
@@ -1741,7 +1801,7 @@ class LuckyRedpackPlugin(Plugin):
         pack.message_id = sent_message_id
         await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
-        if self._delete_command_message and sent_message_id != command_message_id:
+        if command_message_id:
             await self._delete_event(ctx, event)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
@@ -2020,8 +2080,47 @@ class LuckyRedpackPlugin(Plugin):
         if message_ids:
             self._track_task(asyncio.create_task(self._delete_messages_later(ctx, pack.chat_id, message_ids)))
 
-    async def _delete_messages_later(self, ctx: PluginContext, chat_id: int, message_ids: list[int]) -> None:
-        await asyncio.sleep(SETTLEMENT_DELETE_DELAY_SECONDS)
+    async def _edit_command_response(
+        self,
+        ctx: PluginContext,
+        *,
+        chat_id: int,
+        message_id: int | None,
+        text: str,
+        delete_after: int,
+    ) -> bool:
+        if ctx.client is None or not message_id:
+            return False
+        edit_message = getattr(ctx.client, "edit_message", None)
+        if not callable(edit_message):
+            return False
+        try:
+            await _maybe_await(edit_message(chat_id, message_id, text, parse_mode="html"))
+        except Exception as exc:
+            if ctx.log:
+                await ctx.log("warn", f"[lucky_redpack] 编辑命令结果失败：{type(exc).__name__}: {exc}")
+            return False
+        self._track_task(
+            asyncio.create_task(
+                self._delete_messages_later(
+                    ctx,
+                    chat_id,
+                    [message_id],
+                    delay_seconds=delete_after,
+                )
+            )
+        )
+        return True
+
+    async def _delete_messages_later(
+        self,
+        ctx: PluginContext,
+        chat_id: int,
+        message_ids: list[int],
+        *,
+        delay_seconds: int | None = None,
+    ) -> None:
+        await asyncio.sleep(SETTLEMENT_DELETE_DELAY_SECONDS if delay_seconds is None else delay_seconds)
         unique_ids = sorted({int(item) for item in message_ids if item})
         if not unique_ids:
             return
@@ -2034,7 +2133,7 @@ class LuckyRedpackPlugin(Plugin):
             await _maybe_await(delete_messages(chat_id, unique_ids))
         except Exception as exc:
             if ctx.log:
-                await ctx.log("warn", f"[lucky_redpack] 自动删除结算消息失败：{type(exc).__name__}: {exc}")
+                await ctx.log("warn", f"[lucky_redpack] 自动删除消息失败：{type(exc).__name__}: {exc}")
 
     async def _delete_event(self, ctx: PluginContext, event: Any) -> None:
         delete = getattr(event, "delete", None) or getattr(getattr(event, "message", None), "delete", None)
