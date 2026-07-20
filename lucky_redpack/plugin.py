@@ -68,7 +68,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.3"
+PLUGIN_VERSION = "1.4.4"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -599,6 +599,34 @@ def _load_password_font(password: str, size: int) -> Any:
     return ImageFont.load_default()
 
 
+def _fit_password_layers(layers: list[Any], work_width: int) -> tuple[list[Any], list[int], int]:
+    if not layers:
+        return layers, [], 0
+
+    gaps = [random.randint(4, 16) for _ in range(len(layers) - 1)]
+    total_width = sum(layer.size[0] for layer in layers) + sum(gaps)
+    horizontal_margin = 24
+    available_width = max(1, work_width - horizontal_margin * 2)
+
+    if total_width > available_width:
+        layer_width = sum(layer.size[0] for layer in layers)
+        ratio = max(0.01, (available_width - sum(gaps)) / max(1, layer_width))
+        resampling = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+        layers = [
+            layer.resize(
+                (
+                    max(1, int(layer.size[0] * ratio)),
+                    max(1, int(layer.size[1] * ratio)),
+                ),
+                resample=resampling,
+            )
+            for layer in layers
+        ]
+        total_width = sum(layer.size[0] for layer in layers) + sum(gaps)
+
+    return layers, gaps, max(horizontal_margin, (work_width - total_width) // 2)
+
+
 def build_password_image(password: str) -> Path | None:
     if not HAS_PIL:
         _set_image_error("未安装 Pillow/PIL，请在 TelePilot worker 环境安装 Pillow 后重启")
@@ -663,7 +691,6 @@ def build_password_image(password: str) -> Path | None:
 
         chars = list(password)
         layers: list[Image.Image] = []
-        total_width = 0
         for char in chars:
             bbox = draw.textbbox((0, 0), char, font=font)
             width = max(font_size // 2, bbox[2] - bbox[0])
@@ -675,14 +702,15 @@ def build_password_image(password: str) -> Path | None:
             layer_draw.text((28, 26), char, font=font, fill=color, stroke_width=4, stroke_fill=(255, 249, 240, 232))
             rotated = layer.rotate(random.randint(-14, 14), resample=Image.Resampling.BICUBIC if hasattr(Image, "Resampling") else Image.BICUBIC, expand=True)
             layers.append(rotated)
-            total_width += rotated.size[0] + 10
 
-        x = max(24, (work_width - total_width) // 2)
+        layers, gaps, x = _fit_password_layers(layers, work_width)
         center_y = work_height // 2
-        for layer in layers:
+        for index, layer in enumerate(layers):
             y = center_y - layer.size[1] // 2 + random.randint(-18, 18)
             image.alpha_composite(layer, dest=(x, y))
-            x += layer.size[0] + random.randint(4, 16)
+            x += layer.size[0]
+            if index < len(gaps):
+                x += gaps[index]
 
         for _ in range(240):
             x = random.randint(0, work_width - 1)

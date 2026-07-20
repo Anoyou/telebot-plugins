@@ -539,6 +539,23 @@ class LuckyRedpackTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    @unittest.skipUnless(plugin_module.HAS_PIL, "Pillow is required")
+    def test_long_password_image_layers_fit_inside_canvas(self) -> None:
+        layers = [plugin_module.Image.new("RGBA", (180, 220)) for _ in range(15)]
+
+        fitted_layers, gaps, start_x = plugin_module._fit_password_layers(
+            layers,
+            plugin_module.IMAGE_WIDTH * 2,
+        )
+
+        rendered_width = sum(layer.size[0] for layer in fitted_layers) + sum(gaps)
+        self.assertEqual(len(fitted_layers), len(layers))
+        self.assertGreaterEqual(start_x, 24)
+        self.assertLessEqual(
+            start_x + rendered_width,
+            plugin_module.IMAGE_WIDTH * 2 - 24,
+        )
+
     def test_text_redpack_edits_command_message_instead_of_replying(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.LuckyRedpackPlugin()
