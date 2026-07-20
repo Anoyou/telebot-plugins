@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "reply_anchor_test"
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.2"
 ENTRY_KEY = "reply_to_recent_message"
 DEFAULT_COMMAND = "send"
 DEFAULT_SEARCH_LIMIT = 200
@@ -100,7 +100,7 @@ MANIFEST = Manifest(
     key=PLUGIN_KEY,
     display_name="近期发言回复测试",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.49.6",
+    min_telepilot_version="0.70.9",
     author="Anoyou",
     description="测试 payout 按用户 ID 搜索当前群近期发言并回复 +金额。",
     usage=USAGE,

@@ -3,9 +3,9 @@
   "display_name": "近期发言回复测试",
   "description": "测试 payout 按用户 ID 搜索当前群近期发言并回复 +金额。",
   "author": "Anoyou",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "entry": "plugin.py",
-  "min_telepilot_version": "0.49.6",
+  "min_telepilot_version": "0.70.9",
   "category": "utility",
   "permissions": [
     "send_message",

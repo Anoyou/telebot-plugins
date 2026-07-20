@@ -9,6 +9,7 @@ import sqlite3
 import sys
 import tempfile
 import types
+import unicodedata
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -101,11 +102,33 @@ def _install_telepilot_stubs() -> None:
             for user_id, display_name in senders.items()
         }
 
+    def sanitize_public_display_name(value, *, limit=10, fallback="匿名用户"):
+        invisible = {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0}
+        visible = []
+        for char in str(value or ""):
+            codepoint = ord(char)
+            category = unicodedata.category(char)
+            if (
+                char.isspace()
+                or category in {"Cc", "Cf", "Cs", "Cn", "Zl", "Zp", "Zs"}
+                or codepoint in invisible
+                or 0x180B <= codepoint <= 0x180F
+                or 0xFE00 <= codepoint <= 0xFE0F
+                or 0xE0100 <= codepoint <= 0xE01EF
+            ):
+                continue
+            visible.append(char)
+        cleaned = "".join(visible)
+        if limit is not None:
+            cleaned = cleaned[: max(0, int(limit))]
+        return cleaned or fallback
+
     base.Plugin = Plugin
     base.PluginContext = PluginContext
     base.register = register
     base.resolve_public_sender_identities = resolve_public_sender_identities
     base.resolve_public_sender_identity = resolve_public_sender_identity
+    base.sanitize_public_display_name = sanitize_public_display_name
     command.current_command_prefix = current_command_prefix
     sys.modules["app.worker.command"] = command
     manifest.Manifest = Manifest
@@ -178,9 +201,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.27")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.27")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.6")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.28")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.28")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -1533,6 +1556,29 @@ class PluginActionTest(unittest.TestCase):
         )
         self.assertEqual(named, "张三")
         self.assertEqual(username_only, "@lisi")
+
+    def test_display_name_removes_unicode_invisible_characters_before_truncation(self) -> None:
+        name = "\u206a\u200c\u200f\u206a \u206a\u200c\u200f\u206a人"
+
+        self.assertEqual(plugin_module.truncate_display_name(name), "人")
+
+    def test_display_name_removes_all_unicode_whitespace_and_blank_glyphs(self) -> None:
+        self.assertEqual(
+            plugin_module.truncate_display_name(" 张\u00a0三\u3000\t\u2800\u3164\uffa0 "),
+            "张三",
+        )
+
+    def test_invisible_only_display_name_falls_back_to_username_or_anonymous(self) -> None:
+        invisible = "\u206a\u200c\u200f\u2800\u3164\uffa0\u034f"
+
+        self.assertEqual(plugin_module.truncate_display_name(invisible), "匿名用户")
+        self.assertEqual(
+            plugin_module.sender_display_name(
+                {"sender": {"user_id": 79, "display_name": invisible, "username": "visible_user"}},
+                79,
+            ),
+            "@visible_u",
+        )
 
     def test_anonymous_admin_is_blocked_from_all_participation_callbacks(self) -> None:
         async def run_case() -> None:

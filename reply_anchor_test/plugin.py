@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.base import Plugin, PluginContext, register, resolve_public_sender_identity
 from app.worker.plugins.events import event_from_interaction_payload
 
 PLUGIN_KEY = "reply_anchor_test"
@@ -119,6 +119,12 @@ class ReplyAnchorTestPlugin(Plugin):
                 }
             ]
 
+        identity = await resolve_public_sender_identity(
+            ctx,
+            chat_id=int(event.message.chat_id),
+            user_id=user_id,
+        )
+
         return [
             {
                 "type": "payout",
@@ -127,6 +133,7 @@ class ReplyAnchorTestPlugin(Plugin):
                 "text": f"+{amount}",
                 "parse_mode": "plain",
                 "reply_to_user_id": user_id,
+                "reply_to_display_name": identity.display_name,
                 "reply_to_search_limit": limit,
             },
             {
@@ -134,6 +141,7 @@ class ReplyAnchorTestPlugin(Plugin):
                 "success": True,
                 "result": {
                     "target_user_id": user_id,
+                    "target_display_name": identity.display_name,
                     "amount": amount,
                     "reply_to_search_limit": limit,
                 },
@@ -162,11 +170,18 @@ class ReplyAnchorTestPlugin(Plugin):
             )
             return
 
+        identity = await resolve_public_sender_identity(
+            ctx,
+            chat_id=int(chat_id),
+            user_id=user_id,
+        )
+
         await ctx.messages.payout(
             chat_id=chat_id,
             amount=amount,
             text=f"+{amount}",
             reply_to_user_id=user_id,
+            reply_to_display_name=identity.display_name,
             reply_to_search_limit=limit,
         )
 

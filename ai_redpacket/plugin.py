@@ -25,12 +25,13 @@ from app.worker.plugins.base import (
     register,
     resolve_public_sender_identities,
     resolve_public_sender_identity,
+    sanitize_public_display_name,
 )
 
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.27"
+PLUGIN_VERSION = "0.1.28"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -161,20 +162,28 @@ WEEKLY_MESSAGE_TEMPLATE = (
 )
 
 
+def _clean_display_name(value: Any) -> str:
+    return sanitize_public_display_name(value, limit=None, fallback="")
+
+
 def truncate_display_name(value: Any, limit: int = 10) -> str:
-    name = re.sub(r"\s+", " ", str(value or "")).strip()
-    return name[:limit] or "匿名用户"
+    return sanitize_public_display_name(value, limit=limit)
 
 
 def sender_display_name(payload: dict[str, Any], user_id: int) -> str:
     sender = _sender(payload)
-    name = str(sender.get("display_name") or sender.get("name") or "").strip()
+    name = _clean_display_name(sender.get("display_name") or sender.get("name"))
     if not name:
-        name = " ".join(
-            part for part in (str(sender.get("first_name") or "").strip(), str(sender.get("last_name") or "").strip()) if part
+        name = "".join(
+            part
+            for part in (
+                _clean_display_name(sender.get("first_name")),
+                _clean_display_name(sender.get("last_name")),
+            )
+            if part
         )
     if not name:
-        username = str(sender.get("username") or "").strip().lstrip("@")
+        username = _clean_display_name(sender.get("username")).lstrip("@")
         name = f"@{username[:32]}" if username else f"用户{user_id}"
     return truncate_display_name(name)
 
