@@ -10,7 +10,16 @@ from app.worker.plugins.events import event_from_interaction_payload
 
 PLUGIN_KEY = "reply_anchor_test"
 ENTRY_KEY = "reply_to_recent_message"
+NAME_ENTRY_KEY = "resolve_public_name"
 DEFAULT_COMMAND = "send"
+NAME_COMMAND = "name"
+DEFAULT_NAME_RESULT_TEMPLATE = (
+    "TelePilot 公开姓名解析结果\n"
+    "公开姓名：{display_name}\n"
+    "身份状态：{identity_status}\n"
+    "管理员/成员标签：{tag}\n"
+    "解析状态：{resolved_status}"
+)
 DEFAULT_SEARCH_LIMIT = 200
 MAX_SEARCH_LIMIT = 500
 
@@ -62,6 +71,15 @@ def _parse_target(args: list[str], *, fallback_text: str = "") -> tuple[int | No
     return None, None
 
 
+def _parse_user_id(args: list[str], *, fallback_text: str = "") -> int | None:
+    if args:
+        user_id = _positive_int(args[0])
+        if user_id is not None:
+            return user_id
+    numbers = _numbers_from_text(fallback_text)
+    return _positive_int(numbers[0]) if numbers else None
+
+
 def _usage_text(command: str, limit: int) -> str:
     return (
         f"用法：{command} 用户ID 金额\n"
@@ -69,6 +87,46 @@ def _usage_text(command: str, limit: int) -> str:
         "如果账号启用了系统命令前缀，请在命令前加上当前系统前缀。\n"
         f"平台会在当前群最多向前搜索 {limit} 条消息，找到该用户最近一次发言后回复 +金额。"
     )
+
+
+def _name_usage_text() -> str:
+    return (
+        f"用法：{NAME_COMMAND} 用户ID\n"
+        f"示例：{NAME_COMMAND} 123456789\n"
+        "平台只返回经过安全身份解析和 Unicode 清洗后的公开姓名，不会回显原始姓名。"
+    )
+
+
+def _identity_result_values(identity: Any) -> dict[str, str]:
+    resolved = bool(getattr(identity, "resolved", False))
+    anonymous = bool(getattr(identity, "is_anonymous_admin", False))
+    if not resolved:
+        identity_type = "未确认（安全回退）"
+    elif anonymous:
+        identity_type = "匿名管理员"
+    else:
+        identity_type = "非匿名公开身份"
+    return {
+        "display_name": str(identity.display_name),
+        "identity_status": identity_type,
+        "tag": str(getattr(identity, "tag", None) or "无"),
+        "resolved_status": "已确认" if resolved else "未确认",
+    }
+
+
+class _SafeTemplateValues(dict[str, str]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _identity_result_text(ctx: PluginContext, identity: Any) -> str:
+    values = _identity_result_values(identity)
+    configured = str((ctx.config or {}).get("name_result_template") or "").strip()
+    template = configured or DEFAULT_NAME_RESULT_TEMPLATE
+    try:
+        return template.format_map(_SafeTemplateValues(values))
+    except (KeyError, ValueError):
+        return DEFAULT_NAME_RESULT_TEMPLATE.format_map(values)
 
 
 @register
@@ -101,11 +159,51 @@ class ReplyAnchorTestPlugin(Plugin):
         entry_key: str,
         payload: dict[str, Any],
     ) -> list[dict[str, Any]] | None:
-        if entry_key != ENTRY_KEY:
+        if entry_key not in {ENTRY_KEY, NAME_ENTRY_KEY}:
             return None
         event = event_from_interaction_payload(payload)
         if event.type != "command":
             return []
+
+        if entry_key == NAME_ENTRY_KEY:
+            user_id = _parse_user_id(
+                _args_from_payload(payload),
+                fallback_text=event.message.text or "",
+            )
+            if user_id is None:
+                return [
+                    {
+                        "type": "send_message",
+                        "chat_id": event.message.chat_id,
+                        "reply_to_message_id": event.message.message_id,
+                        "text": _name_usage_text(),
+                    }
+                ]
+            identity = await resolve_public_sender_identity(
+                ctx,
+                chat_id=int(event.message.chat_id),
+                user_id=user_id,
+            )
+            return [
+                {
+                    "type": "send_message",
+                    "chat_id": event.message.chat_id,
+                    "reply_to_message_id": event.message.message_id,
+                    "text": _identity_result_text(ctx, identity),
+                    "parse_mode": "plain",
+                },
+                {
+                    "type": "result",
+                    "success": True,
+                    "result": {
+                        "target_user_id": user_id,
+                        "target_display_name": identity.display_name,
+                        "is_anonymous_admin": bool(identity.is_anonymous_admin),
+                        "tag": identity.tag,
+                        "resolved": bool(identity.resolved),
+                    },
+                },
+            ]
 
         limit = _search_limit(ctx.config)
         user_id, amount = _parse_target(_args_from_payload(payload), fallback_text=event.message.text or "")

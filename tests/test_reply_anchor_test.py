@@ -31,7 +31,12 @@ def _install_telepilot_stubs() -> None:
         return cls
 
     async def resolve_public_sender_identity(ctx, *, chat_id, user_id, **kwargs):
-        return types.SimpleNamespace(display_name="人", resolved=True)
+        return types.SimpleNamespace(
+            display_name="人",
+            is_anonymous_admin=False,
+            tag=None,
+            resolved=True,
+        )
 
     def event_from_interaction_payload(payload):
         return types.SimpleNamespace(
@@ -71,7 +76,11 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
 
         self.assertEqual(raw["version"], manifest_module.PLUGIN_VERSION)
         self.assertEqual(raw["min_telepilot_version"], manifest_module.MANIFEST.min_telepilot_version)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.2")
+        self.assertEqual(raw["usage"], manifest_module.USAGE)
+        self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
+        self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
+        self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.3")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
 
     def test_payout_contains_platform_sanitized_public_name(self) -> None:
@@ -90,6 +99,72 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             self.assertIsNotNone(actions)
             assert actions is not None
             self.assertEqual(actions[0]["reply_to_display_name"], "人")
+            self.assertEqual(actions[1]["result"]["target_display_name"], "人")
+
+        asyncio.run(run_case())
+
+    def test_name_command_renders_configured_template(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.ReplyAnchorTestPlugin()
+            ctx = types.SimpleNamespace(
+                config={
+                    "name_result_template": (
+                        "姓名={display_name}｜身份={identity_status}｜"
+                        "标签={tag}｜状态={resolved_status}"
+                    )
+                }
+            )
+            actions = await plugin.on_interaction(
+                ctx,
+                plugin_module.NAME_ENTRY_KEY,
+                {
+                    "message": {"chat_id": -1001, "message_id": 90, "text": "name 123"},
+                    "trigger": {"args": ["123"]},
+                },
+            )
+
+            assert actions is not None
+            self.assertEqual(
+                actions[0]["text"],
+                "姓名=人｜身份=非匿名公开身份｜标签=无｜状态=已确认",
+            )
+
+        asyncio.run(run_case())
+
+    def test_invalid_name_template_falls_back_to_default(self) -> None:
+        identity = types.SimpleNamespace(
+            display_name="人",
+            is_anonymous_admin=False,
+            tag=None,
+            resolved=True,
+        )
+        ctx = types.SimpleNamespace(config={"name_result_template": "{display_name"})
+
+        rendered = plugin_module._identity_result_text(ctx, identity)
+
+        self.assertIn("公开姓名：人", rendered)
+        self.assertIn("解析状态：已确认", rendered)
+
+    def test_name_command_returns_public_identity_without_payout(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.ReplyAnchorTestPlugin()
+            ctx = types.SimpleNamespace(config={})
+            actions = await plugin.on_interaction(
+                ctx,
+                plugin_module.NAME_ENTRY_KEY,
+                {
+                    "message": {"chat_id": -1001, "message_id": 89, "text": "name 123"},
+                    "trigger": {"args": ["123"]},
+                },
+            )
+
+            self.assertIsNotNone(actions)
+            assert actions is not None
+            self.assertEqual([action["type"] for action in actions], ["send_message", "result"])
+            self.assertIn("公开姓名：人", actions[0]["text"])
+            self.assertIn("身份状态：非匿名公开身份", actions[0]["text"])
+            self.assertIn("解析状态：已确认", actions[0]["text"])
+            self.assertNotIn("payout", [action["type"] for action in actions])
             self.assertEqual(actions[1]["result"]["target_display_name"], "人")
 
         asyncio.run(run_case())
