@@ -5,17 +5,18 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "reply_anchor_test"
-PLUGIN_VERSION = "0.1.7"
+PLUGIN_VERSION = "0.2.0"
 ENTRY_KEY = "reply_to_recent_message"
 NAME_ENTRY_KEY = "resolve_public_name"
 DEFAULT_COMMAND = "send"
 NAME_COMMAND = "name"
 DEFAULT_NAME_RESULT_TEMPLATE = (
-    "TelePilot 公开姓名解析结果\n"
-    "公开姓名：{display_name}\n"
-    "身份状态：{identity_status}\n"
-    "管理员/成员标签：{tag}\n"
-    "解析状态：{resolved_status}"
+    "用户公开信息：\n"
+    "TG 姓名：{tg_name}\n"
+    "TG 用户名：{tg_username}\n"
+    "TG ID：{tg_id}\n"
+    "在本群是否管理员：{is_admin}\n"
+    "在本群的小尾巴：{tag}"
 )
 DEFAULT_SEARCH_LIMIT = 200
 
@@ -146,16 +147,18 @@ CONFIG_SCHEMA = {
             "title": "姓名解析模板占位符（只读）",
             "readOnly": True,
             "default": (
-                "{display_name} 清洗后的安全公开姓名\n"
-                "{identity_status} 匿名管理员、非匿名公开身份或安全回退状态\n"
-                "{tag} 清洗后的管理员/成员标签，无标签时为“无”\n"
-                "{resolved_status} 已确认或未确认"
+                "{tg_name} TG 姓名\n"
+                "{tg_username} 带 @ 的 TG 用户名，无用户名时为“无”\n"
+                "{tg_id} Telegram 数字用户 ID\n"
+                "{is_admin} 在本群是否为管理员\n"
+                "{tag} 管理员或普通成员的小尾巴，无标签时为“无”\n"
+                "兼容占位符：{display_name} {identity_status} {resolved_status}"
             ),
         },
         "name_result_template": {
             "type": "string",
             "title": "公开姓名解析结果模板",
-            "description": "用于 name 测试命令的回复。只提供安全公开字段，不提供原始姓名。",
+            "description": "用于 name 测试命令的回复。匿名管理员或身份未确认时会自动隐藏敏感字段。",
             "default": DEFAULT_NAME_RESULT_TEMPLATE,
             "x-ui-widget": "textarea",
             "minLength": 1,
@@ -168,11 +171,12 @@ CONFIG_SCHEMA = {
             "description": "使用固定示例值展示默认模板效果。",
             "readOnly": True,
             "default": (
-                "TelePilot 公开姓名解析结果\n"
-                "公开姓名：示例用户\n"
-                "身份状态：非匿名公开身份\n"
-                "管理员/成员标签：无\n"
-                "解析状态：已确认"
+                "用户公开信息：\n"
+                "TG 姓名：示例用户\n"
+                "TG 用户名：@example_user\n"
+                "TG ID：123456789\n"
+                "在本群是否管理员：否\n"
+                "在本群的小尾巴：示例标签"
             ),
         },
     },
@@ -183,7 +187,7 @@ MANIFEST = Manifest(
     key=PLUGIN_KEY,
     display_name="近期发言回复测试",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.70.9",
+    min_telepilot_version="0.70.10",
     author="Anoyou",
     description="测试近期发言回复和 TelePilot 安全公开姓名解析。",
     usage=USAGE,

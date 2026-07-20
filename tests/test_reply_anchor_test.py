@@ -48,7 +48,8 @@ def _install_telepilot_stubs() -> None:
         return types.SimpleNamespace(
             display_name=kwargs.get("fallback_display_name") or "人",
             is_anonymous_admin=False,
-            tag=None,
+            is_admin=user_id == 456,
+            tag="管理员标签" if user_id == 456 else None,
             resolved=True,
         )
 
@@ -101,8 +102,8 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
         self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.7")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.2.0")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.10")
         self.assertTrue(all(entry["session_scope"] == "none" for entry in raw["interaction_entries"]))
         self.assertTrue(
             all("end_session" in entry["result_contract"]["actions"] for entry in raw["interaction_entries"])
@@ -135,8 +136,8 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             ctx = types.SimpleNamespace(
                 config={
                     "name_result_template": (
-                        "姓名={display_name}｜身份={identity_status}｜"
-                        "标签={tag}｜状态={resolved_status}"
+                        "姓名={tg_name}｜用户名={tg_username}｜ID={tg_id}｜"
+                        "管理员={is_admin}｜标签={tag}"
                     )
                 }
             )
@@ -152,7 +153,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             assert actions is not None
             self.assertEqual(
                 actions[0]["text"],
-                "姓名=人｜身份=非匿名公开身份｜标签=无｜状态=已确认",
+                "姓名=未获取｜用户名=未获取｜ID=123｜管理员=否｜标签=无",
             )
 
         asyncio.run(run_case())
@@ -161,15 +162,41 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         identity = types.SimpleNamespace(
             display_name="人",
             is_anonymous_admin=False,
+            is_admin=False,
             tag=None,
             resolved=True,
         )
         ctx = types.SimpleNamespace(config={"name_result_template": "{display_name"})
+        profile = plugin_module._TargetPublicProfile(user_id=123)
 
-        rendered = plugin_module._identity_result_text(ctx, identity)
+        rendered = plugin_module._identity_result_text(ctx, identity, profile)
 
-        self.assertIn("公开姓名：人", rendered)
-        self.assertIn("解析状态：已确认", rendered)
+        self.assertIn("TG 姓名：未获取", rendered)
+        self.assertIn("TG ID：123", rendered)
+
+    def test_saved_legacy_default_template_migrates_to_public_info_default(self) -> None:
+        identity = types.SimpleNamespace(
+            display_name="人",
+            is_anonymous_admin=False,
+            is_admin=False,
+            tag=None,
+            resolved=True,
+        )
+        profile = plugin_module._TargetPublicProfile(
+            user_id=123,
+            name="公开姓名",
+            username="public_user",
+            from_message=True,
+        )
+        ctx = types.SimpleNamespace(
+            config={"name_result_template": plugin_module.LEGACY_NAME_RESULT_TEMPLATE}
+        )
+
+        rendered = plugin_module._identity_result_text(ctx, identity, profile)
+
+        self.assertTrue(rendered.startswith("用户公开信息："))
+        self.assertIn("TG 姓名：公开姓名", rendered)
+        self.assertIn("TG 用户名：@public_user", rendered)
 
     def test_name_command_returns_public_identity_without_payout(self) -> None:
         async def run_case() -> None:
@@ -187,9 +214,10 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             self.assertIsNotNone(actions)
             assert actions is not None
             self.assertEqual([action["type"] for action in actions], ["send_message", "result", "end_session"])
-            self.assertIn("公开姓名：人", actions[0]["text"])
-            self.assertIn("身份状态：非匿名公开身份", actions[0]["text"])
-            self.assertIn("解析状态：已确认", actions[0]["text"])
+            self.assertIn("TG 姓名：未获取", actions[0]["text"])
+            self.assertIn("TG 用户名：未获取", actions[0]["text"])
+            self.assertIn("TG ID：123", actions[0]["text"])
+            self.assertIn("在本群是否管理员：否", actions[0]["text"])
             self.assertNotIn("payout", [action["type"] for action in actions])
             self.assertEqual(actions[1]["result"]["target_display_name"], "人")
 
@@ -208,6 +236,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
                             last_name="公开姓名",
                             username="public_user",
                         ),
+                        from_rank="普通成员小尾巴",
                     )
 
             client = Client()
@@ -234,8 +263,64 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             self.assertNotEqual(actions[1]["result"]["target_display_name"], "public_user")
             self.assertNotEqual(actions[1]["result"]["target_display_name"], "456")
             self.assertEqual(actions[1]["result"]["target_source"], "reply_message")
+            self.assertEqual(
+                actions[0]["text"],
+                "用户公开信息：\n"
+                "TG 姓名：真实公开姓名\n"
+                "TG 用户名：@public_user\n"
+                "TG ID：456\n"
+                "在本群是否管理员：是\n"
+                "在本群的小尾巴：管理员标签",
+            )
 
         asyncio.run(run_case())
+
+    def test_name_template_uses_regular_member_custom_tag(self) -> None:
+        identity = types.SimpleNamespace(
+            user_id=789,
+            display_name="普通成员",
+            is_anonymous_admin=False,
+            is_admin=False,
+            tag=None,
+            resolved=True,
+        )
+        profile = plugin_module._TargetPublicProfile(
+            user_id=789,
+            name="普通成员",
+            username="member_user",
+            tag="成员小尾巴",
+            from_message=True,
+        )
+
+        values = plugin_module._identity_result_values(identity, profile)
+
+        self.assertEqual(values["is_admin"], "否")
+        self.assertEqual(values["tag"], "成员小尾巴")
+
+    def test_name_template_hides_anonymous_admin_private_fields(self) -> None:
+        identity = types.SimpleNamespace(
+            user_id=999,
+            display_name="匿名值班",
+            is_anonymous_admin=True,
+            is_admin=True,
+            tag="匿名值班",
+            resolved=True,
+        )
+        profile = plugin_module._TargetPublicProfile(
+            user_id=999,
+            name="不应公开的姓名",
+            username="private_admin",
+            tag="不应公开的标签",
+            from_message=True,
+        )
+
+        values = plugin_module._identity_result_values(identity, profile)
+
+        self.assertEqual(values["tg_name"], "不可公开")
+        self.assertEqual(values["tg_username"], "不可公开")
+        self.assertEqual(values["tg_id"], "不可公开")
+        self.assertEqual(values["is_admin"], "是")
+        self.assertEqual(values["tag"], "匿名值班")
 
     def test_name_command_rejects_replied_channel_identity(self) -> None:
         async def run_case() -> None:

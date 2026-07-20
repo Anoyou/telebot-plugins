@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from app.worker.plugins.base import (
@@ -21,6 +22,14 @@ NAME_ENTRY_KEY = "resolve_public_name"
 DEFAULT_COMMAND = "send"
 NAME_COMMAND = "name"
 DEFAULT_NAME_RESULT_TEMPLATE = (
+    "用户公开信息：\n"
+    "TG 姓名：{tg_name}\n"
+    "TG 用户名：{tg_username}\n"
+    "TG ID：{tg_id}\n"
+    "在本群是否管理员：{is_admin}\n"
+    "在本群的小尾巴：{tag}"
+)
+LEGACY_NAME_RESULT_TEMPLATE = (
     "TelePilot 公开姓名解析结果\n"
     "公开姓名：{display_name}\n"
     "身份状态：{identity_status}\n"
@@ -29,6 +38,15 @@ DEFAULT_NAME_RESULT_TEMPLATE = (
 )
 DEFAULT_SEARCH_LIMIT = 200
 MAX_SEARCH_LIMIT = 500
+
+
+@dataclass(frozen=True)
+class _TargetPublicProfile:
+    user_id: int
+    name: str = ""
+    username: str = ""
+    tag: str = ""
+    from_message: bool = False
 
 
 def _clean_command(value: Any) -> str:
@@ -91,25 +109,25 @@ async def _reply_target_identity(
     ctx: PluginContext,
     chat_id: int,
     message_id: int | None,
-) -> tuple[int | None, str]:
+) -> _TargetPublicProfile | None:
     if message_id is None:
-        return None, ""
+        return None
     client = getattr(ctx, "client", None)
     get_messages = getattr(client, "get_messages", None) if client is not None else None
     if not callable(get_messages):
-        return None, ""
+        return None
     try:
         message = await get_messages(chat_id, ids=message_id)
     except Exception:
-        return None, ""
+        return None
     if isinstance(message, list):
         message = message[0] if message else None
     from_id = getattr(message, "from_id", None)
     if not isinstance(from_id, PeerUser):
-        return None, ""
+        return None
     user_id = _positive_int(getattr(from_id, "user_id", None))
     if user_id is None:
-        return None, ""
+        return None
 
     sender = getattr(message, "sender", None)
     get_sender = getattr(message, "get_sender", None)
@@ -128,8 +146,13 @@ async def _reply_target_identity(
         )
         if value
     )
-    display_name = sanitize_public_display_name(raw_name, fallback="")
-    return user_id, display_name
+    return _TargetPublicProfile(
+        user_id=user_id,
+        name=sanitize_public_display_name(raw_name, fallback=""),
+        username=str(getattr(sender, "username", "") or "").strip().lstrip("@"),
+        tag=sanitize_public_display_name(getattr(message, "from_rank", None), fallback=""),
+        from_message=True,
+    )
 
 
 def _usage_text(command: str, limit: int) -> str:
@@ -150,19 +173,42 @@ def _name_usage_text() -> str:
     )
 
 
-def _identity_result_values(identity: Any) -> dict[str, str]:
+def _identity_result_values(identity: Any, profile: _TargetPublicProfile) -> dict[str, str]:
     resolved = bool(getattr(identity, "resolved", False))
     anonymous = bool(getattr(identity, "is_anonymous_admin", False))
+    admin = bool(getattr(identity, "is_admin", False))
     if not resolved:
         identity_type = "未确认（安全回退）"
+        tg_name = "未确认"
+        tg_username = "未确认"
+        tg_id = "未确认"
+        admin_status = "未确认"
     elif anonymous:
         identity_type = "匿名管理员"
+        tg_name = "不可公开"
+        tg_username = "不可公开"
+        tg_id = "不可公开"
+        admin_status = "是"
     else:
         identity_type = "非匿名公开身份"
+        tg_name = profile.name or ("未获取" if not profile.from_message else "无")
+        tg_username = f"@{profile.username}" if profile.username else (
+            "无" if profile.from_message else "未获取"
+        )
+        tg_id = str(profile.user_id)
+        admin_status = "是" if admin else "否"
+    tag = str(getattr(identity, "tag", None) or profile.tag or "无")
     return {
+        "tg_name": tg_name,
+        "tg_username": tg_username,
+        "tg_id": tg_id,
+        "is_admin": admin_status,
+        "admin_status": admin_status,
+        "username": tg_username,
+        "user_id": tg_id,
         "display_name": str(identity.display_name),
         "identity_status": identity_type,
-        "tag": str(getattr(identity, "tag", None) or "无"),
+        "tag": tag,
         "resolved_status": "已确认" if resolved else "未确认",
     }
 
@@ -172,10 +218,14 @@ class _SafeTemplateValues(dict[str, str]):
         return "{" + key + "}"
 
 
-def _identity_result_text(ctx: PluginContext, identity: Any) -> str:
-    values = _identity_result_values(identity)
+def _identity_result_text(
+    ctx: PluginContext,
+    identity: Any,
+    profile: _TargetPublicProfile,
+) -> str:
+    values = _identity_result_values(identity, profile)
     configured = str((ctx.config or {}).get("name_result_template") or "").strip()
-    template = configured or DEFAULT_NAME_RESULT_TEMPLATE
+    template = DEFAULT_NAME_RESULT_TEMPLATE if configured in {"", LEGACY_NAME_RESULT_TEMPLATE} else configured
     try:
         return template.format_map(_SafeTemplateValues(values))
     except (KeyError, ValueError):
@@ -221,14 +271,15 @@ class ReplyAnchorTestPlugin(Plugin):
         if entry_key == NAME_ENTRY_KEY:
             args = _args_from_payload(payload)
             user_id = _parse_user_id(args, fallback_text=event.message.text or "")
-            fallback_display_name = ""
+            profile = _TargetPublicProfile(user_id=user_id) if user_id is not None else None
             target_source = "user_id"
             if user_id is None:
-                user_id, fallback_display_name = await _reply_target_identity(
+                profile = await _reply_target_identity(
                     ctx,
                     int(event.message.chat_id),
                     event.message.reply_to_message_id,
                 )
+                user_id = profile.user_id if profile is not None else None
                 target_source = "reply_message"
             if user_id is None:
                 return [
@@ -244,14 +295,15 @@ class ReplyAnchorTestPlugin(Plugin):
                 ctx,
                 chat_id=int(event.message.chat_id),
                 user_id=user_id,
-                fallback_display_name=fallback_display_name,
+                fallback_display_name=profile.name if profile is not None else "",
             )
+            assert profile is not None
             return [
                 {
                     "type": "send_message",
                     "chat_id": event.message.chat_id,
                     "reply_to_message_id": event.message.message_id,
-                    "text": _identity_result_text(ctx, identity),
+                    "text": _identity_result_text(ctx, identity, profile),
                     "parse_mode": "plain",
                 },
                 {

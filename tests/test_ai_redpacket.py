@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.28")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.28")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.29")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.29")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -1718,6 +1718,10 @@ class PluginActionTest(unittest.TestCase):
                         )
 
                 identities = Identities()
+                logs = []
+
+                async def log(level, message, **detail):
+                    logs.append((level, message, detail))
 
                 class Context:
                     account_id = 1
@@ -1728,6 +1732,7 @@ class PluginActionTest(unittest.TestCase):
 
                 context = Context()
                 context.identities = identities
+                context.log = log
                 actions = await plugin._handle_callback(
                     context,
                     {
@@ -1742,6 +1747,98 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(identities.calls, 1)
                 self.assertEqual([action["type"] for action in actions], ["answer_callback"])
                 self.assertEqual(actions[0]["text"], plugin_module.IDENTITY_VERIFICATION_FAILED_TEXT)
+                self.assertEqual(
+                    logs,
+                    [
+                        (
+                            "info",
+                            "AI 红包用户身份暂未核验",
+                            {
+                                "chat_id": -1001,
+                                "user_id": 77,
+                                "redpacket_id": "rp-unresolved",
+                                "callback_action": "start",
+                            },
+                        )
+                    ],
+                )
+                with plugin.storage.connect() as conn:
+                    attempts = conn.execute("SELECT COUNT(*) FROM redpacket_attempt").fetchone()[0]
+                self.assertEqual(attempts, 0)
+
+        asyncio.run(run_case())
+
+    def test_terminal_packet_callbacks_skip_identity_verification(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                for packet_id in ("rp-finished", "rp-closed", "rp-expired"):
+                    plugin.storage.create_redpacket(
+                        redpacket_id=packet_id,
+                        account_id=1,
+                        chat_id=-1001,
+                        creator_id=1,
+                        bank_id="bank",
+                        total_amount=10,
+                        rewards=[10],
+                        ttl_seconds=3600,
+                    )
+                plugin.storage.close_redpacket(1, -1001, "rp-closed")
+                with plugin.storage.transaction() as conn:
+                    conn.execute("UPDATE redpacket SET status = 'finished' WHERE id = 'rp-finished'")
+                    conn.execute("UPDATE redpacket SET expires_at = 0 WHERE id = 'rp-expired'")
+
+                class Identities:
+                    calls = 0
+
+                    async def resolve(self, **kwargs):
+                        self.calls += 1
+                        raise AssertionError("终态红包不应调用身份核验")
+
+                identities = Identities()
+                logs = []
+
+                async def log(level, message, **detail):
+                    logs.append((level, message, detail))
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    client = None
+                    scheduler = None
+
+                context = Context()
+                context.identities = identities
+                context.log = log
+                payload = {
+                    "source": {"type": "callback_query"},
+                    "message": {"chat_id": -1001, "message_id": 88},
+                    "sender": {"user_id": 77, "display_name": "公开姓名"},
+                }
+                cases = (
+                    ("rp-finished", "红包已经结束"),
+                    ("rp-closed", "红包已经结束"),
+                    ("rp-expired", "红包已经过期"),
+                )
+                for packet_id, expected_text in cases:
+                    for callback_data in (
+                        f"airp:start:{packet_id}",
+                        f"airp:answer:{packet_id}:old-attempt:0:old-token",
+                    ):
+                        actions = await plugin._handle_callback(
+                            context,
+                            payload,
+                            f"callback-{packet_id}",
+                            callback_data,
+                        )
+                        self.assertEqual([action["type"] for action in actions], ["answer_callback"])
+                        self.assertEqual(actions[0]["text"], expected_text)
+
+                self.assertEqual(identities.calls, 0)
+                self.assertEqual(logs, [])
                 with plugin.storage.connect() as conn:
                     attempts = conn.execute("SELECT COUNT(*) FROM redpacket_attempt").fetchone()[0]
                 self.assertEqual(attempts, 0)

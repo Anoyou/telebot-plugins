@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.28"
+PLUGIN_VERSION = "0.1.29"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -1297,6 +1297,25 @@ class AIRedpacketPlugin(Plugin):
         user_id = _user_id(payload)
         if not callback_id or not chat_id or not user_id:
             return []
+        callback_action = parts[1] if len(parts) > 1 else ""
+        redpacket_id = parts[2] if len(parts) > 2 else ""
+        is_participation_callback = (
+            len(parts) == 3 and callback_action == "start"
+        ) or (
+            len(parts) == 6 and callback_action == "answer"
+        )
+        if is_participation_callback:
+            packet = self.storage.get_redpacket(redpacket_id)
+            if (
+                not packet
+                or int(packet["chat_id"]) != chat_id
+                or int(packet["account_id"]) != ctx.account_id
+            ):
+                return [_ack(callback_id, "红包不存在", alert=True)]
+            if packet["status"] != "active":
+                return [_ack(callback_id, "红包已经结束", alert=True)]
+            if float(packet["expires_at"]) <= time.time():
+                return [_ack(callback_id, "红包已经过期", alert=True)]
         try:
             identity = await resolve_public_sender_identity(
                 ctx,
@@ -1309,10 +1328,12 @@ class AIRedpacketPlugin(Plugin):
         if identity is None or not bool(getattr(identity, "resolved", False)):
             await self._log(
                 ctx,
-                "warning",
-                "AI 红包用户身份核验失败",
+                "info",
+                "AI 红包用户身份暂未核验",
                 chat_id=chat_id,
                 user_id=user_id,
+                redpacket_id=redpacket_id,
+                callback_action=callback_action,
             )
             return [_ack(callback_id, IDENTITY_VERIFICATION_FAILED_TEXT, alert=True)]
         if bool(getattr(identity, "is_anonymous_admin", False)):
