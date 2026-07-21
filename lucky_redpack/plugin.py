@@ -68,7 +68,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.7"
+PLUGIN_VERSION = "1.4.8"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -119,6 +119,7 @@ _font_path_cache: str | None = None
 _font_search_done = False
 _image_last_error = ""
 _ACTIVE_CHAT_REGISTRY: dict[tuple[int, str], set[int]] = {}
+_PRESENTATION_LOCK_REGISTRY: dict[tuple[int, str, int], asyncio.Lock] = {}
 
 
 @dataclass
@@ -1030,6 +1031,13 @@ class LuckyRedpackPlugin(Plugin):
             self._locks[chat_id] = asyncio.Lock()
         return self._locks[chat_id]
 
+    def _get_presentation_lock(self, chat_id: int) -> asyncio.Lock:
+        account_id, data_dir = self._registry_key or (0, "")
+        key = (account_id, data_dir, int(chat_id))
+        if key not in _PRESENTATION_LOCK_REGISTRY:
+            _PRESENTATION_LOCK_REGISTRY[key] = asyncio.Lock()
+        return _PRESENTATION_LOCK_REGISTRY[key]
+
     def _track_task(self, task: asyncio.Task) -> None:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
@@ -1062,21 +1070,6 @@ class LuckyRedpackPlugin(Plugin):
     def _registry_key_for(self, ctx: PluginContext) -> tuple[int, str]:
         data_dir = str(self._data_dir.resolve()) if self._data_dir is not None else ""
         return int(ctx.account_id), data_dir
-
-    async def _message_can_claim(self, ctx: PluginContext, *, chat_id: int, text: str) -> bool:
-        if not self._is_chat_active(chat_id):
-            return False
-        normalized_text = _normalize_password(text)
-        if not normalized_text:
-            return False
-        async with self._get_lock(chat_id):
-            with self._state_file_lock(ctx.account_id, chat_id):
-                packs = await self._load_active_packs(ctx, chat_id)
-                if packs:
-                    self._set_chat_active(chat_id, True)
-                    return any(normalized_text == _normalize_password(pack.current_password) for pack in packs)
-                self._set_chat_active(chat_id, False)
-        return False
 
     def _new_suffix(self, pack: LuckyRedpack | None = None) -> str:
         used = pack.used_passwords if pack is not None else set()
@@ -1467,11 +1460,9 @@ class LuckyRedpackPlugin(Plugin):
             return []
         if not self._is_chat_active(chat_id):
             return []
-        if not await self._message_can_claim(ctx, chat_id=chat_id, text=text):
-            return []
         sender_id = _payload_sender_id(payload)
-        sender_name = await self._event_sender_display_name(ctx, payload, sender_id)
-        actions, pack_to_resend = await self._claim_password(
+        sender_name = _payload_sender_name(payload, sender_id)
+        actions, claimed_pack, finished = await self._claim_password(
             ctx,
             text=text,
             chat_id=chat_id,
@@ -1480,9 +1471,20 @@ class LuckyRedpackPlugin(Plugin):
             sender_is_bot=_payload_actor_is_bot(payload),
             claim_message_id=_payload_message_id(payload),
         )
-        if pack_to_resend is not None:
-            await self._resend_pack_message(ctx, pack_to_resend)
-            await self._persist_pack(ctx, pack_to_resend)
+        if actions and claimed_pack is not None:
+            self._track_task(
+                asyncio.create_task(
+                    self._finalize_claim(
+                        ctx,
+                        claimed_pack,
+                        finished=finished,
+                        sender_id=sender_id,
+                        claim_message_id=_payload_message_id(payload),
+                        fallback_name=sender_name,
+                        payload=payload,
+                    )
+                )
+            )
         return actions or []
 
     async def _handle_command_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1820,12 +1822,10 @@ class LuckyRedpackPlugin(Plugin):
             return
         if not self._is_chat_active(chat_id):
             return
-        if not await self._message_can_claim(ctx, chat_id=chat_id, text=text):
-            return
-        sender = await self._sender(event)
+        sender = getattr(event, "sender", None) or getattr(getattr(event, "message", None), "sender", None)
         sender_id = int(getattr(sender, "id", 0) or _sender_id_from_event(event))
         display_name = self._sender_display_name(sender, sender_id)
-        actions, pack_to_resend = await self._claim_password(
+        actions, claimed_pack, finished = await self._claim_password(
             ctx,
             text=text,
             chat_id=chat_id,
@@ -1835,9 +1835,20 @@ class LuckyRedpackPlugin(Plugin):
             claim_message_id=_message_id_from_event(event),
         )
         await self._apply_legacy_actions(ctx, chat_id, actions)
-        if pack_to_resend is not None:
-            await self._resend_pack_message(ctx, pack_to_resend)
-            await self._persist_pack(ctx, pack_to_resend)
+        if actions and claimed_pack is not None:
+            self._track_task(
+                asyncio.create_task(
+                    self._finalize_claim(
+                        ctx,
+                        claimed_pack,
+                        finished=finished,
+                        sender_id=sender_id,
+                        claim_message_id=_message_id_from_event(event),
+                        fallback_name=display_name,
+                        event=event,
+                    )
+                )
+            )
 
     async def _claim_password(
         self,
@@ -1849,9 +1860,8 @@ class LuckyRedpackPlugin(Plugin):
         sender_name: str,
         sender_is_bot: bool,
         claim_message_id: int | None,
-    ) -> tuple[list[dict[str, Any]], LuckyRedpack | None]:
+    ) -> tuple[list[dict[str, Any]], LuckyRedpack | None, bool]:
         actions: list[dict[str, Any]] = []
-        pack_to_resend: LuckyRedpack | None = None
         normalized_text = _normalize_password(text)
         async with self._get_lock(chat_id):
             with self._state_file_lock(ctx.account_id, chat_id):
@@ -1868,26 +1878,26 @@ class LuckyRedpackPlugin(Plugin):
                                 "info",
                                 f"[lucky_redpack] 领取口令未命中：chat={chat_id} msg={claim_message_id} active={active_codes}",
                             )
-                    return [], None
+                    return [], None, False
                 if pack.is_expired():
                     packs = [item for item in packs if item.pack_code != pack.pack_code]
                     await self._save_active_packs(ctx, chat_id, packs)
                     self._track_task(asyncio.create_task(self._send_temporary_settlement(ctx, pack, expired=True)))
-                    return actions, None
+                    return actions, None, False
                 if not sender_id:
                     if ctx.log:
                         await ctx.log("warn", f"[lucky_redpack] 领取口令命中但缺少发送者 ID：chat={chat_id} msg={claim_message_id}")
-                    return [], None
+                    return [], None, False
                 if sender_id == pack.creator_user_id and not self._allow_owner_claim:
-                    return [], None
+                    return [], None, False
                 if sender_is_bot:
-                    return [], None
+                    return [], None, False
                 if sender_id in pack.claimed_user_ids:
-                    return [], None
+                    return [], None, False
 
                 claim_amount = calculate_random_claim_amount(pack)
                 if claim_amount <= 0:
-                    return [], None
+                    return [], None, False
                 pack.remaining_amount = max(0, pack.remaining_amount - claim_amount)
                 pack.remaining_count = max(0, pack.remaining_count - 1)
                 pack.claimed_user_ids.add(sender_id)
@@ -1904,19 +1914,99 @@ class LuckyRedpackPlugin(Plugin):
                 if pack.is_finished():
                     packs = [item for item in packs if item.pack_code != pack.pack_code]
                     await self._save_active_packs(ctx, chat_id, packs)
-                    self._track_task(asyncio.create_task(self._send_temporary_settlement(ctx, pack)))
                 else:
                     pack.current_suffix = self._new_suffix(pack)
                     pack.used_passwords.add(_normalize_password(pack.current_password))
                     await self._save_active_packs(ctx, chat_id, packs)
-                    pack_to_resend = pack
 
         if actions and ctx.log:
             await ctx.log(
                 "info",
                 f"[lucky_redpack] 领取成功：chat={chat_id} msg={claim_message_id} user={sender_id}",
             )
-        return actions, pack_to_resend
+        snapshot = _pack_from_payload(_pack_to_payload(pack)) or pack
+        return actions, snapshot, snapshot.is_finished()
+
+    async def _finalize_claim(
+        self,
+        ctx: PluginContext,
+        pack: LuckyRedpack,
+        *,
+        finished: bool,
+        sender_id: int,
+        claim_message_id: int | None,
+        fallback_name: str,
+        payload: dict[str, Any] | None = None,
+        event: Any | None = None,
+    ) -> None:
+        async with self._get_presentation_lock(pack.chat_id):
+            display_name = fallback_name
+            if payload is not None:
+                display_name = await self._event_sender_display_name(ctx, payload, sender_id)
+            elif event is not None:
+                sender = await self._sender(event)
+                display_name = self._sender_display_name(sender, sender_id)
+            for claim in reversed(pack.claims):
+                if claim.user_id == sender_id and claim.message_id == claim_message_id:
+                    claim.display_name = display_name or fallback_name or str(sender_id)
+                    break
+            if finished:
+                for claim in pack.claims:
+                    entity = await self._lookup_sender_entity(ctx, claim.user_id)
+                    if entity is not None:
+                        claim.display_name = self._sender_display_name(entity, claim.user_id)
+                await self._send_temporary_settlement(ctx, pack)
+                return
+
+            expected_revision = self._pack_revision(pack)
+            async with self._get_lock(pack.chat_id):
+                with self._state_file_lock(ctx.account_id, pack.chat_id):
+                    packs = await self._load_active_packs(ctx, pack.chat_id)
+                    current = next((item for item in packs if item.pack_code == pack.pack_code), None)
+                    if current is None:
+                        return
+                    for claim in reversed(current.claims):
+                        if claim.user_id == sender_id and claim.message_id == claim_message_id:
+                            claim.display_name = display_name or fallback_name or str(sender_id)
+                            break
+                    await self._save_active_packs(ctx, pack.chat_id, packs)
+                    if self._pack_revision(current) != expected_revision:
+                        return
+                    presentation_pack = _pack_from_payload(_pack_to_payload(current)) or current
+
+            if presentation_pack.message_id is not None:
+                await self._delete_message(ctx, presentation_pack.chat_id, presentation_pack.message_id)
+            try:
+                sent = await self._send_pack_message(ctx, presentation_pack)
+            except Exception as exc:
+                if ctx.log:
+                    await ctx.log("warn", f"[lucky_redpack] 红包消息后台重发失败：{type(exc).__name__}: {exc}")
+                return
+            sent_message_id = _message_id_from_event(sent)
+            if not sent_message_id:
+                return
+
+            stale_message = False
+            async with self._get_lock(pack.chat_id):
+                with self._state_file_lock(ctx.account_id, pack.chat_id):
+                    packs = await self._load_active_packs(ctx, pack.chat_id)
+                    current = next((item for item in packs if item.pack_code == pack.pack_code), None)
+                    if current is None or self._pack_revision(current) != expected_revision:
+                        stale_message = True
+                    else:
+                        current.message_id = sent_message_id
+                        await self._save_active_packs(ctx, pack.chat_id, packs)
+            if stale_message:
+                await self._delete_message(ctx, pack.chat_id, sent_message_id)
+
+    @staticmethod
+    def _pack_revision(pack: LuckyRedpack) -> tuple[str, int, int, int]:
+        return (
+            pack.current_suffix,
+            pack.remaining_count,
+            pack.remaining_amount,
+            len(pack.claims),
+        )
 
     async def _apply_legacy_actions(self, ctx: PluginContext, chat_id: int, actions: list[dict[str, Any]]) -> None:
         if ctx.client is None:
