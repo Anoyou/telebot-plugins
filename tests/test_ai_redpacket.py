@@ -201,9 +201,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.31")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.31")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.33")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.33")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -240,12 +240,14 @@ class QuestionGenerationTest(unittest.TestCase):
             "failed_message_preview",
             "settlement_message_preview",
             "reminder_message_preview",
+            "list_message_preview",
             "weekly_message_preview",
         ):
             self.assertIn(preview_key, properties)
         self.assertIn("weekly_message_template", properties)
         self.assertIn("settlement_message_template", properties)
         self.assertIn("reminder_message_template", properties)
+        self.assertIn("list_message_template", properties)
         self.assertIn("send_rich_message", manifest_module.INTERACTION_ENTRIES[0]["result_contract"]["actions"])
         public_list = next(
             item
@@ -2238,7 +2240,7 @@ class PluginActionTest(unittest.TestCase):
                 "command": "rain",
                 "settlement_message_template": (
                     "结算 {date} {daily_limit}/{retry_count} {prefix}{command} "
-                    "{redpacket_id} {status} {ranking}"
+                    "{redpacket_id} {status} {question_count} {ranking}"
                 ),
                 "weekly_message_template": "周榜 {weekly_title} {period_start} {period_end} {count_ranking} / {reward_ranking}",
             }
@@ -2248,10 +2250,16 @@ class PluginActionTest(unittest.TestCase):
             settlement = asyncio.run(
                 plugin._render_redpacket_settlement(
                     Context(),
-                    {"id": "custom", "status": "expired", "total_amount": 100, "remaining_amount": 100},
+                    {
+                        "id": "custom",
+                        "status": "expired",
+                        "total_amount": 100,
+                        "remaining_amount": 100,
+                        "question_count": 4,
+                    },
                 )
             )
-        self.assertEqual(settlement, ["结算 2026-07-15 3/2 。rain custom 已到期 本次无人成功领取。"])
+        self.assertEqual(settlement, ["结算 2026-07-15 3/2 。rain custom 已到期 4 本次无人成功领取。"])
         weekly = asyncio.run(
             plugin._render_weekly_leaderboard(
                 Context(),
@@ -2684,6 +2692,42 @@ class PluginActionTest(unittest.TestCase):
                     actions[0]["reply_markup"]["inline_keyboard"][0][0]["text"],
                 )
                 self.assertEqual(actions[1]["message_id"], 999)
+
+        asyncio.run(run_case())
+
+    def test_list_message_uses_custom_template_for_active_and_empty_packets(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="templated-list",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+
+                class Context:
+                    account_id = 1
+                    config = {"list_message_template": "列表 {packet_count}\n{packets}\n{prefix}{command}"}
+                    account_config = {}
+                    messages = None
+                    log = None
+
+                active = await plugin._render_packets(Context(), -1001)
+                self.assertIn("列表 1", active)
+                self.assertIn("templated-list", active)
+                self.assertIn("。airp", active)
+
+                plugin.storage.close_redpacket(1, -1001, "templated-list")
+                empty = await plugin._render_packets(Context(), -1001)
+                self.assertIn("列表 0", empty)
+                self.assertIn("当前聊天没有正在进行的 AI 红包。", empty)
 
         asyncio.run(run_case())
 

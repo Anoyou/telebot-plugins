@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.31"
+PLUGIN_VERSION = "0.1.33"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -183,6 +183,11 @@ REMINDER_MESSAGE_TEMPLATE = (
     "<h1>昨日雨露均沾即将到期</h1>"
     "<p>以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：</p>"
     "<ul>{redpackets}</ul>"
+)
+LIST_MESSAGE_TEMPLATE = (
+    "<b>正在进行的 AI 红包</b>\n"
+    "{packets}\n\n"
+    "未收到奖励：请先在群里发言，再点击下方对应红包的“申请补发奖励”。"
 )
 WEEKLY_MESSAGE_TEMPLATE = (
     "<h1>{weekly_title}</h1>"
@@ -1957,9 +1962,7 @@ class AIRedpacketPlugin(Plugin):
         packets: list[dict[str, Any]] | None = None,
     ) -> str:
         packets = packets if packets is not None else self.storage.list_active_redpackets(ctx.account_id, chat_id)
-        if not packets:
-            return "当前聊天没有正在进行的 AI 红包。"
-        lines = ["<b>正在进行的 AI 红包</b>"]
+        lines: list[str] = []
         read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
         for packet in packets:
             packet_date = self._date_for_timestamp(ctx, packet["created_at"])
@@ -1979,8 +1982,14 @@ class AIRedpacketPlugin(Plugin):
                 f"<code>{int(packet['claimed_amount'])}/{int(packet['total_amount'])}</code> 金额\n"
                 f"  {opening}"
             )
-        lines.append("\n未收到奖励：请先在群里发言，再点击下方对应红包的“申请补发奖励”。")
-        return "\n".join(lines)
+        packet_entries = "\n".join(lines) if lines else "当前聊天没有正在进行的 AI 红包。"
+        return self._render_template(
+            ctx,
+            "list_message_template",
+            LIST_MESSAGE_TEMPLATE,
+            packets=packet_entries,
+            packet_count=len(packets),
+        )
 
     def _telegram_message_link(self, chat_id: int, message_id: Any) -> str | None:
         chat_value = str(chat_id)
@@ -2349,6 +2358,7 @@ class AIRedpacketPlugin(Plugin):
                     status=status,
                     claimed_amount=claimed_amount,
                     total_amount=int(packet["total_amount"]),
+                    question_count=int(packet.get("question_count") or 0),
                     claim_count=0,
                     **extreme_values,
                     ranking="<p>本次无人成功领取。</p>" if rich else "本次无人成功领取。",
@@ -2420,6 +2430,7 @@ class AIRedpacketPlugin(Plugin):
                         status=status,
                         claimed_amount=claimed_amount,
                         total_amount=int(packet["total_amount"]),
+                        question_count=int(packet.get("question_count") or len(rows)),
                         claim_count=len(rows),
                         **extreme_values,
                         ranking=block,

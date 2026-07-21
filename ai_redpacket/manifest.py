@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.31"
+PLUGIN_VERSION = "0.1.33"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -350,13 +350,19 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "红包结算模板",
             "default": "<h1>AI 红包每日结算</h1><ul><li>红包 ID：<code>{redpacket_id}</code></li><li>状态：{status}</li><li>已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code></li><li>领取人数：<code>{claim_count}</code></li></ul><p><b>运气王：</b>{luckiest_name} · {luckiest_reward}</p><p><b>倒霉蛋：</b>{unluckiest_name} · {unluckiest_reward}</p>{ranking}",
-            "description": "场景占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}；另可使用全部通用占位符。",
+            "description": "场景占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{question_count}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}；另可使用全部通用占位符。",
         },
         "reminder_message_template": {
             "type": "string",
             "title": "未领完红包提醒模板",
             "default": "<h1>昨日雨露均沾即将到期</h1><p>以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：</p><ul>{redpackets}</ul>",
             "description": "场景占位符：{packet_date} 红包创建日期、{expire_time} 当日截止时间、{redpackets} 未领完红包、领取进度和跳转链接；另可使用全部通用占位符。",
+        },
+        "list_message_template": {
+            "type": "string",
+            "title": "红包列表模板",
+            "default": "<b>正在进行的 AI 红包</b>\n{packets}\n\n未收到奖励：请先在群里发言，再点击下方对应红包的“申请补发奖励”。",
+            "description": "用于 {prefix}{command} list 和 /airp list。场景占位符：{packets} 红包条目或空列表提示、{packet_count} 进行中红包数量；另可使用全部通用占位符。",
         },
         "weekly_message_template": {
             "type": "string",
@@ -368,7 +374,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "模板占位符（只读）",
             "readOnly": True,
-            "default": "通用（所有模板均可用）：{date} {daily_limit} {retry_count} {prefix} {command}\n红包：{total_amount} {question_count} {redpacket_id}\n题目：{answerer_name} {question} {options}\n结果：{answerer_name} {question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}",
+            "default": "通用（所有模板均可用）：{date} {daily_limit} {retry_count} {prefix} {command}\n红包：{total_amount} {question_count} {redpacket_id}\n列表：{packets} {packet_count}\n题目：{answerer_name} {question} {options}\n结果：{answerer_name} {question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {total_amount} {question_count} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}",
         },
         "packet_message_preview": {
             "type": "string",
@@ -403,6 +409,12 @@ CONFIG_SCHEMA = {
         "reminder_message_preview": {
             "type": "string",
             "title": "未领完红包提醒预览",
+            "readOnly": True,
+            "default": "",
+        },
+        "list_message_preview": {
+            "type": "string",
+            "title": "红包列表预览",
             "readOnly": True,
             "default": "",
         },
@@ -526,7 +538,7 @@ MANIFEST = Manifest(
     key="ai_redpacket",
     display_name="AI 答题红包",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.70.9",
+    min_telepilot_version="0.71.2",
     author="Anoyou",
     description="从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
     usage=USAGE,
