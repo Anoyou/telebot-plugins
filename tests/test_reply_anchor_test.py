@@ -102,8 +102,8 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
         self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.2.0")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.10")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.2.1")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.1")
         self.assertTrue(all(entry["session_scope"] == "none" for entry in raw["interaction_entries"]))
         self.assertTrue(
             all("end_session" in entry["result_contract"]["actions"] for entry in raw["interaction_entries"])
@@ -153,7 +153,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             assert actions is not None
             self.assertEqual(
                 actions[0]["text"],
-                "姓名=未获取｜用户名=未获取｜ID=123｜管理员=否｜标签=无",
+                "姓名=人｜用户名=未获取｜ID=123｜管理员=否｜标签=无",
             )
 
         asyncio.run(run_case())
@@ -171,7 +171,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
 
         rendered = plugin_module._identity_result_text(ctx, identity, profile)
 
-        self.assertIn("TG 姓名：未获取", rendered)
+        self.assertIn("TG 姓名：人", rendered)
         self.assertIn("TG ID：123", rendered)
 
     def test_saved_legacy_default_template_migrates_to_public_info_default(self) -> None:
@@ -195,7 +195,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         rendered = plugin_module._identity_result_text(ctx, identity, profile)
 
         self.assertTrue(rendered.startswith("用户公开信息："))
-        self.assertIn("TG 姓名：公开姓名", rendered)
+        self.assertIn("TG 姓名：人", rendered)
         self.assertIn("TG 用户名：@public_user", rendered)
 
     def test_name_command_returns_public_identity_without_payout(self) -> None:
@@ -214,12 +214,65 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
             self.assertIsNotNone(actions)
             assert actions is not None
             self.assertEqual([action["type"] for action in actions], ["send_message", "result", "end_session"])
-            self.assertIn("TG 姓名：未获取", actions[0]["text"])
+            self.assertIn("TG 姓名：人", actions[0]["text"])
             self.assertIn("TG 用户名：未获取", actions[0]["text"])
             self.assertIn("TG ID：123", actions[0]["text"])
             self.assertIn("在本群是否管理员：否", actions[0]["text"])
             self.assertNotIn("payout", [action["type"] for action in actions])
             self.assertEqual(actions[1]["result"]["target_display_name"], "人")
+
+        asyncio.run(run_case())
+
+    def test_name_command_never_uses_userbot_contact_remark_as_tg_name(self) -> None:
+        async def run_case() -> None:
+            class Client:
+                async def get_messages(self, chat_id, *, ids):
+                    return types.SimpleNamespace(
+                        from_id=sys.modules["telethon.tl.types"].PeerUser(456),
+                        sender=types.SimpleNamespace(
+                            id=456,
+                            first_name="我的联系人备注",
+                            last_name="",
+                            username="public_user",
+                            contact=True,
+                        ),
+                        from_rank="",
+                    )
+
+            original_resolver = plugin_module.resolve_public_sender_identity
+
+            async def resolve_identity(ctx, *, chat_id, user_id, **kwargs):
+                self.assertEqual((chat_id, user_id), (-1001, 456))
+                self.assertEqual(kwargs.get("fallback_display_name"), "")
+                return types.SimpleNamespace(
+                    display_name="用户当前真实姓名",
+                    is_anonymous_admin=False,
+                    is_admin=False,
+                    tag=None,
+                    resolved=True,
+                )
+
+            plugin_module.resolve_public_sender_identity = resolve_identity
+            try:
+                actions = await plugin_module.ReplyAnchorTestPlugin().on_interaction(
+                    types.SimpleNamespace(config={}, client=Client()),
+                    plugin_module.NAME_ENTRY_KEY,
+                    {
+                        "message": {
+                            "chat_id": -1001,
+                            "message_id": 94,
+                            "reply_to_message_id": 79,
+                            "text": "name",
+                        },
+                        "trigger": {"args": []},
+                    },
+                )
+            finally:
+                plugin_module.resolve_public_sender_identity = original_resolver
+
+            assert actions is not None
+            self.assertIn("TG 姓名：用户当前真实姓名", actions[0]["text"])
+            self.assertNotIn("我的联系人备注", actions[0]["text"])
 
         asyncio.run(run_case())
 

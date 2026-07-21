@@ -138,14 +138,18 @@ async def _reply_target_identity(
             sender = None
     if sender is not None and int(getattr(sender, "id", 0) or 0) != user_id:
         sender = None
-    raw_name = " ".join(
-        value
-        for value in (
-            str(getattr(sender, "first_name", "") or "").strip(),
-            str(getattr(sender, "last_name", "") or "").strip(),
+    # Telethon 会把 UserBot 保存的联系人备注放进 contact 实体的姓名字段。
+    # 联系人姓名留空交给公共身份 resolver 从 Interaction Bot 实时读取。
+    raw_name = ""
+    if sender is not None and not bool(getattr(sender, "contact", False)):
+        raw_name = " ".join(
+            value
+            for value in (
+                str(getattr(sender, "first_name", "") or "").strip(),
+                str(getattr(sender, "last_name", "") or "").strip(),
+            )
+            if value
         )
-        if value
-    )
     return _TargetPublicProfile(
         user_id=user_id,
         name=sanitize_public_display_name(raw_name, fallback=""),
@@ -191,7 +195,9 @@ def _identity_result_values(identity: Any, profile: _TargetPublicProfile) -> dic
         admin_status = "是"
     else:
         identity_type = "非匿名公开身份"
-        tg_name = profile.name or ("未获取" if not profile.from_message else "无")
+        tg_name = sanitize_public_display_name(getattr(identity, "display_name", ""), fallback="")
+        if not tg_name:
+            tg_name = profile.name or ("未获取" if not profile.from_message else "无")
         tg_username = f"@{profile.username}" if profile.username else (
             "无" if profile.from_message else "未获取"
         )
