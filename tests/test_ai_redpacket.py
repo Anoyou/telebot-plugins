@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.30")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.30")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.31")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.31")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.70.9")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -2093,8 +2093,13 @@ class PluginActionTest(unittest.TestCase):
         text = messages[0]
         self.assertIn("<b>运气王：</b>一二三四五六七八九十 · 30", text)
         self.assertIn("<b>倒霉蛋：</b>小明 · 10", text)
-        self.assertIn("<details><summary>领取总名单（金额降序）</summary><ol>", text)
+        self.assertIn(
+            "<details><summary>领取总名单（金额降序）</summary>"
+            "<table bordered striped><tr><th>排名</th><th>领取人</th><th>金额</th></tr>",
+            text,
+        )
         self.assertNotIn("<blockquote expandable>", text)
+        self.assertIn("<tr><td>1</td><td>一二三四五六七八九十</td><td>30</td></tr>", text)
         self.assertLess(text.index("· 30"), text.rindex("· 10"))
         self.assertNotIn("十一十二", text)
 
@@ -2125,9 +2130,12 @@ class PluginActionTest(unittest.TestCase):
         )
         self.assertGreater(len(messages), 1)
         self.assertTrue(all(len(message) < 3900 for message in messages))
-        self.assertEqual(sum(message.count(" · ") for message in messages), 502)
+        self.assertEqual(sum(message.count("<tr><td>") for message in messages), 500)
         self.assertTrue(all("<details><summary>" in message for message in messages))
-        self.assertTrue(all("<ol>" in message for message in messages))
+        self.assertTrue(all("<table bordered striped>" in message for message in messages))
+        self.assertTrue(
+            all("<tr><th>排名</th><th>领取人</th><th>金额</th></tr>" in message for message in messages)
+        )
         self.assertTrue(all("<blockquote expandable>" not in message for message in messages))
 
     def test_settlement_rechecks_historical_anonymous_admin_name(self) -> None:

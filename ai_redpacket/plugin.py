@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.30"
+PLUGIN_VERSION = "0.1.31"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -2365,8 +2365,9 @@ class AIRedpacketPlugin(Plugin):
         unluckiest = min(rows, key=lambda item: (int(item["reward"]), float(item["updated_at"]), int(item["user_id"])))
         if rich:
             ranking = list(
-                f"<li>{html.escape(public_names.get(int(row['user_id']), '匿名用户'))} · {int(row['reward'])}</li>"
-                for row in rows
+                f"<tr><td>{index}</td><td>{html.escape(public_names.get(int(row['user_id']), '匿名用户'))}</td>"
+                f"<td>{int(row['reward'])}</td></tr>"
+                for index, row in enumerate(rows, 1)
             )
         else:
             ranking = list(
@@ -2391,7 +2392,13 @@ class AIRedpacketPlugin(Plugin):
         for index, chunk in enumerate(chunks):
             title = "领取总名单（金额降序）" if index == 0 else "领取总名单（续）"
             if rich:
-                block = f"<details><summary>{title}</summary><ol>{''.join(chunk)}</ol></details>"
+                table = (
+                    "<table bordered striped>"
+                    "<tr><th>排名</th><th>领取人</th><th>金额</th></tr>"
+                    f"{''.join(chunk)}"
+                    "</table>"
+                )
+                block = f"<details><summary>{title}</summary>{table}</details>"
             else:
                 chunk_text = "\n".join(chunk)
                 block = f"<blockquote expandable><b>{title}</b>\n{chunk_text}</blockquote>"
