@@ -88,6 +88,17 @@ plugin_module = importlib.import_module("reply_anchor_test.plugin")
 manifest_module = importlib.import_module("reply_anchor_test.manifest")
 
 
+class _UserbotIdentityStub:
+    async def resolve_userbot(self, *, chat_id, user_id, fallback_display_name="", **kwargs):
+        return types.SimpleNamespace(
+            display_name=fallback_display_name or "人",
+            is_anonymous_admin=False,
+            is_admin=False,
+            tag=None,
+            resolved=True,
+        )
+
+
 class ReplyAnchorTestPluginTest(unittest.TestCase):
     def test_static_manifest_matches_python_manifest(self) -> None:
         raw = json.loads(
@@ -102,8 +113,8 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
         self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.2.1")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.1")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.2.2")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.3")
         self.assertTrue(all(entry["session_scope"] == "none" for entry in raw["interaction_entries"]))
         self.assertTrue(
             all("end_session" in entry["result_contract"]["actions"] for entry in raw["interaction_entries"])
@@ -112,7 +123,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
     def test_payout_contains_platform_sanitized_public_name(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.ReplyAnchorTestPlugin()
-            ctx = types.SimpleNamespace(config={})
+            ctx = types.SimpleNamespace(config={}, identities=_UserbotIdentityStub())
             actions = await plugin.on_interaction(
                 ctx,
                 plugin_module.ENTRY_KEY,
@@ -130,6 +141,46 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_payout_uses_recent_userbot_contact_name_without_identity_facade(self) -> None:
+        async def run_case() -> None:
+            class Client:
+                def iter_messages(self, chat_id, *, limit):
+                    async def messages():
+                        yield types.SimpleNamespace(
+                            id=77,
+                            from_id=sys.modules["telethon.tl.types"].PeerUser(123),
+                        )
+
+                    return messages()
+
+                async def get_messages(self, chat_id, *, ids):
+                    return types.SimpleNamespace(
+                        from_id=sys.modules["telethon.tl.types"].PeerUser(123),
+                        sender=types.SimpleNamespace(
+                            id=123,
+                            first_name="UserBot 联系人姓名",
+                            last_name="",
+                            username=None,
+                            contact=True,
+                        ),
+                        from_rank="",
+                    )
+
+            actions = await plugin_module.ReplyAnchorTestPlugin().on_interaction(
+                types.SimpleNamespace(config={}, client=Client()),
+                plugin_module.ENTRY_KEY,
+                {
+                    "message": {"chat_id": -1001, "message_id": 88, "text": "send 123 66"},
+                    "trigger": {"args": ["123", "66"]},
+                },
+            )
+
+            assert actions is not None
+            self.assertEqual(actions[0]["reply_to_display_name"], "UserBot联系人姓名")
+            self.assertEqual(actions[1]["result"]["target_display_name"], "UserBot联系人姓名")
+
+        asyncio.run(run_case())
+
     def test_name_command_renders_configured_template(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.ReplyAnchorTestPlugin()
@@ -139,7 +190,8 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
                         "姓名={tg_name}｜用户名={tg_username}｜ID={tg_id}｜"
                         "管理员={is_admin}｜标签={tag}"
                     )
-                }
+                },
+                identities=_UserbotIdentityStub(),
             )
             actions = await plugin.on_interaction(
                 ctx,
@@ -201,7 +253,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
     def test_name_command_returns_public_identity_without_payout(self) -> None:
         async def run_case() -> None:
             plugin = plugin_module.ReplyAnchorTestPlugin()
-            ctx = types.SimpleNamespace(config={})
+            ctx = types.SimpleNamespace(config={}, identities=_UserbotIdentityStub())
             actions = await plugin.on_interaction(
                 ctx,
                 plugin_module.NAME_ENTRY_KEY,
@@ -223,7 +275,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
-    def test_name_command_never_uses_userbot_contact_remark_as_tg_name(self) -> None:
+    def test_name_command_uses_userbot_contact_name_without_interaction_bot(self) -> None:
         async def run_case() -> None:
             class Client:
                 async def get_messages(self, chat_id, *, ids):
@@ -239,40 +291,33 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
                         from_rank="",
                     )
 
-            original_resolver = plugin_module.resolve_public_sender_identity
+            class Identities:
+                async def resolve_userbot(self, *, chat_id, user_id, fallback_display_name="", **kwargs):
+                    assert (chat_id, user_id) == (-1001, 456)
+                    return types.SimpleNamespace(
+                        display_name=fallback_display_name,
+                        is_anonymous_admin=False,
+                        is_admin=False,
+                        tag=None,
+                        resolved=True,
+                    )
 
-            async def resolve_identity(ctx, *, chat_id, user_id, **kwargs):
-                self.assertEqual((chat_id, user_id), (-1001, 456))
-                self.assertEqual(kwargs.get("fallback_display_name"), "")
-                return types.SimpleNamespace(
-                    display_name="用户当前真实姓名",
-                    is_anonymous_admin=False,
-                    is_admin=False,
-                    tag=None,
-                    resolved=True,
-                )
-
-            plugin_module.resolve_public_sender_identity = resolve_identity
-            try:
-                actions = await plugin_module.ReplyAnchorTestPlugin().on_interaction(
-                    types.SimpleNamespace(config={}, client=Client()),
-                    plugin_module.NAME_ENTRY_KEY,
-                    {
-                        "message": {
-                            "chat_id": -1001,
-                            "message_id": 94,
-                            "reply_to_message_id": 79,
-                            "text": "name",
-                        },
-                        "trigger": {"args": []},
+            actions = await plugin_module.ReplyAnchorTestPlugin().on_interaction(
+                types.SimpleNamespace(config={}, client=Client(), identities=Identities()),
+                plugin_module.NAME_ENTRY_KEY,
+                {
+                    "message": {
+                        "chat_id": -1001,
+                        "message_id": 94,
+                        "reply_to_message_id": 79,
+                        "text": "name",
                     },
-                )
-            finally:
-                plugin_module.resolve_public_sender_identity = original_resolver
+                    "trigger": {"args": []},
+                },
+            )
 
             assert actions is not None
-            self.assertIn("TG 姓名：用户当前真实姓名", actions[0]["text"])
-            self.assertNotIn("我的联系人备注", actions[0]["text"])
+            self.assertIn("TG 姓名：我的联系人备注", actions[0]["text"])
 
         asyncio.run(run_case())
 
@@ -323,7 +368,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
                 "TG 用户名：@public_user\n"
                 "TG ID：456\n"
                 "在本群是否管理员：是\n"
-                "在本群的小尾巴：管理员标签",
+                "在本群的小尾巴：普通成员小尾巴",
             )
 
         asyncio.run(run_case())

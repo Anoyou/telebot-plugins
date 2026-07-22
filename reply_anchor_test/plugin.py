@@ -10,7 +10,6 @@ from app.worker.plugins.base import (
     Plugin,
     PluginContext,
     register,
-    resolve_public_sender_identity,
     sanitize_public_display_name,
 )
 from app.worker.plugins.events import event_from_interaction_payload
@@ -47,6 +46,16 @@ class _TargetPublicProfile:
     username: str = ""
     tag: str = ""
     from_message: bool = False
+
+
+@dataclass(frozen=True)
+class _UserbotIdentity:
+    user_id: int
+    display_name: str
+    is_anonymous_admin: bool = False
+    tag: str | None = None
+    resolved: bool = True
+    is_admin: bool = False
 
 
 def _clean_command(value: Any) -> str:
@@ -138,24 +147,72 @@ async def _reply_target_identity(
             sender = None
     if sender is not None and int(getattr(sender, "id", 0) or 0) != user_id:
         sender = None
-    # Telethon 会把 UserBot 保存的联系人备注放进 contact 实体的姓名字段。
-    # 联系人姓名留空交给公共身份 resolver 从 Interaction Bot 实时读取。
-    raw_name = ""
-    if sender is not None and not bool(getattr(sender, "contact", False)):
-        raw_name = " ".join(
-            value
-            for value in (
-                str(getattr(sender, "first_name", "") or "").strip(),
-                str(getattr(sender, "last_name", "") or "").strip(),
-            )
-            if value
+    raw_name = " ".join(
+        value
+        for value in (
+            str(getattr(sender, "first_name", "") or "").strip(),
+            str(getattr(sender, "last_name", "") or "").strip(),
         )
+        if value
+    )
     return _TargetPublicProfile(
         user_id=user_id,
         name=sanitize_public_display_name(raw_name, fallback=""),
         username=str(getattr(sender, "username", "") or "").strip().lstrip("@"),
         tag=sanitize_public_display_name(getattr(message, "from_rank", None), fallback=""),
         from_message=True,
+    )
+
+
+async def _recent_userbot_profile(
+    ctx: PluginContext,
+    chat_id: int,
+    user_id: int,
+    *,
+    limit: int,
+) -> _TargetPublicProfile | None:
+    client = getattr(ctx, "client", None)
+    iter_messages = getattr(client, "iter_messages", None) if client is not None else None
+    if not callable(iter_messages):
+        return None
+    try:
+        async for message in iter_messages(chat_id, limit=limit):
+            from_id = getattr(message, "from_id", None)
+            if not isinstance(from_id, PeerUser) or int(getattr(from_id, "user_id", 0) or 0) != user_id:
+                continue
+            message_id = _positive_int(getattr(message, "id", None))
+            return await _reply_target_identity(ctx, chat_id, message_id)
+    except Exception:
+        return None
+    return None
+
+
+async def _resolve_userbot_identity(
+    ctx: PluginContext,
+    *,
+    chat_id: int,
+    user_id: int,
+    profile: _TargetPublicProfile | None = None,
+) -> Any:
+    identities = getattr(ctx, "identities", None)
+    resolve_userbot = getattr(identities, "resolve_userbot", None) if identities is not None else None
+    if callable(resolve_userbot):
+        return await resolve_userbot(
+            chat_id=chat_id,
+            user_id=user_id,
+            fallback_display_name=profile.name if profile is not None else "",
+        )
+    if profile is not None and profile.name:
+        return _UserbotIdentity(
+            user_id=user_id,
+            display_name=profile.name,
+            tag=profile.tag or None,
+            is_admin=bool(profile.tag),
+        )
+    return _UserbotIdentity(
+        user_id=user_id,
+        display_name="匿名用户",
+        resolved=False,
     )
 
 
@@ -277,9 +334,16 @@ class ReplyAnchorTestPlugin(Plugin):
         if entry_key == NAME_ENTRY_KEY:
             args = _args_from_payload(payload)
             user_id = _parse_user_id(args, fallback_text=event.message.text or "")
-            profile = _TargetPublicProfile(user_id=user_id) if user_id is not None else None
+            profile = None
             target_source = "user_id"
-            if user_id is None:
+            if user_id is not None:
+                profile = await _recent_userbot_profile(
+                    ctx,
+                    int(event.message.chat_id),
+                    user_id,
+                    limit=_search_limit(ctx.config),
+                ) or _TargetPublicProfile(user_id=user_id)
+            else:
                 profile = await _reply_target_identity(
                     ctx,
                     int(event.message.chat_id),
@@ -297,11 +361,11 @@ class ReplyAnchorTestPlugin(Plugin):
                     },
                     {"type": "end_session"},
                 ]
-            identity = await resolve_public_sender_identity(
+            identity = await _resolve_userbot_identity(
                 ctx,
                 chat_id=int(event.message.chat_id),
                 user_id=user_id,
-                fallback_display_name=profile.name if profile is not None else "",
+                profile=profile,
             )
             assert profile is not None
             return [
@@ -340,10 +404,12 @@ class ReplyAnchorTestPlugin(Plugin):
                 {"type": "end_session"},
             ]
 
-        identity = await resolve_public_sender_identity(
+        profile = await _recent_userbot_profile(ctx, int(event.message.chat_id), user_id, limit=limit)
+        identity = await _resolve_userbot_identity(
             ctx,
             chat_id=int(event.message.chat_id),
             user_id=user_id,
+            profile=profile,
         )
 
         return [
@@ -392,10 +458,12 @@ class ReplyAnchorTestPlugin(Plugin):
             )
             return
 
-        identity = await resolve_public_sender_identity(
+        profile = await _recent_userbot_profile(ctx, int(chat_id), user_id, limit=limit)
+        identity = await _resolve_userbot_identity(
             ctx,
             chat_id=int(chat_id),
             user_id=user_id,
+            profile=profile,
         )
 
         await ctx.messages.payout(
