@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.33")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.33")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.34")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.34")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -221,6 +221,8 @@ class QuestionGenerationTest(unittest.TestCase):
         self.assertTrue(properties["weekly_auto_publish"]["default"])
         self.assertNotIn("readOnly", properties["daily_limit"])
         self.assertEqual(properties["daily_limit"]["maximum"], 100)
+        self.assertEqual(properties["daily_limit"]["title"], "每轮成功领取上限")
+        self.assertIn("跨过零点不会重置", properties["daily_limit"]["description"])
         self.assertNotIn("readOnly", properties["retry_count"])
         self.assertEqual(properties["retry_count"]["minimum"], 0)
         self.assertEqual(properties["retry_count"]["maximum"], 10)
@@ -381,9 +383,20 @@ class StorageMigrationTest(unittest.TestCase):
                 version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()["version"]
                 redpacket_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket)")}
                 attempt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(redpacket_attempt)")}
-            self.assertEqual(version, 7)
+                attempt_sql = str(
+                    conn.execute(
+                        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'redpacket_attempt'"
+                    ).fetchone()["sql"]
+                )
+                reset_columns = {
+                    row["name"] for row in conn.execute("PRAGMA table_info(redpacket_limit_reset)")
+                }
+            self.assertEqual(version, 8)
             self.assertIn("settled_at", redpacket_columns)
             self.assertIn("user_display_name", attempt_columns)
+            self.assertNotIn("UNIQUE(account_id, user_id, redpacket_id, date)", attempt_sql)
+            self.assertIn("redpacket_id", reset_columns)
+            self.assertNotIn("date", reset_columns)
             with storage.connect() as conn:
                 reminder_table = conn.execute(
                     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'redpacket_daily_reminder'"
@@ -440,12 +453,12 @@ class StorageMigrationTest(unittest.TestCase):
                 version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()["version"]
                 rows = conn.execute(
                     """
-                    SELECT chat_id, reset_at FROM redpacket_limit_reset
-                    WHERE account_id = 1 AND user_id = 77 AND date = '2026-07-16'
-                    ORDER BY chat_id
+                    SELECT redpacket_id, reset_at FROM redpacket_limit_reset
+                    WHERE account_id = 1 AND user_id = 77
+                    ORDER BY redpacket_id
                     """
                 ).fetchall()
-            self.assertEqual(version, 7)
+            self.assertEqual(version, 8)
             self.assertEqual(rows, [])
 
     def test_version_six_resets_are_cleared_without_touching_attempts_or_rewards(self) -> None:
@@ -474,6 +487,19 @@ class StorageMigrationTest(unittest.TestCase):
                 reservation_seconds=300,
             )
             with storage.connect() as conn:
+                conn.executescript(
+                    """
+                    DROP TABLE redpacket_limit_reset;
+                    CREATE TABLE redpacket_limit_reset (
+                        account_id INTEGER NOT NULL,
+                        chat_id INTEGER NOT NULL,
+                        user_id INTEGER NOT NULL,
+                        date TEXT NOT NULL,
+                        reset_at REAL NOT NULL,
+                        PRIMARY KEY(account_id, chat_id, user_id, date)
+                    );
+                    """
+                )
                 conn.execute(
                     """
                     INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
@@ -501,7 +527,7 @@ class StorageMigrationTest(unittest.TestCase):
                     "SELECT total_amount, remaining_amount FROM redpacket WHERE id = 'packet'"
                 ).fetchone()
 
-            self.assertEqual(version, 7)
+            self.assertEqual(version, 8)
             self.assertEqual(reset_count, 0)
             self.assertIsNotNone(attempt)
             self.assertEqual((int(attempt["reward"]), int(attempt["success"])), (10, 1))
@@ -553,7 +579,7 @@ class StorageMigrationTest(unittest.TestCase):
                 version = conn.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()[0]
                 reset_count = conn.execute("SELECT COUNT(*) FROM redpacket_limit_reset").fetchone()[0]
 
-            self.assertNotIn("chat_id", current_columns)
+            self.assertNotIn("redpacket_id", current_columns)
             self.assertIsNone(legacy_table)
             self.assertEqual(version, 5)
             self.assertEqual(reset_count, 1)
@@ -580,14 +606,21 @@ class StorageFlowTest(unittest.TestCase):
             ttl_seconds=3600,
         )
 
-    def _reserve(self, user_id: int, packet_id: str = "packet") -> dict[str, object]:
+    def _reserve(
+        self,
+        user_id: int,
+        packet_id: str = "packet",
+        *,
+        attempt_id: str | None = None,
+        date: str = "2026-07-13",
+    ) -> dict[str, object]:
         return self.storage.reserve_question(
-            attempt_id=f"attempt-{user_id}",
+            attempt_id=attempt_id or f"attempt-{user_id}",
             account_id=1,
             user_id=user_id,
             chat_id=-1001,
             redpacket_id=packet_id,
-            date="2026-07-13",
+            date=date,
             submission_token=f"token-{user_id}",
             reservation_seconds=300,
         )
@@ -754,7 +787,7 @@ class StorageFlowTest(unittest.TestCase):
             count = conn.execute("SELECT COUNT(*) AS count FROM redpacket_daily_reminder").fetchone()["count"]
         self.assertEqual(count, 1)
 
-    def test_wrong_answer_retries_once_then_ends_day(self) -> None:
+    def test_wrong_answer_retries_once_then_blocks_same_round_across_midnight(self) -> None:
         self._create_packet()
         attempt = self._reserve(101)
         wrong = (int(attempt["answer_index"]) + 1) % 3
@@ -797,19 +830,19 @@ class StorageFlowTest(unittest.TestCase):
         self.assertFalse(second["correct"])
         self.assertTrue(second["finished"])
         self.assertEqual(second["attempts"], 2)
-        with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
+        with self.assertRaisesRegex(storage_module.StorageError, "本轮红包挑战已经结束"):
             self.storage.reserve_question(
                 attempt_id="attempt-new",
                 account_id=1,
                 user_id=101,
                 chat_id=-1001,
                 redpacket_id="packet",
-                date="2026-07-13",
+                date="2026-07-14",
                 submission_token="new-token",
                 reservation_seconds=300,
             )
 
-    def test_success_deducts_once_and_blocks_daily_repeat(self) -> None:
+    def test_success_blocks_same_round_across_midnight_but_allows_new_round(self) -> None:
         self._create_packet()
         attempt = self._reserve(102)
         result = self.storage.submit_answer(
@@ -841,19 +874,37 @@ class StorageFlowTest(unittest.TestCase):
         self.assertTrue(duplicate["duplicate"])
         self.assertEqual(self.storage.get_redpacket("packet")["remaining_amount"], 20)
 
-        self._create_packet("packet-two", 2)
-        with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
-            self._reserve(102, "packet-two")
+        with self.assertRaisesRegex(storage_module.StorageError, "本轮红包挑战已经结束"):
+            self.storage.reserve_question(
+                attempt_id="attempt-102-next-day",
+                account_id=1,
+                user_id=102,
+                chat_id=-1001,
+                redpacket_id="packet",
+                date="2026-07-14",
+                submission_token="token-102-next-day",
+                reservation_seconds=300,
+            )
 
-    def test_configurable_daily_limit_allows_two_successes(self) -> None:
-        def complete(packet_id: str, attempt_id: str, token: str) -> None:
-            self._create_packet(packet_id, 1)
+        self._create_packet("packet-two", 2)
+        next_round = self._reserve(
+            102,
+            "packet-two",
+            attempt_id="attempt-102-next-round",
+            date="2026-07-14",
+        )
+        self.assertEqual(next_round["id"], "attempt-102-next-round")
+
+    def test_configurable_round_limit_allows_two_successes_in_same_round(self) -> None:
+        self._create_packet("limit-round", 3)
+
+        def complete(attempt_id: str, token: str) -> None:
             attempt = self.storage.reserve_question(
                 attempt_id=attempt_id,
                 account_id=1,
                 user_id=150,
                 chat_id=-1001,
-                redpacket_id=packet_id,
+                redpacket_id="limit-round",
                 date="2026-07-13",
                 submission_token=token,
                 reservation_seconds=300,
@@ -865,7 +916,7 @@ class StorageFlowTest(unittest.TestCase):
                 account_id=1,
                 user_id=150,
                 chat_id=-1001,
-                redpacket_id=packet_id,
+                redpacket_id="limit-round",
                 option_index=int(attempt["answer_index"]),
                 submission_token=token,
                 submission_key=f"submit-{attempt_id}",
@@ -874,16 +925,15 @@ class StorageFlowTest(unittest.TestCase):
             )
             self.assertTrue(result["correct"])
 
-        complete("limit-one", "limit-attempt-one", "limit-token-one")
-        complete("limit-two", "limit-attempt-two", "limit-token-two")
-        self._create_packet("limit-three", 1)
-        with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
+        complete("limit-attempt-one", "limit-token-one")
+        complete("limit-attempt-two", "limit-token-two")
+        with self.assertRaisesRegex(storage_module.StorageError, "本轮红包挑战已经结束"):
             self.storage.reserve_question(
                 attempt_id="limit-attempt-three",
                 account_id=1,
                 user_id=150,
                 chat_id=-1001,
-                redpacket_id="limit-three",
+                redpacket_id="limit-round",
                 date="2026-07-13",
                 submission_token="limit-token-three",
                 reservation_seconds=300,
@@ -981,8 +1031,8 @@ class StorageFlowTest(unittest.TestCase):
         self.assertEqual(row["attempts"], 1)
         self.assertEqual(row["submission_token"], first["submission_token"])
 
-    def test_admin_reset_preserves_history_and_allows_new_daily_attempt(self) -> None:
-        self._create_packet("reset-one", 1)
+    def test_admin_reset_preserves_history_and_unlocks_the_same_round(self) -> None:
+        self._create_packet("reset-one", 2)
         first = self.storage.reserve_question(
             attempt_id="reset-attempt-one",
             account_id=1,
@@ -1005,31 +1055,31 @@ class StorageFlowTest(unittest.TestCase):
             retry_count=1,
             daily_limit=1,
         )
-        self._create_packet("reset-two", 1)
-        with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
+        with self.assertRaisesRegex(storage_module.StorageError, "本轮红包挑战已经结束"):
             self.storage.reserve_question(
                 attempt_id="reset-attempt-two",
                 account_id=1,
                 user_id=152,
                 chat_id=-1001,
-                redpacket_id="reset-two",
-                date="2026-07-14",
+                redpacket_id="reset-one",
+                date="2026-07-15",
                 submission_token="reset-token-two",
                 reservation_seconds=300,
             )
 
-        self.storage.reset_daily_limit(1, -1001, 152, "2026-07-14")
+        reset = self.storage.reset_user_round_limits(1, -1001, 152)
         second = self.storage.reserve_question(
             attempt_id="reset-attempt-two",
             account_id=1,
             user_id=152,
             chat_id=-1001,
-            redpacket_id="reset-two",
-            date="2026-07-14",
+            redpacket_id="reset-one",
+            date="2026-07-15",
             submission_token="reset-token-two",
             reservation_seconds=300,
         )
 
+        self.assertEqual(reset["round_count"], 1)
         self.assertEqual(second["id"], "reset-attempt-two")
         with self.storage.connect() as conn:
             history = conn.execute(
@@ -1038,21 +1088,32 @@ class StorageFlowTest(unittest.TestCase):
             ).fetchone()
         self.assertEqual(history["success"], 1)
         self.assertEqual(history["reward"], 10)
-        self.assertEqual(self.storage.get_redpacket("reset-one")["remaining_amount"], 0)
+        self.assertEqual(self.storage.get_redpacket("reset-one")["remaining_amount"], 10)
 
-    def test_admin_reset_all_marks_every_participant_for_only_the_selected_day(self) -> None:
-        self._create_packet("reset-all", 3)
-        for user_id, date in ((153, "2026-07-14"), (154, "2026-07-14"), (155, "2026-07-13")):
+    def test_admin_reset_all_marks_every_participant_in_active_rounds(self) -> None:
+        self._create_packet("reset-all-one", 3)
+        self._create_packet("reset-all-two", 1)
+        for user_id, date in ((153, "2026-07-14"), (154, "2026-07-13")):
             self.storage.reserve_question(
                 attempt_id=f"reset-all-attempt-{user_id}",
                 account_id=1,
                 user_id=user_id,
                 chat_id=-1001,
-                redpacket_id="reset-all",
+                redpacket_id="reset-all-one",
                 date=date,
                 submission_token=f"reset-all-token-{user_id}",
                 reservation_seconds=300,
             )
+        self.storage.reserve_question(
+            attempt_id="reset-all-attempt-153-second",
+            account_id=1,
+            user_id=153,
+            chat_id=-1001,
+            redpacket_id="reset-all-two",
+            date="2026-07-14",
+            submission_token="reset-all-token-153-second",
+            reservation_seconds=300,
+        )
         self.storage.create_redpacket(
             redpacket_id="reset-all-other-chat",
             account_id=1,
@@ -1074,89 +1135,95 @@ class StorageFlowTest(unittest.TestCase):
             reservation_seconds=300,
         )
 
-        result = self.storage.reset_all_daily_limits(1, -1001, "2026-07-14")
+        result = self.storage.reset_all_round_limits(1, -1001)
 
         self.assertEqual(result["user_count"], 2)
+        self.assertEqual(result["round_count"], 2)
         with self.storage.connect() as conn:
-            reset_users = conn.execute(
+            reset_pairs = conn.execute(
                 """
-                SELECT user_id FROM redpacket_limit_reset
-                WHERE account_id = ? AND chat_id = ? AND date = ? ORDER BY user_id
+                SELECT user_id, redpacket_id FROM redpacket_limit_reset
+                WHERE account_id = ? AND chat_id = ? ORDER BY user_id, redpacket_id
                 """,
-                (1, -1001, "2026-07-14"),
+                (1, -1001),
             ).fetchall()
             attempt_count = conn.execute(
                 "SELECT COUNT(*) AS count FROM redpacket_attempt WHERE account_id = ?",
                 (1,),
             ).fetchone()["count"]
-        self.assertEqual([int(row["user_id"]) for row in reset_users], [153, 154])
+        self.assertEqual(
+            [(int(row["user_id"]), str(row["redpacket_id"])) for row in reset_pairs],
+            [(153, "reset-all-one"), (153, "reset-all-two"), (154, "reset-all-one")],
+        )
         self.assertEqual(attempt_count, 4)
         with self.storage.connect() as conn:
             other_chat_reset = conn.execute(
                 """
                 SELECT 1 FROM redpacket_limit_reset
-                WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?
+                WHERE account_id = ? AND chat_id = ? AND user_id = ? AND redpacket_id = ?
                 """,
-                (1, -2002, 156, "2026-07-14"),
+                (1, -2002, 156, "reset-all-other-chat"),
             ).fetchone()
         self.assertIsNone(other_chat_reset)
 
     def test_single_reset_only_unlocks_the_selected_chat(self) -> None:
-        for packet_id, chat_id in (("scope-b-first", -2002), ("scope-a", -1001), ("scope-b-second", -2002)):
+        for packet_id, chat_id in (("scope-a", -1001), ("scope-b", -2002)):
             self.storage.create_redpacket(
                 redpacket_id=packet_id,
                 account_id=1,
                 chat_id=chat_id,
                 creator_id=99,
                 bank_id="bank",
-                total_amount=10,
-                rewards=[10],
+                total_amount=20,
+                rewards=[10, 10],
                 ttl_seconds=3600,
             )
-        first = self.storage.reserve_question(
-            attempt_id="scope-b-first-attempt",
-            account_id=1,
-            user_id=157,
-            chat_id=-2002,
-            redpacket_id="scope-b-first",
-            date="2026-07-14",
-            submission_token="scope-b-first-token",
-            reservation_seconds=300,
-        )
-        self.storage.submit_answer(
-            attempt_id="scope-b-first-attempt",
-            account_id=1,
-            user_id=157,
-            chat_id=-2002,
-            redpacket_id="scope-b-first",
-            option_index=int(first["answer_index"]),
-            submission_token="scope-b-first-token",
-            submission_key="scope-b-first-submit",
-            retry_count=1,
-            daily_limit=1,
-        )
+        for packet_id, chat_id in (("scope-a", -1001), ("scope-b", -2002)):
+            attempt = self.storage.reserve_question(
+                attempt_id=f"{packet_id}-first-attempt",
+                account_id=1,
+                user_id=157,
+                chat_id=chat_id,
+                redpacket_id=packet_id,
+                date="2026-07-14",
+                submission_token=f"{packet_id}-first-token",
+                reservation_seconds=300,
+            )
+            self.storage.submit_answer(
+                attempt_id=f"{packet_id}-first-attempt",
+                account_id=1,
+                user_id=157,
+                chat_id=chat_id,
+                redpacket_id=packet_id,
+                option_index=int(attempt["answer_index"]),
+                submission_token=f"{packet_id}-first-token",
+                submission_key=f"{packet_id}-first-submit",
+                retry_count=1,
+                daily_limit=1,
+            )
 
-        self.storage.reset_daily_limit(1, -1001, 157, "2026-07-14")
+        reset = self.storage.reset_user_round_limits(1, -1001, 157)
 
         unlocked = self.storage.reserve_question(
-            attempt_id="scope-a-attempt",
+            attempt_id="scope-a-second-attempt",
             account_id=1,
             user_id=157,
             chat_id=-1001,
             redpacket_id="scope-a",
-            date="2026-07-14",
-            submission_token="scope-a-token",
+            date="2026-07-15",
+            submission_token="scope-a-second-token",
             reservation_seconds=300,
         )
-        self.assertEqual(unlocked["id"], "scope-a-attempt")
-        with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
+        self.assertEqual(reset["round_count"], 1)
+        self.assertEqual(unlocked["id"], "scope-a-second-attempt")
+        with self.assertRaisesRegex(storage_module.StorageError, "本轮红包挑战已经结束"):
             self.storage.reserve_question(
                 attempt_id="scope-b-second-attempt",
                 account_id=1,
                 user_id=157,
                 chat_id=-2002,
-                redpacket_id="scope-b-second",
-                date="2026-07-14",
+                redpacket_id="scope-b",
+                date="2026-07-15",
                 submission_token="scope-b-second-token",
                 reservation_seconds=300,
             )
@@ -1462,7 +1529,7 @@ class StorageFlowTest(unittest.TestCase):
                 retry_count=1,
             )
 
-    def test_two_pre_reserved_packets_still_allow_only_one_daily_success(self) -> None:
+    def test_two_pre_reserved_packets_are_independent_rounds(self) -> None:
         self._create_packet("packet-one", 2)
         self._create_packet("packet-two", 2)
         first = self._reserve(401, "packet-one")
@@ -1487,18 +1554,18 @@ class StorageFlowTest(unittest.TestCase):
             submission_key="first-win",
             retry_count=1,
         )
-        with self.assertRaisesRegex(storage_module.StorageError, "今天的红包挑战已经结束"):
-            self.storage.submit_answer(
-                attempt_id="attempt-401-two",
-                account_id=1,
-                user_id=401,
-                chat_id=-1001,
-                redpacket_id="packet-two",
-                option_index=int(second["answer_index"]),
-                submission_token="token-401-two",
-                submission_key="second-win",
-                retry_count=1,
-            )
+        second_result = self.storage.submit_answer(
+            attempt_id="attempt-401-two",
+            account_id=1,
+            user_id=401,
+            chat_id=-1001,
+            redpacket_id="packet-two",
+            option_index=int(second["answer_index"]),
+            submission_token="token-401-two",
+            submission_key="second-win",
+            retry_count=1,
+        )
+        self.assertTrue(second_result["correct"])
 
 
 class PluginActionTest(unittest.TestCase):
@@ -2790,6 +2857,27 @@ class PluginActionTest(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tempdir:
                 plugin = plugin_module.AIRedpacketPlugin()
                 plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="reset-command",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=20,
+                    rewards=[10, 10],
+                    ttl_seconds=3600,
+                )
+                plugin.storage.reserve_question(
+                    attempt_id="reset-command-attempt",
+                    account_id=1,
+                    user_id=77,
+                    chat_id=-1001,
+                    redpacket_id="reset-command",
+                    date="2026-07-14",
+                    submission_token="reset-command-token",
+                    reservation_seconds=300,
+                )
 
                 class Context:
                     account_id = 1
@@ -2800,6 +2888,7 @@ class PluginActionTest(unittest.TestCase):
                 plugin._today = lambda ctx: "2026-07-14"
                 actions = await plugin._handle_admin_command(Context(), -1001, 77, 1, ["reset"])
                 self.assertIn("用户 <code>77</code>", actions[0]["text"])
+                self.assertIn("<code>1</code> 个红包轮次", actions[0]["text"])
                 self.assertEqual(actions[0]["send_via"], "interaction_bot")
                 self.assertIn("save_message_id_key", actions[0])
                 self.assertNotIn("reply_to_message_id", actions[0])
@@ -2807,14 +2896,14 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(actions[1]["message_id"], 1)
                 with plugin.storage.connect() as conn:
                     row = conn.execute(
-                        "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?",
-                        (1, -1001, 77, "2026-07-14"),
+                        "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND redpacket_id = ?",
+                        (1, -1001, 77, "reset-command"),
                     ).fetchone()
                 self.assertIsNotNone(row)
 
         asyncio.run(run_case())
 
-    def test_admin_reset_all_command_resets_every_daily_participant(self) -> None:
+    def test_admin_reset_all_command_resets_every_active_round_participant(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
                 plugin = plugin_module.AIRedpacketPlugin()
@@ -2843,8 +2932,8 @@ class PluginActionTest(unittest.TestCase):
                 with (
                     patch.object(
                         plugin.storage,
-                        "reset_all_daily_limits",
-                        return_value={"user_count": 3},
+                        "reset_all_round_limits",
+                        return_value={"user_count": 3, "round_count": 2},
                     ) as reset_all,
                     patch.object(plugin_module.asyncio, "sleep", fake_sleep),
                 ):
@@ -2852,8 +2941,8 @@ class PluginActionTest(unittest.TestCase):
                     timer_task = next(iter(plugin._timer_tasks.values()))
                     await timer_task
 
-                reset_all.assert_called_once_with(1, -1001, "2026-07-14")
-                self.assertIn("本群 <code>2026-07-14</code> 当日全部 <code>3</code> 名用户", actions[0]["text"])
+                reset_all.assert_called_once_with(1, -1001)
+                self.assertIn("<code>2</code> 个红包轮次、<code>3</code> 名用户", actions[0]["text"])
                 self.assertEqual(actions[0]["send_via"], "interaction_bot")
                 self.assertIn("save_message_id_key", actions[0])
                 self.assertEqual(actions[1]["type"], "delete_message")
@@ -3605,7 +3694,7 @@ class PluginActionTest(unittest.TestCase):
                 edit = next(action for action in actions if action["type"] == "edit_message")
                 self.assertEqual(edit["send_via"], "interaction_bot")
                 self.assertIn("<details open>", _action_html(edit))
-                self.assertIn("今天的挑战已结束", _action_html(edit))
+                self.assertIn("本轮挑战已结束", _action_html(edit))
                 self.assertEqual(edit["reply_markup"]["inline_keyboard"][0][0]["text"], "我也要雨露均沾")
                 self.assertEqual(
                     edit["reply_markup"]["inline_keyboard"][0][0]["callback_data"],

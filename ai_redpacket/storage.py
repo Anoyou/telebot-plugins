@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class StorageError(RuntimeError):
@@ -153,12 +153,14 @@ class AIStorage:
                     submission_token TEXT NOT NULL,
                     last_submission_key TEXT,
                     created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    UNIQUE(account_id, user_id, redpacket_id, date)
+                    updated_at REAL NOT NULL
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_attempt_daily
                     ON redpacket_attempt(account_id, user_id, date, success, attempts);
+
+                CREATE INDEX IF NOT EXISTS idx_attempt_round
+                    ON redpacket_attempt(account_id, user_id, redpacket_id, updated_at);
 
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_attempt_submission
                     ON redpacket_attempt(last_submission_key)
@@ -168,9 +170,9 @@ class AIStorage:
                     account_id INTEGER NOT NULL,
                     chat_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL,
-                    date TEXT NOT NULL,
+                    redpacket_id TEXT NOT NULL REFERENCES redpacket(id) ON DELETE CASCADE,
                     reset_at REAL NOT NULL,
-                    PRIMARY KEY(account_id, chat_id, user_id, date)
+                    PRIMARY KEY(account_id, chat_id, user_id, redpacket_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS redpacket_weekly_report (
@@ -205,9 +207,9 @@ class AIStorage:
             reset_columns = {
                 str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket_limit_reset)").fetchall()
             }
-            rebuild_legacy_reset = "chat_id" not in reset_columns
-            clear_unsafe_resets = current_version is not None and current_version < SCHEMA_VERSION
-            if rebuild_legacy_reset or clear_unsafe_resets:
+            rebuild_legacy_reset = "redpacket_id" not in reset_columns
+            rebuild_daily_attempts = current_version is not None and current_version < SCHEMA_VERSION
+            if rebuild_legacy_reset or rebuild_daily_attempts:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if rebuild_legacy_reset:
@@ -218,15 +220,68 @@ class AIStorage:
                                 account_id INTEGER NOT NULL,
                                 chat_id INTEGER NOT NULL,
                                 user_id INTEGER NOT NULL,
-                                date TEXT NOT NULL,
+                                redpacket_id TEXT NOT NULL REFERENCES redpacket(id) ON DELETE CASCADE,
                                 reset_at REAL NOT NULL,
-                                PRIMARY KEY(account_id, chat_id, user_id, date)
+                                PRIMARY KEY(account_id, chat_id, user_id, redpacket_id)
                             )
                             """
                         )
                         conn.execute("DROP TABLE redpacket_limit_reset_legacy")
                     else:
                         conn.execute("DELETE FROM redpacket_limit_reset")
+                    if rebuild_daily_attempts:
+                        conn.execute("ALTER TABLE redpacket_attempt RENAME TO redpacket_attempt_legacy")
+                        conn.execute(
+                            """
+                            CREATE TABLE redpacket_attempt (
+                                id TEXT PRIMARY KEY,
+                                account_id INTEGER NOT NULL,
+                                user_id INTEGER NOT NULL,
+                                user_display_name TEXT NOT NULL DEFAULT '',
+                                chat_id INTEGER NOT NULL,
+                                redpacket_id TEXT NOT NULL REFERENCES redpacket(id) ON DELETE CASCADE,
+                                question_slot_id INTEGER NOT NULL REFERENCES redpacket_question(id),
+                                date TEXT NOT NULL,
+                                attempts INTEGER NOT NULL DEFAULT 0,
+                                success INTEGER NOT NULL DEFAULT 0,
+                                reward INTEGER NOT NULL DEFAULT 0,
+                                option_order_json TEXT NOT NULL,
+                                answer_index INTEGER NOT NULL CHECK(answer_index BETWEEN 0 AND 2),
+                                submission_token TEXT NOT NULL,
+                                last_submission_key TEXT,
+                                created_at REAL NOT NULL,
+                                updated_at REAL NOT NULL
+                            )
+                            """
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO redpacket_attempt(
+                                id, account_id, user_id, user_display_name, chat_id, redpacket_id,
+                                question_slot_id, date, attempts, success, reward, option_order_json,
+                                answer_index, submission_token, last_submission_key, created_at, updated_at
+                            )
+                            SELECT
+                                id, account_id, user_id, user_display_name, chat_id, redpacket_id,
+                                question_slot_id, date, attempts, success, reward, option_order_json,
+                                answer_index, submission_token, last_submission_key, created_at, updated_at
+                            FROM redpacket_attempt_legacy
+                            """
+                        )
+                        conn.execute("DROP TABLE redpacket_attempt_legacy")
+                        conn.execute(
+                            "CREATE INDEX idx_attempt_daily ON redpacket_attempt(account_id, user_id, date, success, attempts)"
+                        )
+                        conn.execute(
+                            "CREATE INDEX idx_attempt_round ON redpacket_attempt(account_id, user_id, redpacket_id, updated_at)"
+                        )
+                        conn.execute(
+                            """
+                            CREATE UNIQUE INDEX idx_attempt_submission
+                            ON redpacket_attempt(last_submission_key)
+                            WHERE last_submission_key IS NOT NULL
+                            """
+                        )
                     conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
                     conn.commit()
                 except Exception:
@@ -353,55 +408,84 @@ class AIStorage:
             for row in rows
         ]
 
-    def reset_daily_limit(self, account_id: int, chat_id: int, user_id: int, date: str) -> dict[str, Any]:
+    def reset_user_round_limits(
+        self,
+        account_id: int,
+        chat_id: int,
+        user_id: int,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        current = time.time() if now is None else float(now)
         with self.transaction() as conn:
-            reset_at = time.time()
-            conn.execute(
+            redpacket_ids = [
+                str(row["redpacket_id"])
+                for row in conn.execute(
+                    """
+                    SELECT DISTINCT a.redpacket_id
+                    FROM redpacket_attempt a
+                    JOIN redpacket p ON p.id = a.redpacket_id
+                    WHERE a.account_id = ? AND a.chat_id = ? AND a.user_id = ?
+                      AND p.status = 'active' AND p.expires_at > ?
+                    """,
+                    (account_id, chat_id, user_id, current),
+                ).fetchall()
+            ]
+            conn.executemany(
                 """
-                INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
+                INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, redpacket_id, reset_at)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(account_id, chat_id, user_id, date) DO UPDATE SET
+                ON CONFLICT(account_id, chat_id, user_id, redpacket_id) DO UPDATE SET
                     reset_at = excluded.reset_at
                 """,
-                (account_id, chat_id, user_id, date, reset_at),
+                [(account_id, chat_id, user_id, redpacket_id, current) for redpacket_id in redpacket_ids],
             )
         return {
             "account_id": account_id,
             "chat_id": chat_id,
             "user_id": user_id,
-            "date": date,
-            "reset_at": reset_at,
+            "reset_at": current,
+            "round_count": len(redpacket_ids),
         }
 
-    def reset_all_daily_limits(self, account_id: int, chat_id: int, date: str) -> dict[str, Any]:
+    def reset_all_round_limits(
+        self,
+        account_id: int,
+        chat_id: int,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        current = time.time() if now is None else float(now)
         with self.transaction() as conn:
-            reset_at = time.time()
-            user_ids = [
-                int(row["user_id"])
+            participants = [
+                (int(row["user_id"]), str(row["redpacket_id"]))
                 for row in conn.execute(
                     """
-                    SELECT DISTINCT user_id
-                    FROM redpacket_attempt
-                    WHERE account_id = ? AND chat_id = ? AND date = ?
+                    SELECT DISTINCT a.user_id, a.redpacket_id
+                    FROM redpacket_attempt a
+                    JOIN redpacket p ON p.id = a.redpacket_id
+                    WHERE a.account_id = ? AND a.chat_id = ?
+                      AND p.status = 'active' AND p.expires_at > ?
                     """,
-                    (account_id, chat_id, date),
+                    (account_id, chat_id, current),
                 ).fetchall()
             ]
             conn.executemany(
                 """
-                INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, date, reset_at)
+                INSERT INTO redpacket_limit_reset(account_id, chat_id, user_id, redpacket_id, reset_at)
                 VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(account_id, chat_id, user_id, date) DO UPDATE SET
+                ON CONFLICT(account_id, chat_id, user_id, redpacket_id) DO UPDATE SET
                     reset_at = excluded.reset_at
                 """,
-                [(account_id, chat_id, user_id, date, reset_at) for user_id in user_ids],
+                [
+                    (account_id, chat_id, user_id, redpacket_id, current)
+                    for user_id, redpacket_id in participants
+                ],
             )
         return {
             "account_id": account_id,
             "chat_id": chat_id,
-            "date": date,
-            "reset_at": reset_at,
-            "user_count": len(user_ids),
+            "reset_at": current,
+            "user_count": len({user_id for user_id, _redpacket_id in participants}),
+            "round_count": len({redpacket_id for _user_id, redpacket_id in participants}),
         }
 
     def expire_unanswered_attempt(
@@ -876,7 +960,7 @@ class AIStorage:
         user_display_name: str = "",
     ) -> dict[str, Any]:
         now = time.time()
-        success_limit = max(1, int(daily_limit))
+        round_success_limit = max(1, int(daily_limit))
         max_attempts = 1 + max(0, int(retry_count))
         with self.transaction() as conn:
             packet = conn.execute(
@@ -892,22 +976,25 @@ class AIStorage:
                 raise StorageError("红包已经过期")
 
             reset = conn.execute(
-                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?",
-                (account_id, chat_id, user_id, date),
+                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND redpacket_id = ?",
+                (account_id, chat_id, user_id, redpacket_id),
             ).fetchone()
             reset_at = float(reset["reset_at"]) if reset else 0.0
-            daily = conn.execute(
+            round_stats = conn.execute(
                 """
                 SELECT
                     COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS successes,
                     COALESCE(MAX(CASE WHEN success = 0 AND attempts >= ? THEN 1 ELSE 0 END), 0) AS failed_out
                 FROM redpacket_attempt
-                WHERE account_id = ? AND user_id = ? AND date = ? AND updated_at >= ?
+                WHERE account_id = ? AND user_id = ? AND redpacket_id = ? AND updated_at >= ?
                 """,
-                (max_attempts, account_id, user_id, date, reset_at),
+                (max_attempts, account_id, user_id, redpacket_id, reset_at),
             ).fetchone()
-            if daily and (int(daily["successes"]) >= success_limit or bool(daily["failed_out"])):
-                raise StorageError("你今天的红包挑战已经结束")
+            if round_stats and (
+                int(round_stats["successes"]) >= round_success_limit
+                or bool(round_stats["failed_out"])
+            ):
+                raise StorageError("你本轮红包挑战已经结束")
 
             existing = conn.execute(
                 """
@@ -917,9 +1004,12 @@ class AIStorage:
                 FROM redpacket_attempt a
                 JOIN redpacket_question rq ON rq.id = a.question_slot_id
                 JOIN question_bank q ON q.id = rq.question_bank_id
-                WHERE a.account_id = ? AND a.user_id = ? AND a.redpacket_id = ? AND a.date = ?
+                WHERE a.account_id = ? AND a.user_id = ? AND a.redpacket_id = ?
+                  AND a.success = 0 AND a.updated_at >= ?
+                ORDER BY a.updated_at DESC
+                LIMIT 1
                 """,
-                (account_id, user_id, redpacket_id, date),
+                (account_id, user_id, redpacket_id, reset_at),
             ).fetchone()
             if existing:
                 if user_display_name and str(existing["user_display_name"] or "") != user_display_name:
@@ -1050,7 +1140,7 @@ class AIStorage:
     ) -> dict[str, Any]:
         now = time.time()
         max_attempts = 1 + max(0, int(retry_count))
-        success_limit = max(1, int(daily_limit))
+        round_success_limit = max(1, int(daily_limit))
         with self.transaction() as conn:
             row = conn.execute(
                 """
@@ -1108,22 +1198,25 @@ class AIStorage:
                 remaining_seconds = max(1, math.ceil(cooldown - elapsed))
                 raise StorageError(f"点击太快，请 {remaining_seconds} 秒后再试，本次不会消耗答题机会")
             reset = conn.execute(
-                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND date = ?",
-                (account_id, chat_id, user_id, row["date"]),
+                "SELECT reset_at FROM redpacket_limit_reset WHERE account_id = ? AND chat_id = ? AND user_id = ? AND redpacket_id = ?",
+                (account_id, chat_id, user_id, redpacket_id),
             ).fetchone()
             reset_at = float(reset["reset_at"]) if reset else 0.0
-            daily = conn.execute(
+            round_stats = conn.execute(
                 """
                 SELECT
                     COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) AS successes,
                     COALESCE(MAX(CASE WHEN success = 0 AND attempts >= ? THEN 1 ELSE 0 END), 0) AS failed_out
                 FROM redpacket_attempt
-                WHERE account_id = ? AND user_id = ? AND date = ? AND id <> ?
+                WHERE account_id = ? AND user_id = ? AND redpacket_id = ? AND id <> ?
                   AND updated_at >= ?
                 """,
-                (max_attempts, account_id, user_id, row["date"], attempt_id, reset_at),
+                (max_attempts, account_id, user_id, redpacket_id, attempt_id, reset_at),
             ).fetchone()
-            if daily and (int(daily["successes"]) >= success_limit or bool(daily["failed_out"])):
+            if round_stats and (
+                int(round_stats["successes"]) >= round_success_limit
+                or bool(round_stats["failed_out"])
+            ):
                 conn.execute(
                     """
                     UPDATE redpacket_question
@@ -1132,9 +1225,9 @@ class AIStorage:
                     """,
                     (row["question_slot_id"], user_id),
                 )
-                raise StorageError("你今天的红包挑战已经结束")
+                raise StorageError("你本轮红包挑战已经结束")
             if row["attempts"] >= max_attempts:
-                raise StorageError("你今天的答题次数已经用完")
+                raise StorageError("你本轮的答题次数已经用完")
             if row["reserved_by"] != user_id or row["claimed_by"] is not None:
                 raise StorageError("这道红包题已经失效")
 

@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.33"
+PLUGIN_VERSION = "0.1.34"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -66,7 +66,7 @@ LEGACY_PACKET_MESSAGE_TEMPLATE = (
     "题目数量：<code>{question_count}</code>\n"
     "红包 ID：<code>{redpacket_id}</code>\n\n"
     "今日日期：<code>{date}</code>\n"
-    "每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。"
+    "每人每轮最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。"
 )
 LEGACY_QUESTION_MESSAGE_TEMPLATE = "<b>AI 红包题目</b>\n{question}\n\n{options}\n\n请选择唯一正确答案。"
 LEGACY_SUCCESS_MESSAGE_TEMPLATE = (
@@ -76,7 +76,7 @@ LEGACY_SUCCESS_MESSAGE_TEMPLATE = (
 )
 LEGACY_FAILED_MESSAGE_TEMPLATE = (
     "<b>AI 红包答题结果</b>\n{question}\n\n"
-    "结果：<b>答题机会已用完，今天的挑战已结束</b>\n"
+    "结果：<b>答题机会已用完，本轮挑战已结束</b>\n"
     "正确答案：{answer}\n解析：{explanation}\n来源：{source}"
 )
 LEGACY_SETTLEMENT_MESSAGE_TEMPLATE = (
@@ -111,7 +111,7 @@ PACKET_MESSAGE_TEMPLATE = (
     "<li>红包 ID：<code>{redpacket_id}</code></li>"
     "<li>今日日期：<code>{date}</code></li>"
     "</ul>"
-    "<p>每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>"
+    "<p>每人每轮最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>"
 )
 QUESTION_MESSAGE_TEMPLATE = (
     "<p><b>{answerer_name} 这是你的专属雨露</b></p>"
@@ -122,6 +122,14 @@ QUESTION_MESSAGE_TEMPLATE = (
 )
 
 PREVIOUS_RICH_TEMPLATE_DEFAULTS = {
+    "packet_message_template": (
+        "<h1>AI 答题红包</h1>"
+        "<ul><li>总金额：<code>{total_amount}</code></li>"
+        "<li>题目数量：<code>{question_count}</code></li>"
+        "<li>红包 ID：<code>{redpacket_id}</code></li>"
+        "<li>今日日期：<code>{date}</code></li></ul>"
+        "<p>每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>"
+    ),
     "question_message_template": (
         "<h1>AI 红包题目</h1>"
         "<p>{question}</p>"
@@ -147,6 +155,14 @@ PREVIOUS_RICH_TEMPLATE_DEFAULTS = {
         "</details>"
     ),
 }
+PREVIOUS_RICH_TEMPLATE_DEFAULTS["failed_message_template"] = (
+    PREVIOUS_RICH_TEMPLATE_DEFAULTS["failed_message_template"],
+    "<p><b>答题者：{answerer_name}</b></p>"
+    "<h1>AI 红包答题结果</h1><p>{question}</p>"
+    "<details open><summary>答题机会已用完，今天的挑战已结束</summary>"
+    "<p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p>"
+    "<p><b>来源：</b>{source}</p></details>",
+)
 SUCCESS_MESSAGE_TEMPLATE = (
     "<p><b>答题者：{answerer_name}</b></p>"
     "<h1>AI 红包答题结果</h1>"
@@ -161,7 +177,7 @@ FAILED_MESSAGE_TEMPLATE = (
     "<p><b>答题者：{answerer_name}</b></p>"
     "<h1>AI 红包答题结果</h1>"
     "<p>{question}</p>"
-    "<details open><summary>答题机会已用完，今天的挑战已结束</summary>"
+    "<details open><summary>答题机会已用完，本轮挑战已结束</summary>"
     "<p><b>正确答案：</b>{answer}</p>"
     "<p><b>解析：</b>{explanation}</p>"
     "<p><b>来源：</b>{source}</p>"
@@ -783,20 +799,20 @@ class AIRedpacketPlugin(Plugin):
         if action in {"create", "发", "创建"}:
             return await self._create_packet(ctx, chat_id, creator_id, reply_to, args[1:])
         if action in {"reset", "重置"}:
-            date = self._today(ctx)
             if len(args) >= 2 and args[1].lower() in {"all", "全部", "所有"}:
-                result = self.storage.reset_all_daily_limits(ctx.account_id, chat_id, date)
+                result = self.storage.reset_all_round_limits(ctx.account_id, chat_id)
                 user_count = int(result["user_count"])
+                round_count = int(result["round_count"])
                 notice_key = f"ai_redpacket:reset_notice:{secrets.token_hex(8)}"
                 await self._log(
                     ctx,
                     "info",
-                    "管理员重置当前群当日所有人的红包参与限制",
-                    **{"用户数": user_count, "日期": date, "聊天ID": chat_id},
+                    "管理员重置当前群当前轮次所有人的红包参与限制",
+                    **{"用户数": user_count, "轮次数": round_count, "聊天ID": chat_id},
                 )
                 actions = [
                     _send(
-                        f"已重置本群 <code>{date}</code> 当日全部 <code>{user_count}</code> 名用户的领取与答题限制。既有奖励和红包记录不会撤销。",
+                        f"已重置本群当前进行中的 <code>{round_count}</code> 个红包轮次、<code>{user_count}</code> 名用户的领取与答题限制。既有奖励和红包记录不会撤销。",
                         chat_id=chat_id,
                         via="interaction_bot",
                         save_message_id_key=notice_key,
@@ -819,17 +835,18 @@ class AIRedpacketPlugin(Plugin):
                 if not re.fullmatch(r"[1-9]\d*", args[1]):
                     return [_send("用户 ID 必须是正整数。", chat_id=chat_id, reply_to=reply_to)]
                 target_user_id = int(args[1])
-            self.storage.reset_daily_limit(ctx.account_id, chat_id, target_user_id, date)
+            result = self.storage.reset_user_round_limits(ctx.account_id, chat_id, target_user_id)
+            round_count = int(result["round_count"])
             notice_key = f"ai_redpacket:reset_notice:{secrets.token_hex(8)}"
             await self._log(
                 ctx,
                 "info",
-                "管理员重置当前群红包领取与答题限制",
-                **{"用户ID": target_user_id, "日期": date, "聊天ID": chat_id},
+                "管理员重置当前群当前轮次红包领取与答题限制",
+                **{"用户ID": target_user_id, "轮次数": round_count, "聊天ID": chat_id},
             )
             actions = [
                 _send(
-                    f"已重置本群用户 <code>{target_user_id}</code> 在 <code>{date}</code> 的领取与答题限制。既有奖励和红包记录不会撤销。",
+                    f"已重置本群用户 <code>{target_user_id}</code> 当前进行中的 <code>{round_count}</code> 个红包轮次限制。既有奖励和红包记录不会撤销。",
                     chat_id=chat_id,
                     via="interaction_bot",
                     save_message_id_key=notice_key,
@@ -1577,7 +1594,7 @@ class AIRedpacketPlugin(Plugin):
                     LEGACY_FAILED_MESSAGE_TEMPLATE,
                 ),
             )
-            actions = [_ack(callback_id, "答题机会已用完，今天的挑战已结束", alert=True)]
+            actions = [_ack(callback_id, "答题机会已用完，本轮挑战已结束", alert=True)]
             if edit:
                 actions.append(edit)
                 self._schedule_failed_message_delete(ctx, chat_id, message_id, attempt_id)
@@ -2670,8 +2687,8 @@ class AIRedpacketPlugin(Plugin):
             f"<code>{base} bank list</code> 查看题库\n"
             f"<code>{base} create 400</code> 创建默认题数红包\n"
             f"<code>{base} create 200 20 题库ID</code> 指定题数和题库\n"
-            f"<code>{base} reset [用户ID]</code> 重置当前群当天领取与答题限制\n"
-            f"<code>{base} reset all</code> 重置当前群当天所有人的参与限制\n"
+            f"<code>{base} reset [用户ID]</code> 重置当前群进行中的红包轮次限制\n"
+            f"<code>{base} reset all</code> 重置当前群进行中的所有红包轮次限制\n"
             f"<code>{self._prefix(ctx)}{self._weekly_command(ctx)}</code> 查看本周排行榜\n"
             f"<code>{base} list</code> 查看进行中红包、领取进度和开题消息，并提供补发入口\n"
             "<code>/airp list</code> 普通群员自助查询同一列表\n"
@@ -2846,8 +2863,10 @@ class AIRedpacketPlugin(Plugin):
     ) -> str:
         configured = str((getattr(ctx, "config", None) or {}).get(key) or "")
         normalized = configured.strip()
-        previous_default = PREVIOUS_RICH_TEMPLATE_DEFAULTS.get(key, "").strip()
-        if not normalized or normalized in {legacy_default.strip(), previous_default}:
+        previous_default = PREVIOUS_RICH_TEMPLATE_DEFAULTS.get(key, "")
+        previous_defaults = previous_default if isinstance(previous_default, tuple) else (previous_default,)
+        migrated_defaults = {item.strip() for item in previous_defaults if item}
+        if not normalized or normalized == legacy_default.strip() or normalized in migrated_defaults:
             template = rich_default
         else:
             template = configured

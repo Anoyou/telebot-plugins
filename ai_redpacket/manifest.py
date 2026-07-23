@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.33"
+PLUGIN_VERSION = "0.1.34"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -14,8 +14,8 @@ USAGE = (
     "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。"
     "命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；"
     "{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；"
-    "{prefix}{command} reset [用户ID] 重置当前群当天领取与答题限制；"
-    "{prefix}{command} reset all 重置当前群当天所有人的参与限制；{prefix}{command}-7 查询本周排行榜；"
+    "{prefix}{command} reset [用户ID] 重置当前群进行中的红包轮次限制；"
+    "{prefix}{command} reset all 重置当前群进行中的所有红包轮次限制；{prefix}{command}-7 查询本周排行榜；"
     "{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。"
     "管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。"
     "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。"
@@ -43,7 +43,7 @@ CONFIG_SCHEMA = {
                 "3. 直接发送 {prefix}{command} 按默认配置创建总额 150000、40 份的红包。\n"
                 "4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n"
                 "5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n"
-                "6. 测试后可发送 {prefix}{command} reset 重置自己在当前群的限制，或发送 {prefix}{command} reset all 重置当前群当天所有人的参与限制。\n"
+                "6. 测试后可发送 {prefix}{command} reset 重置自己在当前群进行中的红包轮次限制，或发送 {prefix}{command} reset all 重置所有参与者的当前轮次限制。\n"
                 "7. 发送 {prefix}{command} bank list 查看题库；管理员用 {prefix}{command} list、普通群员用 /airp list 查看进行中红包的领取进度、开题消息链接和补发入口。管理员原命令自动删除但列表回执保留。\n"
                 "8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n"
                 "9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。\n"
@@ -181,14 +181,14 @@ CONFIG_SCHEMA = {
         },
         "daily_limit": {
             "type": "integer",
-            "title": "每日成功领取上限",
+            "title": "每轮成功领取上限",
             "x-ui-section": "红包与答题",
             "x-ui-columns": 2,
             "x-ui-order": 410,
             "default": 1,
             "minimum": 1,
             "maximum": 100,
-            "description": "同一个 Telegram 用户每天最多答对并领取多少次红包。",
+            "description": "同一个 Telegram 用户在每个红包轮次中最多答对并领取多少次；跨过零点不会重置，新红包自动重新计算。",
         },
         "retry_count": {
             "type": "integer",
@@ -199,7 +199,7 @@ CONFIG_SCHEMA = {
             "default": 1,
             "minimum": 0,
             "maximum": 10,
-            "description": "每道题首次答错后还能重试多少次；设为 0 表示答错后立即结束当天挑战。",
+            "description": "每道题首次答错后还能重试多少次；设为 0 表示答错后立即结束本轮挑战。",
         },
         "pin_packet_message": {
             "type": "boolean",
@@ -255,7 +255,7 @@ CONFIG_SCHEMA = {
         },
         "timezone": {
             "type": "string",
-            "title": "每日限制、提醒与周榜时区",
+            "title": "提醒与周榜时区",
             "x-ui-section": "红包与答题",
             "x-ui-columns": 2,
             "x-ui-order": 470,
@@ -325,7 +325,7 @@ CONFIG_SCHEMA = {
         "packet_message_template": {
             "type": "string",
             "title": "红包开场模板",
-            "default": "<h1>AI 答题红包</h1><ul><li>总金额：<code>{total_amount}</code></li><li>题目数量：<code>{question_count}</code></li><li>红包 ID：<code>{redpacket_id}</code></li><li>今日日期：<code>{date}</code></li></ul><p>每人每天最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>",
+            "default": "<h1>AI 答题红包</h1><ul><li>总金额：<code>{total_amount}</code></li><li>题目数量：<code>{question_count}</code></li><li>红包 ID：<code>{redpacket_id}</code></li><li>今日日期：<code>{date}</code></li></ul><p>每人每轮最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>",
             "description": "场景占位符：{total_amount} 总金额、{question_count} 题目数、{redpacket_id} 红包 ID。所有模板均可使用 {date}、{daily_limit}、{retry_count}、{prefix}、{command}。新模板使用 Telegram Rich HTML；升级前保存的自定义 Telegram HTML 继续按普通消息发送。",
         },
         "question_message_template": {
@@ -343,7 +343,7 @@ CONFIG_SCHEMA = {
         "failed_message_template": {
             "type": "string",
             "title": "挑战失败模板",
-            "default": "<p><b>答题者：{answerer_name}</b></p><h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答题机会已用完，今天的挑战已结束</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
+            "default": "<p><b>答题者：{answerer_name}</b></p><h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答题机会已用完，本轮挑战已结束</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
             "description": "场景占位符：{answerer_name} 答题者姓名、{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。",
         },
         "settlement_message_template": {
