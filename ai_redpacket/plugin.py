@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.37"
+PLUGIN_VERSION = "0.1.38"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -2055,6 +2055,24 @@ class AIRedpacketPlugin(Plugin):
             return "interaction_bot"
         return "userbot_reply"
 
+    def _packet_is_active(self, packet: dict[str, Any] | None, *, now: float | None = None) -> bool:
+        if not packet:
+            return False
+        if str(packet.get("status") or "") != "active":
+            return False
+        try:
+            expires_at = float(packet.get("expires_at") or 0)
+        except (TypeError, ValueError):
+            return False
+        current = time.time() if now is None else float(now)
+        return expires_at > current
+
+    def _cancel_packet_message_finalize(self, packet_id: str) -> None:
+        job_id = f"finalize_packet_message_{packet_id}"
+        previous = self._timer_tasks.pop(job_id, None)
+        if previous is not None and not previous.done():
+            previous.cancel()
+
     def _schedule_packet_message_finalize(self, ctx: PluginContext, packet: dict[str, Any]) -> None:
         packet_id = str(packet.get("id") or "")
         if not packet_id:
@@ -2063,10 +2081,13 @@ class AIRedpacketPlugin(Plugin):
 
         async def finalize() -> None:
             current = self.storage.get_redpacket(packet_id) if self.storage is not None else dict(packet)
-            if current is None:
+            if not self._packet_is_active(current):
                 return
             message_id = None
             for attempt in range(PACKET_MESSAGE_CAPTURE_RETRIES):
+                current = self.storage.get_redpacket(packet_id) if self.storage is not None else current
+                if not self._packet_is_active(current):
+                    return
                 message_id = await self._resolve_packet_message_id(ctx, current, persist=True)
                 if message_id is not None:
                     break
@@ -2077,8 +2098,11 @@ class AIRedpacketPlugin(Plugin):
                     ctx,
                     "warn",
                     "开题消息 ID 捕获失败，list 链接可能暂时不可用",
-                    **{"红包ID": packet_id, "聊天ID": current.get("chat_id")},
+                    **{"红包ID": packet_id, "聊天ID": (current or {}).get("chat_id")},
                 )
+                return
+            current = self.storage.get_redpacket(packet_id) if self.storage is not None else current
+            if not self._packet_is_active(current):
                 return
             if not self._bool_config(ctx, "pin_packet_message", True):
                 return
@@ -2107,13 +2131,28 @@ class AIRedpacketPlugin(Plugin):
         *,
         message_id: int | None = None,
     ) -> bool:
-        chat_id = int(packet.get("chat_id") or 0)
+        packet_id = str(packet.get("id") or "")
+        current = self.storage.get_redpacket(packet_id) if self.storage is not None and packet_id else packet
+        if not self._packet_is_active(current):
+            return False
+        chat_id = int((current or {}).get("chat_id") or packet.get("chat_id") or 0)
         if not chat_id:
             return False
         if message_id is None:
-            message_id = await self._resolve_packet_message_id(ctx, packet)
-        if not message_id:
+            message_id = await self._resolve_packet_message_id(ctx, current or packet)
+        try:
+            message_id = int(message_id)
+        except (TypeError, ValueError):
             return False
+        if message_id <= 0:
+            return False
+        stored = (current or {}).get("message_id")
+        try:
+            if stored is not None and int(stored) > 0 and int(stored) != message_id:
+                # 只置顶该红包自己已绑定的开题消息，避免误钉其他消息。
+                return False
+        except (TypeError, ValueError):
+            pass
         send_via = self._packet_pin_send_via(ctx)
         messages = getattr(ctx, "messages", None)
         apply_actions = getattr(messages, "apply", None) if messages is not None else None
@@ -2134,7 +2173,7 @@ class AIRedpacketPlugin(Plugin):
                 "info",
                 "开题消息已置顶",
                 **{
-                    "红包ID": packet.get("id"),
+                    "红包ID": (current or packet).get("id"),
                     "聊天ID": chat_id,
                     "消息ID": int(message_id),
                     "通道": send_via,
@@ -2150,7 +2189,7 @@ class AIRedpacketPlugin(Plugin):
                 "info",
                 "开题消息已置顶",
                 **{
-                    "红包ID": packet.get("id"),
+                    "红包ID": (current or packet).get("id"),
                     "聊天ID": chat_id,
                     "消息ID": int(message_id),
                     "通道": "userbot_client",
@@ -2166,11 +2205,20 @@ class AIRedpacketPlugin(Plugin):
         return False
 
     async def _unpin_packet_opening(self, ctx: PluginContext, packet: dict[str, Any]) -> bool:
-        chat_id = int(packet.get("chat_id") or 0)
+        packet_id = str(packet.get("id") or "")
+        if packet_id:
+            self._cancel_packet_message_finalize(packet_id)
+        # 取消置顶只使用该红包已持久化的开题消息 ID，避免误取消其他消息。
+        current = self.storage.get_redpacket(packet_id) if self.storage is not None and packet_id else packet
+        source = current or packet
+        chat_id = int(source.get("chat_id") or 0)
         if not chat_id:
             return False
-        message_id = await self._resolve_packet_message_id(ctx, packet)
-        if not message_id:
+        try:
+            message_id = int(source.get("message_id"))
+        except (TypeError, ValueError):
+            return False
+        if message_id <= 0:
             return False
         client = getattr(ctx, "client", None)
         unpin = getattr(client, "unpin_message", None) if client is not None else None

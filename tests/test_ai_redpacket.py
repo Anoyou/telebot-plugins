@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.37")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.37")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.38")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.38")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -2417,6 +2417,66 @@ class PluginActionTest(unittest.TestCase):
                     timer_task = next(iter(plugin._timer_tasks.values()))
                     await timer_task
                 self.assertEqual(applied, [])
+
+        asyncio.run(run_case())
+
+
+    def test_finalize_does_not_repin_after_packet_closed(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="race-packet",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                applied = []
+                gate = asyncio.Event()
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        await gate.wait()
+                        if key == "ai_redpacket:packet:race-packet":
+                            return 5555
+                        return None
+
+                    async def apply(self, actions, **kwargs):
+                        applied.append((actions, kwargs))
+
+                class Client:
+                    async def unpin_message(self, chat_id, message_id):
+                        return None
+
+                class Context:
+                    account_id = 1
+                    config = {"pin_packet_message": True, "packet_pin_channel": "userbot"}
+                    account_config = {}
+                    messages = Messages()
+                    client = Client()
+                    log = None
+
+                async def fake_sleep(delay):
+                    return None
+
+                packet = plugin.storage.get_redpacket("race-packet")
+                with patch.object(plugin_module.asyncio, "sleep", fake_sleep):
+                    plugin._schedule_packet_message_finalize(Context(), packet)
+                    # 关闭时会取消未完成的置顶任务；此时消息 ID 尚未入库，不应误取消其他消息。
+                    await plugin._handle_admin_command(Context(), -1001, 1, 8, ["close", "race-packet"])
+                    gate.set()
+                    pending = list(plugin._timer_tasks.values())
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
+
+                self.assertEqual(applied, [])
+                self.assertEqual(plugin.storage.get_redpacket("race-packet")["status"], "closed")
 
         asyncio.run(run_case())
 
