@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.34")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.34")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.35")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.35")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -2257,6 +2257,116 @@ class PluginActionTest(unittest.TestCase):
         self.assertIn("1. 匿名标签 · 30", messages[0])
         self.assertNotIn("数据库中的真实姓名", messages[0])
 
+    def test_settlement_fallback_template_does_not_duplicate_extreme_names(self) -> None:
+        plugin = plugin_module.AIRedpacketPlugin()
+
+        class Storage:
+            def get_redpacket_settlement(self, account_id, redpacket_id):
+                return [
+                    {
+                        "user_id": 1,
+                        "user_display_name": "A",
+                        "reward": 30,
+                        "updated_at": 2.0,
+                    },
+                    {
+                        "user_id": 2,
+                        "user_display_name": "B",
+                        "reward": 10,
+                        "updated_at": 1.0,
+                    },
+                ]
+
+        class Context:
+            account_id = 1
+            config = {
+                # 故意使用会触发 KeyError 回退默认模板、且旧逻辑会把姓名塞进金额字段的模板。
+                "settlement_message_template": "坏模板 {missing_key} 运气王 · {luckiest_reward}\n倒霉蛋 · {unluckiest_reward}\n{ranking}"
+            }
+
+        plugin.storage = Storage()
+        messages = asyncio.run(
+            plugin._render_redpacket_settlement(
+                Context(),
+                {
+                    "id": "packet",
+                    "status": "finished",
+                    "total_amount": 40,
+                    "remaining_amount": 0,
+                },
+            )
+        )
+        text = messages[0]
+        self.assertIn("运气王：<b>A</b> · 30", text)
+        self.assertIn("倒霉蛋：<b>B</b> · 10", text)
+        self.assertNotIn("A · A · 30", text)
+        self.assertNotIn("B · B · 10", text)
+        self.assertEqual(text.count("运气王："), 1)
+        self.assertEqual(text.count("<b>A</b>"), 1)
+
+    def test_hourly_active_list_broadcast_matches_list_command(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="hourly-list",
+                    account_id=1,
+                    chat_id=-1002090852236,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=20,
+                    rewards=[10, 10],
+                    ttl_seconds=3600,
+                )
+                sent = []
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        if key.startswith("ai_redpacket:packet:"):
+                            return 1017939
+                        for item in sent:
+                            if item.get("save_message_id_key") == key:
+                                return 555
+                        return None
+
+                    async def send(self, **kwargs):
+                        sent.append(kwargs)
+                        return {"ok": True}
+
+                class Context:
+                    account_id = 1
+                    config = {"timezone": "Asia/Shanghai"}
+                    account_config = {}
+                    messages = Messages()
+                    log = None
+
+                job = types.SimpleNamespace(fired_at=datetime.fromisoformat("2026-07-24T15:10:00+08:00"))
+                await plugin._run_active_redpacket_list_broadcast(Context(), job)
+
+                self.assertEqual(len(sent), 1)
+                payload = sent[0]
+                self.assertEqual(payload["channel"], "interaction_bot")
+                self.assertEqual(payload["chat_id"], -1002090852236)
+                self.assertIn("hourly-list", payload["text"])
+                self.assertIn("正在进行的 AI 红包", payload["text"])
+                self.assertIn("https://t.me/c/2090852236/1017939", payload["text"])
+                self.assertEqual(
+                    payload["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+                    "airp:repayme:hourly-list",
+                )
+                self.assertEqual(
+                    payload["save_message_id_key"],
+                    "ai_redpacket:active-list:-1002090852236:2026072415",
+                )
+
+                # 同一小时桶不重复发送
+                await plugin._run_active_redpacket_list_broadcast(Context(), job)
+                self.assertEqual(len(sent), 1)
+
+        asyncio.run(run_case())
+
     def test_weekly_message_ranks_top_five_by_count_and_reward(self) -> None:
         plugin = plugin_module.AIRedpacketPlugin()
 
@@ -2368,6 +2478,7 @@ class PluginActionTest(unittest.TestCase):
                 self.assertEqual(jobs["redpacket_settlement_scan"], {"kind": "interval", "interval_sec": 30})
                 self.assertEqual(jobs["weekly_leaderboard"], {"kind": "cron", "cron": "0 10 * * 0"})
                 self.assertEqual(jobs["unfinished_redpacket_reminder"], {"kind": "cron", "cron": "0 8 * * *"})
+                self.assertEqual(jobs["active_redpacket_list_broadcast"], {"kind": "interval", "interval_sec": 3600})
                 self.assertIn("airp-7", plugin.commands)
                 await plugin.on_shutdown(Context())
                 self.assertEqual(unregistered, [True])

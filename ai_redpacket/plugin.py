@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.34"
+PLUGIN_VERSION = "0.1.35"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -617,6 +617,11 @@ class AIRedpacketPlugin(Plugin):
                 "unfinished_redpacket_reminder",
                 {"kind": "cron", "cron": "0 8 * * *"},
                 lambda job: self._run_unfinished_redpacket_reminder(ctx, job),
+            )
+            scheduler.register(
+                "active_redpacket_list_broadcast",
+                {"kind": "interval", "interval_sec": 3600},
+                lambda job: self._run_active_redpacket_list_broadcast(ctx, job),
             )
         await self._log(ctx, "info", "AI 答题红包插件已启动", version=PLUGIN_VERSION)
 
@@ -2366,11 +2371,8 @@ class AIRedpacketPlugin(Plugin):
             )
             extreme_values = self._settlement_extreme_values(ctx, "无", 0, "无", 0)
             return [
-                self._render_business_template(
+                self._render_settlement_message(
                     ctx,
-                    "settlement_message_template",
-                    SETTLEMENT_MESSAGE_TEMPLATE,
-                    LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
                     redpacket_id=html.escape(str(packet["id"])),
                     status=status,
                     claimed_amount=claimed_amount,
@@ -2438,11 +2440,8 @@ class AIRedpacketPlugin(Plugin):
                     int(unluckiest["reward"]),
                 )
                 messages.append(
-                    self._render_business_template(
+                    self._render_settlement_message(
                         ctx,
-                        "settlement_message_template",
-                        SETTLEMENT_MESSAGE_TEMPLATE,
-                        LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
                         redpacket_id=html.escape(str(packet["id"])),
                         status=status,
                         claimed_amount=claimed_amount,
@@ -2465,22 +2464,44 @@ class AIRedpacketPlugin(Plugin):
         unluckiest_name: str,
         unluckiest_reward: int,
     ) -> dict[str, Any]:
-        template = str(
-            (getattr(ctx, "config", None) or {}).get("settlement_message_template")
-            or LEGACY_SETTLEMENT_MESSAGE_TEMPLATE
-        )
-        luckiest_value: int | str = int(luckiest_reward)
-        unluckiest_value: int | str = int(unluckiest_reward)
-        if "{luckiest_name" not in template and "{luckiest_reward" in template:
-            luckiest_value = f"{luckiest_name} · {int(luckiest_reward)}"
-        if "{unluckiest_name" not in template and "{unluckiest_reward" in template:
-            unluckiest_value = f"{unluckiest_name} · {int(unluckiest_reward)}"
+        # 姓名与金额始终分开传；旧模板缺少 *_name 时改写模板，而不是把姓名塞进金额字段。
+        # 否则一旦渲染回退到含 {luckiest_name} 的默认模板，就会出现“A · A · 金额”。
+        _ = ctx
         return {
             "luckiest_name": luckiest_name,
-            "luckiest_reward": luckiest_value,
+            "luckiest_reward": int(luckiest_reward),
             "unluckiest_name": unluckiest_name,
-            "unluckiest_reward": unluckiest_value,
+            "unluckiest_reward": int(unluckiest_reward),
         }
+
+    def _adapt_settlement_template(self, template: str) -> str:
+        adapted = str(template or "")
+        if "{luckiest_name" not in adapted and "{luckiest_reward" in adapted:
+            adapted = adapted.replace("{luckiest_reward}", "{luckiest_name} · {luckiest_reward}")
+        if "{unluckiest_name" not in adapted and "{unluckiest_reward" in adapted:
+            adapted = adapted.replace("{unluckiest_reward}", "{unluckiest_name} · {unluckiest_reward}")
+        return adapted
+
+    def _render_settlement_message(self, ctx: PluginContext, **values: Any) -> str:
+        configured = str((getattr(ctx, "config", None) or {}).get("settlement_message_template") or "")
+        normalized = configured.strip()
+        if not normalized or normalized == LEGACY_SETTLEMENT_MESSAGE_TEMPLATE.strip():
+            template = SETTLEMENT_MESSAGE_TEMPLATE
+        else:
+            template = configured
+        template = self._adapt_settlement_template(template)
+        fallback = (
+            SETTLEMENT_MESSAGE_TEMPLATE
+            if self._uses_rich_template(
+                ctx,
+                "settlement_message_template",
+                SETTLEMENT_MESSAGE_TEMPLATE,
+                LEGACY_SETTLEMENT_MESSAGE_TEMPLATE,
+            )
+            else LEGACY_SETTLEMENT_MESSAGE_TEMPLATE
+        )
+        fallback = self._adapt_settlement_template(fallback)
+        return self._format_template(ctx, template, fallback, **values)
 
     def _weekly_period(
         self,
@@ -2651,6 +2672,7 @@ class AIRedpacketPlugin(Plugin):
         *,
         delivery_key: str,
         rich: bool = False,
+        reply_markup: dict[str, Any] | None = None,
     ) -> Any:
         messages = getattr(ctx, "messages", None)
         sender_name = "send_rich" if rich else "send"
@@ -2665,6 +2687,7 @@ class AIRedpacketPlugin(Plugin):
                 channel="interaction_bot",
                 chat_id=chat_id,
                 html=text,
+                reply_markup=reply_markup,
                 save_message_id_key=delivery_key,
             )
         else:
@@ -2673,11 +2696,46 @@ class AIRedpacketPlugin(Plugin):
                 chat_id=chat_id,
                 text=text,
                 parse_mode="html",
+                reply_markup=reply_markup,
                 save_message_id_key=delivery_key,
             )
         if callable(read_message_id) and not await read_message_id(delivery_key):
             raise RuntimeError("后台消息未确认投递成功")
         return result
+
+    async def _run_active_redpacket_list_broadcast(self, ctx: PluginContext, job: Any) -> None:
+        packets = self.storage.list_active_redpackets_for_account(ctx.account_id)
+        chat_ids = sorted({int(packet["chat_id"]) for packet in packets})
+        if not chat_ids:
+            return
+        hour_bucket = self._local_datetime(ctx, getattr(job, "fired_at", None)).strftime("%Y%m%d%H")
+        for chat_id in chat_ids:
+            try:
+                active_packets = self.storage.list_active_redpackets(ctx.account_id, chat_id)
+                if not active_packets:
+                    continue
+                text = await self._render_packets(ctx, chat_id, active_packets)
+                await self._send_background_message(
+                    ctx,
+                    chat_id,
+                    text,
+                    delivery_key=f"ai_redpacket:active-list:{chat_id}:{hour_bucket}",
+                    rich=False,
+                    reply_markup=self._payout_center_markup(ctx, active_packets),
+                )
+                await self._log(
+                    ctx,
+                    "info",
+                    "进行中红包列表已自动播报",
+                    **{"聊天ID": chat_id, "红包数量": len(active_packets), "小时桶": hour_bucket},
+                )
+            except Exception as exc:
+                await self._log(
+                    ctx,
+                    "error",
+                    "进行中红包列表自动播报失败",
+                    **{"聊天ID": chat_id, "错误类型": type(exc).__name__},
+                )
 
     def _usage(self, ctx: PluginContext) -> str:
         base = f"{self._prefix(ctx)}{self._command(ctx)}"
@@ -2697,6 +2755,7 @@ class AIRedpacketPlugin(Plugin):
             "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。\n"
             "答题消息中普通成员显示姓名，匿名管理员不能参与答题；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
             "list 原命令会自动删除，列表回执保留；已完结红包不会出现在列表中。\n"
+            "有进行中红包时，每 1 小时自动播报一次与 list 等效的列表。\n"
             "答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n"
             "红包最晚于创建日次日 08:30 到期；如昨日红包未领完，今日 08:00 会发送一次提醒。"
         )

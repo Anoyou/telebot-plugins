@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.34"
+PLUGIN_VERSION = "0.1.35"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -362,7 +362,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "红包列表模板",
             "default": "<b>正在进行的 AI 红包</b>\n{packets}\n\n未收到奖励：请先在群里发言，再点击下方对应红包的“申请补发奖励”。",
-            "description": "用于 {prefix}{command} list 和 /airp list。场景占位符：{packets} 红包条目或空列表提示、{packet_count} 进行中红包数量；另可使用全部通用占位符。",
+            "description": "用于 {prefix}{command} list、/airp list，以及每 1 小时自动播报的进行中列表。场景占位符：{packets} 红包条目或空列表提示、{packet_count} 进行中红包数量；另可使用全部通用占位符。",
         },
         "weekly_message_template": {
             "type": "string",
