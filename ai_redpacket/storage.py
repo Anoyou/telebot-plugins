@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class StorageError(RuntimeError):
@@ -115,7 +115,8 @@ class AIStorage:
                     status TEXT NOT NULL,
                     created_at REAL NOT NULL,
                     expires_at REAL NOT NULL,
-                    settled_at REAL
+                    settled_at REAL,
+                    message_id INTEGER
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_redpacket_chat
@@ -195,8 +196,6 @@ class AIStorage:
             redpacket_columns = {
                 str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket)").fetchall()
             }
-            if "settled_at" not in redpacket_columns:
-                conn.execute("ALTER TABLE redpacket ADD COLUMN settled_at REAL")
             attempt_columns = {
                 str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket_attempt)").fetchall()
             }
@@ -208,10 +207,14 @@ class AIStorage:
                 str(item["name"]) for item in conn.execute("PRAGMA table_info(redpacket_limit_reset)").fetchall()
             }
             rebuild_legacy_reset = "redpacket_id" not in reset_columns
-            rebuild_daily_attempts = current_version is not None and current_version < SCHEMA_VERSION
+            rebuild_daily_attempts = current_version is not None and current_version < 8
             if rebuild_legacy_reset or rebuild_daily_attempts:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    if "settled_at" not in redpacket_columns:
+                        conn.execute("ALTER TABLE redpacket ADD COLUMN settled_at REAL")
+                    if "message_id" not in redpacket_columns:
+                        conn.execute("ALTER TABLE redpacket ADD COLUMN message_id INTEGER")
                     if rebuild_legacy_reset:
                         conn.execute("ALTER TABLE redpacket_limit_reset RENAME TO redpacket_limit_reset_legacy")
                         conn.execute(
@@ -289,6 +292,22 @@ class AIStorage:
                     raise
             elif row is None:
                 conn.execute("INSERT INTO schema_meta(version) VALUES (?)", (SCHEMA_VERSION,))
+            elif (
+                current_version < SCHEMA_VERSION
+                or "settled_at" not in redpacket_columns
+                or "message_id" not in redpacket_columns
+            ):
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if "settled_at" not in redpacket_columns:
+                        conn.execute("ALTER TABLE redpacket ADD COLUMN settled_at REAL")
+                    if "message_id" not in redpacket_columns:
+                        conn.execute("ALTER TABLE redpacket ADD COLUMN message_id INTEGER")
+                    conn.execute("UPDATE schema_meta SET version = ?", (SCHEMA_VERSION,))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
 
     def get_source_cache(self, account_id: int, source_url: str) -> dict[str, Any] | None:
         with self.connect() as conn:
@@ -696,6 +715,22 @@ class AIStorage:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM redpacket WHERE id = ?", (redpacket_id,)).fetchone()
         return dict(row) if row else None
+
+    def set_redpacket_message_id(
+        self,
+        account_id: int,
+        redpacket_id: str,
+        message_id: int,
+    ) -> bool:
+        with self.transaction() as conn:
+            result = conn.execute(
+                """
+                UPDATE redpacket SET message_id = ?
+                WHERE account_id = ? AND id = ?
+                """,
+                (int(message_id), account_id, redpacket_id),
+            )
+        return result.rowcount == 1
 
     def list_redpackets(self, account_id: int, chat_id: int, limit: int = 10) -> list[dict[str, Any]]:
         with self.connect() as conn:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.35"
+PLUGIN_VERSION = "0.1.37"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -21,6 +21,7 @@ USAGE = (
     "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。"
     "匿名管理员不能参与答题红包；非匿名管理员和普通成员可正常参与。未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。"
     "{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。"
+    "开题消息 ID 会写入本地数据库，list 与小时播报可稳定跳转；可选择 UserBot 或交互 Bot 置顶，手动结束或自动结算后取消置顶。"
     "普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。"
     "答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。"
     "红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。"
@@ -208,7 +209,18 @@ CONFIG_SCHEMA = {
             "x-ui-columns": 2,
             "x-ui-order": 425,
             "default": True,
-            "description": "创建红包后由交互 Bot 置顶带领取按钮的原消息；需要 Bot 具备群管理置顶权限。",
+            "description": "创建红包后，开题消息发送成功时自动置顶；结束后会自动取消置顶。交互 Bot 无管理权限时，请把置顶通道改成 userbot。",
+        },
+        "packet_pin_channel": {
+            "type": "string",
+            "title": "开题消息置顶通道",
+            "x-ui-section": "红包与答题",
+            "x-ui-columns": 2,
+            "x-ui-order": 426,
+            "default": "userbot",
+            "enum": ["userbot", "interaction_bot"],
+            "enumNames": ["UserBot（推荐）", "交互 Bot"],
+            "description": "开题消息仍由交互 Bot 发送并保留按钮；置顶动作可改用 UserBot 权限执行，避免交互 Bot 不是管理员时置顶失败。",
         },
         "reward_min": {
             "type": "integer",
@@ -362,7 +374,7 @@ CONFIG_SCHEMA = {
             "type": "string",
             "title": "红包列表模板",
             "default": "<b>正在进行的 AI 红包</b>\n{packets}\n\n未收到奖励：请先在群里发言，再点击下方对应红包的“申请补发奖励”。",
-            "description": "用于 {prefix}{command} list、/airp list，以及每 1 小时自动播报的进行中列表。场景占位符：{packets} 红包条目或空列表提示、{packet_count} 进行中红包数量；另可使用全部通用占位符。",
+            "description": "用于 {prefix}{command} list、/airp list，以及每 1 小时自动播报（1 分钟后自动删除）的进行中列表。场景占位符：{packets} 红包条目或空列表提示、{packet_count} 进行中红包数量；另可使用全部通用占位符。",
         },
         "weekly_message_template": {
             "type": "string",

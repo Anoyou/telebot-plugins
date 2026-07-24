@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.35")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.35")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.37")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.37")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.2")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -301,6 +301,8 @@ class QuestionGenerationTest(unittest.TestCase):
             "default_total_amount": ("红包与答题", 2),
             "daily_limit": ("红包与答题", 2),
             "retry_count": ("红包与答题", 2),
+            "pin_packet_message": ("红包与答题", 2),
+            "packet_pin_channel": ("红包与答题", 2),
             "reward_min": ("红包与答题", 2),
             "reward_max": ("红包与答题", 2),
             "weekly_auto_publish": ("红包与答题", 2),
@@ -391,8 +393,9 @@ class StorageMigrationTest(unittest.TestCase):
                 reset_columns = {
                     row["name"] for row in conn.execute("PRAGMA table_info(redpacket_limit_reset)")
                 }
-            self.assertEqual(version, 8)
+            self.assertEqual(version, 9)
             self.assertIn("settled_at", redpacket_columns)
+            self.assertIn("message_id", redpacket_columns)
             self.assertIn("user_display_name", attempt_columns)
             self.assertNotIn("UNIQUE(account_id, user_id, redpacket_id, date)", attempt_sql)
             self.assertIn("redpacket_id", reset_columns)
@@ -458,7 +461,7 @@ class StorageMigrationTest(unittest.TestCase):
                     ORDER BY redpacket_id
                     """
                 ).fetchall()
-            self.assertEqual(version, 8)
+            self.assertEqual(version, 9)
             self.assertEqual(rows, [])
 
     def test_version_six_resets_are_cleared_without_touching_attempts_or_rewards(self) -> None:
@@ -527,7 +530,7 @@ class StorageMigrationTest(unittest.TestCase):
                     "SELECT total_amount, remaining_amount FROM redpacket WHERE id = 'packet'"
                 ).fetchone()
 
-            self.assertEqual(version, 8)
+            self.assertEqual(version, 9)
             self.assertEqual(reset_count, 0)
             self.assertIsNotNone(attempt)
             self.assertEqual((int(attempt["reward"]), int(attempt["success"])), (10, 1))
@@ -2304,6 +2307,203 @@ class PluginActionTest(unittest.TestCase):
         self.assertEqual(text.count("运气王："), 1)
         self.assertEqual(text.count("<b>A</b>"), 1)
 
+
+    def test_packet_message_id_is_persisted_and_used_for_list_links(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                packet = plugin.storage.create_redpacket(
+                    redpacket_id="persist-link",
+                    account_id=1,
+                    chat_id=-1002090852236,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                self.assertIsNone(packet.get("message_id"))
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        if key == "ai_redpacket:packet:persist-link":
+                            return 778899
+                        return None
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    messages = Messages()
+                    log = None
+
+                text = await plugin._render_packets(Context(), -1002090852236)
+                self.assertIn("https://t.me/c/2090852236/778899", text)
+                saved = plugin.storage.get_redpacket("persist-link")
+                self.assertEqual(int(saved["message_id"]), 778899)
+
+                class EmptyMessages:
+                    async def read_saved_message_id(self, key):
+                        return None
+
+                class ContextWithoutCache:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    messages = EmptyMessages()
+                    log = None
+
+                text_again = await plugin._render_packets(ContextWithoutCache(), -1002090852236)
+                self.assertIn("https://t.me/c/2090852236/778899", text_again)
+
+        asyncio.run(run_case())
+
+    def test_create_packet_finalizes_message_id_and_pins_via_userbot(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions(5))
+                applied = []
+                delays = []
+
+                async def fake_sleep(delay):
+                    delays.append(delay)
+
+                class Messages:
+                    async def read_saved_message_id(self, key):
+                        if key.startswith("ai_redpacket:packet:"):
+                            return 4242
+                        return None
+
+                    async def apply(self, actions, **kwargs):
+                        applied.append((actions, kwargs))
+
+                class Context:
+                    account_id = 1
+                    config = {
+                        "pin_packet_message": True,
+                        "packet_pin_channel": "userbot",
+                        "default_questions": 3,
+                        "reward_min": 1,
+                        "reward_max": 20,
+                    }
+                    account_config = {}
+                    messages = Messages()
+                    log = None
+
+                with patch.object(plugin_module.asyncio, "sleep", fake_sleep):
+                    actions = await plugin._create_packet(Context(), -1001, 99, 12, ["30", "3"])
+                    self.assertNotIn("pin", actions[0])
+                    self.assertTrue(actions[0]["save_message_id_key"].startswith("ai_redpacket:packet:"))
+                    timer_task = next(iter(plugin._timer_tasks.values()))
+                    await timer_task
+
+                packet = plugin.storage.list_redpackets(1, -1001)[0]
+                self.assertEqual(int(packet["message_id"]), 4242)
+                self.assertEqual(applied[0][0][0]["type"], "pin_message")
+                self.assertEqual(applied[0][0][0]["message_id"], 4242)
+                self.assertEqual(applied[0][0][0]["send_via"], "userbot_reply")
+                self.assertTrue(any(delay >= 0 for delay in delays))
+
+                # pin disabled should skip pin action
+                applied.clear()
+                plugin._timer_tasks.clear()
+                Context.config["pin_packet_message"] = False
+                with patch.object(plugin_module.asyncio, "sleep", fake_sleep):
+                    await plugin._create_packet(Context(), -1001, 99, 13, ["30", "3"])
+                    timer_task = next(iter(plugin._timer_tasks.values()))
+                    await timer_task
+                self.assertEqual(applied, [])
+
+        asyncio.run(run_case())
+
+    def test_close_and_settlement_unpin_packet_opening(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="unpin-me",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                plugin.storage.set_redpacket_message_id(1, "unpin-me", 9090)
+                unpinned = []
+
+                class Client:
+                    async def unpin_message(self, chat_id, message_id):
+                        unpinned.append((chat_id, message_id))
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    client = Client()
+                    messages = None
+                    log = None
+
+                actions = await plugin._handle_admin_command(Context(), -1001, 1, 8, ["close", "unpin-me"])
+                self.assertEqual(actions[0]["text"], "红包已关闭。")
+                self.assertEqual(unpinned, [(-1001, 9090)])
+
+                # settlement path
+                unpinned.clear()
+                plugin.storage.create_redpacket(
+                    redpacket_id="settle-unpin",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                plugin.storage.set_redpacket_message_id(1, "settle-unpin", 7070)
+                with plugin.storage.transaction() as conn:
+                    conn.execute("UPDATE redpacket SET status = 'finished' WHERE id = 'settle-unpin'")
+
+                class Messages:
+                    def __init__(self):
+                        self.saved = {}
+
+                    async def read_saved_message_id(self, key):
+                        return self.saved.get(key)
+
+                    async def send(self, **kwargs):
+                        key = kwargs.get("save_message_id_key")
+                        if key:
+                            self.saved[key] = 123
+                        return {"ok": True}
+
+                    async def send_rich(self, **kwargs):
+                        key = kwargs.get("save_message_id_key")
+                        if key:
+                            self.saved[key] = 123
+                        return {"ok": True}
+
+                class SettlementContext:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    client = Client()
+                    messages = Messages()
+                    log = None
+
+                await plugin._run_redpacket_settlements(SettlementContext(), types.SimpleNamespace())
+                self.assertIn((-1001, 7070), unpinned)
+                self.assertIsNotNone(plugin.storage.get_redpacket("settle-unpin")["settled_at"])
+
+        asyncio.run(run_case())
+
     def test_hourly_active_list_broadcast_matches_list_command(self) -> None:
         async def run_case() -> None:
             with tempfile.TemporaryDirectory() as tempdir:
@@ -2321,6 +2521,11 @@ class PluginActionTest(unittest.TestCase):
                     ttl_seconds=3600,
                 )
                 sent = []
+                applied = []
+                delays = []
+
+                async def fake_sleep(delay):
+                    delays.append(delay)
 
                 class Messages:
                     async def read_saved_message_id(self, key):
@@ -2335,6 +2540,9 @@ class PluginActionTest(unittest.TestCase):
                         sent.append(kwargs)
                         return {"ok": True}
 
+                    async def apply(self, actions, **kwargs):
+                        applied.append((actions, kwargs))
+
                 class Context:
                     account_id = 1
                     config = {"timezone": "Asia/Shanghai"}
@@ -2343,7 +2551,10 @@ class PluginActionTest(unittest.TestCase):
                     log = None
 
                 job = types.SimpleNamespace(fired_at=datetime.fromisoformat("2026-07-24T15:10:00+08:00"))
-                await plugin._run_active_redpacket_list_broadcast(Context(), job)
+                with patch.object(plugin_module.asyncio, "sleep", fake_sleep):
+                    await plugin._run_active_redpacket_list_broadcast(Context(), job)
+                    timer_task = next(iter(plugin._timer_tasks.values()))
+                    await timer_task
 
                 self.assertEqual(len(sent), 1)
                 payload = sent[0]
@@ -2360,10 +2571,16 @@ class PluginActionTest(unittest.TestCase):
                     payload["save_message_id_key"],
                     "ai_redpacket:active-list:-1002090852236:2026072415",
                 )
+                self.assertEqual(delays, [60])
+                self.assertEqual(applied[0][0][0]["type"], "delete_message")
+                self.assertEqual(applied[0][0][0]["message_id"], 555)
+                self.assertEqual(applied[0][0][0]["send_via"], "interaction_bot")
 
-                # 同一小时桶不重复发送
-                await plugin._run_active_redpacket_list_broadcast(Context(), job)
+                # 同一小时桶不重复发送，也不会再安排删除
+                with patch.object(plugin_module.asyncio, "sleep", fake_sleep):
+                    await plugin._run_active_redpacket_list_broadcast(Context(), job)
                 self.assertEqual(len(sent), 1)
+                self.assertEqual(len(applied), 1)
 
         asyncio.run(run_case())
 
@@ -3162,8 +3379,9 @@ class PluginActionTest(unittest.TestCase):
                 self.assertNotIn("text", announcement)
                 self.assertEqual(announcement["send_via"], "interaction_bot")
                 self.assertEqual(announcement["reply_markup"]["inline_keyboard"][0][0]["text"], "领取我的雨露")
-                self.assertTrue(announcement["pin"])
+                self.assertNotIn("pin", announcement)
                 self.assertTrue(announcement["save_message_id_key"].startswith("ai_redpacket:packet:"))
+                self.assertTrue(any(job_id.startswith("finalize_packet_message_") for job_id in plugin._timer_tasks))
 
                 ctx.config["pin_packet_message"] = False
                 unpinned_actions = await plugin._create_packet(ctx, -1001, 99, 13, ["30", "3"])

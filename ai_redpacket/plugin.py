@@ -31,11 +31,13 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.35"
+PLUGIN_VERSION = "0.1.37"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
 RESET_NOTICE_DELETE_SECONDS = 3
+LIST_BROADCAST_DELETE_SECONDS = 60
+PACKET_MESSAGE_CAPTURE_RETRIES = 10
 QUESTION_TIMEOUT_DELETE_SECONDS = 5
 DEFAULT_ANSWER_TIMEOUT_SECONDS = 300
 ANSWER_CLICK_COOLDOWN_SECONDS = 2
@@ -573,6 +575,8 @@ class AIRedpacketPlugin(Plugin):
         "reward_min",
         "reward_max",
         "retry_count",
+        "pin_packet_message",
+        "packet_pin_channel",
         "timezone",
         "weekly_auto_publish",
     }
@@ -597,6 +601,7 @@ class AIRedpacketPlugin(Plugin):
     async def on_startup(self, ctx: PluginContext) -> None:
         self._ensure_storage(ctx)
         self._shorten_existing_redpacket_expirations(ctx)
+        await self._recover_active_packet_messages(ctx)
         self.commands = {
             self._command(ctx): self._legacy_command,
             self._weekly_command(ctx): self._legacy_weekly_command,
@@ -884,7 +889,10 @@ class AIRedpacketPlugin(Plugin):
                 actions.append(delete_action)
             return actions
         if action in {"close", "off"} and len(args) >= 2:
+            packet = self.storage.get_redpacket(args[1])
             closed = self.storage.close_redpacket(ctx.account_id, chat_id, args[1])
+            if closed and packet is not None:
+                await self._unpin_packet_opening(ctx, packet)
             text = "红包已关闭。" if closed else "没有找到可关闭的红包。"
             actions = [_send(text, chat_id=chat_id, reply_to=None if closed else reply_to)]
             delete_action = _delete_command(reply_to, chat_id=chat_id) if closed else None
@@ -1326,7 +1334,6 @@ class AIRedpacketPlugin(Plugin):
                 chat_id=chat_id,
                 markup=markup,
                 via="interaction_bot",
-                pin=self._bool_config(ctx, "pin_packet_message", True),
                 save_message_id_key=f"ai_redpacket:packet:{packet_id}",
                 rich=self._uses_rich_template(
                     ctx,
@@ -1336,6 +1343,7 @@ class AIRedpacketPlugin(Plugin):
                 ),
             ),
         ]
+        self._schedule_packet_message_finalize(ctx, packet)
         delete_action = _delete_command(reply_to, chat_id=chat_id)
         if delete_action:
             actions.append(delete_action)
@@ -1985,12 +1993,9 @@ class AIRedpacketPlugin(Plugin):
     ) -> str:
         packets = packets if packets is not None else self.storage.list_active_redpackets(ctx.account_id, chat_id)
         lines: list[str] = []
-        read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
         for packet in packets:
             packet_date = self._date_for_timestamp(ctx, packet["created_at"])
-            message_id = None
-            if callable(read_message_id):
-                message_id = await read_message_id(f"ai_redpacket:packet:{packet['id']}")
+            message_id = await self._resolve_packet_message_id(ctx, packet)
             message_link = self._telegram_message_link(chat_id, message_id)
             opening = (
                 f'<a href="{message_link}">点击此处跳转，领取今日份雨露均沾</a>'
@@ -2012,6 +2017,193 @@ class AIRedpacketPlugin(Plugin):
             packets=packet_entries,
             packet_count=len(packets),
         )
+
+
+    async def _resolve_packet_message_id(
+        self,
+        ctx: PluginContext,
+        packet: dict[str, Any],
+        *,
+        persist: bool = True,
+    ) -> int | None:
+        stored = packet.get("message_id")
+        try:
+            if stored is not None and int(stored) > 0:
+                return int(stored)
+        except (TypeError, ValueError):
+            pass
+        read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
+        if not callable(read_message_id):
+            return None
+        message_id = await read_message_id(f"ai_redpacket:packet:{packet['id']}")
+        try:
+            parsed = int(message_id)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        if persist and self.storage is not None:
+            setter = getattr(self.storage, "set_redpacket_message_id", None)
+            if callable(setter):
+                setter(ctx.account_id, str(packet["id"]), parsed)
+                packet["message_id"] = parsed
+        return parsed
+
+    def _packet_pin_send_via(self, ctx: PluginContext) -> str:
+        value = str((ctx.config or {}).get("packet_pin_channel") or "userbot").strip().lower()
+        if value in {"interaction_bot", "bot", "交互bot", "交互 bot"}:
+            return "interaction_bot"
+        return "userbot_reply"
+
+    def _schedule_packet_message_finalize(self, ctx: PluginContext, packet: dict[str, Any]) -> None:
+        packet_id = str(packet.get("id") or "")
+        if not packet_id:
+            return
+        job_id = f"finalize_packet_message_{packet_id}"
+
+        async def finalize() -> None:
+            current = self.storage.get_redpacket(packet_id) if self.storage is not None else dict(packet)
+            if current is None:
+                return
+            message_id = None
+            for attempt in range(PACKET_MESSAGE_CAPTURE_RETRIES):
+                message_id = await self._resolve_packet_message_id(ctx, current, persist=True)
+                if message_id is not None:
+                    break
+                if attempt + 1 < PACKET_MESSAGE_CAPTURE_RETRIES:
+                    await asyncio.sleep(0.2)
+            if message_id is None:
+                await self._log(
+                    ctx,
+                    "warn",
+                    "开题消息 ID 捕获失败，list 链接可能暂时不可用",
+                    **{"红包ID": packet_id, "聊天ID": current.get("chat_id")},
+                )
+                return
+            if not self._bool_config(ctx, "pin_packet_message", True):
+                return
+            await self._pin_packet_opening(ctx, current, message_id=message_id)
+
+        self._schedule_timer(ctx, job_id, 0.05, finalize)
+
+    async def _recover_active_packet_messages(self, ctx: PluginContext) -> None:
+        if self.storage is None:
+            return
+        for packet in self.storage.list_active_redpackets_for_account(ctx.account_id):
+            try:
+                await self._resolve_packet_message_id(ctx, packet, persist=True)
+            except Exception as exc:
+                await self._log(
+                    ctx,
+                    "warn",
+                    "启动时恢复开题消息 ID 失败",
+                    **{"红包ID": packet.get("id"), "错误类型": type(exc).__name__},
+                )
+
+    async def _pin_packet_opening(
+        self,
+        ctx: PluginContext,
+        packet: dict[str, Any],
+        *,
+        message_id: int | None = None,
+    ) -> bool:
+        chat_id = int(packet.get("chat_id") or 0)
+        if not chat_id:
+            return False
+        if message_id is None:
+            message_id = await self._resolve_packet_message_id(ctx, packet)
+        if not message_id:
+            return False
+        send_via = self._packet_pin_send_via(ctx)
+        messages = getattr(ctx, "messages", None)
+        apply_actions = getattr(messages, "apply", None) if messages is not None else None
+        if callable(apply_actions):
+            await apply_actions(
+                [
+                    {
+                        "type": "pin_message",
+                        "chat_id": chat_id,
+                        "message_id": int(message_id),
+                        "send_via": send_via,
+                    }
+                ],
+                entry_key=ENTRY_KEY,
+            )
+            await self._log(
+                ctx,
+                "info",
+                "开题消息已置顶",
+                **{
+                    "红包ID": packet.get("id"),
+                    "聊天ID": chat_id,
+                    "消息ID": int(message_id),
+                    "通道": send_via,
+                },
+            )
+            return True
+        client = getattr(ctx, "client", None)
+        pin = getattr(client, "pin_message", None) if client is not None else None
+        if callable(pin):
+            await pin(chat_id, int(message_id), notify=False)
+            await self._log(
+                ctx,
+                "info",
+                "开题消息已置顶",
+                **{
+                    "红包ID": packet.get("id"),
+                    "聊天ID": chat_id,
+                    "消息ID": int(message_id),
+                    "通道": "userbot_client",
+                },
+            )
+            return True
+        await self._log(
+            ctx,
+            "warn",
+            "开题消息置顶失败：当前没有可用置顶能力",
+            **{"红包ID": packet.get("id"), "聊天ID": chat_id, "消息ID": int(message_id)},
+        )
+        return False
+
+    async def _unpin_packet_opening(self, ctx: PluginContext, packet: dict[str, Any]) -> bool:
+        chat_id = int(packet.get("chat_id") or 0)
+        if not chat_id:
+            return False
+        message_id = await self._resolve_packet_message_id(ctx, packet)
+        if not message_id:
+            return False
+        client = getattr(ctx, "client", None)
+        unpin = getattr(client, "unpin_message", None) if client is not None else None
+        if callable(unpin):
+            try:
+                await unpin(chat_id, int(message_id))
+                await self._log(
+                    ctx,
+                    "info",
+                    "开题消息已取消置顶",
+                    **{"红包ID": packet.get("id"), "聊天ID": chat_id, "消息ID": int(message_id)},
+                )
+                return True
+            except Exception as exc:
+                await self._log(
+                    ctx,
+                    "warn",
+                    "开题消息取消置顶失败",
+                    **{
+                        "红包ID": packet.get("id"),
+                        "聊天ID": chat_id,
+                        "消息ID": int(message_id),
+                        "错误类型": type(exc).__name__,
+                    },
+                )
+                return False
+        await self._log(
+            ctx,
+            "warn",
+            "开题消息取消置顶跳过：当前没有 userbot 取消置顶能力",
+            **{"红包ID": packet.get("id"), "聊天ID": chat_id, "消息ID": int(message_id)},
+        )
+        return False
 
     def _telegram_message_link(self, chat_id: int, message_id: Any) -> str | None:
         chat_value = str(chat_id)
@@ -2243,6 +2435,7 @@ class AIRedpacketPlugin(Plugin):
                         rich=rich,
                     )
                 self.storage.mark_redpacket_settled(ctx.account_id, str(packet["id"]))
+                await self._unpin_packet_opening(ctx, packet)
                 await self._log(
                     ctx,
                     "info",
@@ -2323,11 +2516,8 @@ class AIRedpacketPlugin(Plugin):
             LEGACY_REMINDER_MESSAGE_TEMPLATE,
         )
         entries: list[str] = []
-        read_message_id = getattr(getattr(ctx, "messages", None), "read_saved_message_id", None)
         for packet in packets:
-            message_id = None
-            if callable(read_message_id):
-                message_id = await read_message_id(f"ai_redpacket:packet:{packet['id']}")
+            message_id = await self._resolve_packet_message_id(ctx, packet)
             message_link = self._telegram_message_link(chat_id, message_id)
             opening = (
                 f'<a href="{message_link}">点击此处跳转，领取今日份雨露均沾</a>'
@@ -2715,14 +2905,24 @@ class AIRedpacketPlugin(Plugin):
                 if not active_packets:
                     continue
                 text = await self._render_packets(ctx, chat_id, active_packets)
-                await self._send_background_message(
+                delivery_key = f"ai_redpacket:active-list:{chat_id}:{hour_bucket}"
+                sent = await self._send_background_message(
                     ctx,
                     chat_id,
                     text,
-                    delivery_key=f"ai_redpacket:active-list:{chat_id}:{hour_bucket}",
+                    delivery_key=delivery_key,
                     rich=False,
                     reply_markup=self._payout_center_markup(ctx, active_packets),
                 )
+                if sent is not None:
+                    self._schedule_saved_message_delete(
+                        ctx,
+                        chat_id,
+                        delivery_key,
+                        delay_seconds=LIST_BROADCAST_DELETE_SECONDS,
+                        job_id=f"delete_active_list_{chat_id}_{hour_bucket}",
+                        log_message="进行中红包列表播报已自动删除",
+                    )
                 await self._log(
                     ctx,
                     "info",
@@ -2755,7 +2955,7 @@ class AIRedpacketPlugin(Plugin):
             "重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时后提示 5 秒再删除且不消耗次数。\n"
             "答题消息中普通成员显示姓名，匿名管理员不能参与答题；答对后未收到奖励，请先在群里发言，再点击“申请补发奖励”。\n"
             "list 原命令会自动删除，列表回执保留；已完结红包不会出现在列表中。\n"
-            "有进行中红包时，每 1 小时自动播报一次与 list 等效的列表。\n"
+            "有进行中红包时，每 1 小时自动播报一次与 list 等效的列表，播报消息 1 分钟后自动删除。\n"
             "答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n"
             "红包最晚于创建日次日 08:30 到期；如昨日红包未领完，今日 08:00 会发送一次提醒。"
         )
