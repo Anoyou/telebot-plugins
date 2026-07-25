@@ -30,7 +30,7 @@ MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "game:"
 INTERACTION_GAME_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.1.10"
+PLUGIN_VERSION = "1.1.11"
 
 
 # ─────────────────────────────────────────────────────
@@ -888,6 +888,15 @@ class Game24Plugin(Plugin):
 
     # ── incoming：答题 ─────────────────────────
     async def on_message(self, ctx: PluginContext, event: events.NewMessage.Event) -> None:
+        # incoming 会投递群内的每一条消息。先用事件上的同步字段排除没有
+        # 活跃游戏的聊天，避免无关消息触发 Telethon get_sender 网络回查。
+        chat_id = _event_chat_id(event)
+        if chat_id is None:
+            return
+        gs = self._games.get(chat_id)
+        if not gs or not gs.active:
+            return
+
         msg = await _adapt_incoming_message(event)
         if msg.chat_id is None:
             return
@@ -895,10 +904,6 @@ class Game24Plugin(Plugin):
             return
         # 兼容兜底：无法识别 self id 时，仍保留 outgoing 保护，避免误处理自己消息
         if self._self_tg_user_id is None and msg.outgoing and msg.sender_id is not None:
-            return
-
-        gs = self._games.get(msg.chat_id)
-        if not gs or not gs.active:
             return
 
         async with self._lock_for(msg.chat_id):

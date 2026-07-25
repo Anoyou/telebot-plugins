@@ -168,6 +168,34 @@ def answer_payload(*, text: str, user_id: int = 111, message_id: int = 20, name:
 
 
 class InteractionPayoutContractTests(unittest.TestCase):
+    def test_game24_ignores_inactive_chat_without_resolving_sender(self) -> None:
+        class SlowSenderEvent:
+            chat_id = -1002014253433
+            id = 1736402
+            sender_id = 783865204
+            raw_text = "与 24 点无关的普通群消息"
+            outgoing = False
+
+            def __init__(self) -> None:
+                self.get_sender_calls = 0
+
+            async def get_sender(self):
+                self.get_sender_calls += 1
+                await asyncio.Event().wait()
+
+        async def scenario() -> None:
+            plugin = game24_module.Game24Plugin()
+            event = SlowSenderEvent()
+
+            await asyncio.wait_for(
+                plugin.on_message(PluginContext(feature_key="game24"), event),
+                timeout=0.05,
+            )
+
+            self.assertEqual(event.get_sender_calls, 0)
+
+        asyncio.run(scenario())
+
     def test_math10_answer_reads_saved_message_id_from_messages_facade(self) -> None:
         async def scenario() -> None:
             plugin = math10_module.Math10Plugin()
@@ -204,7 +232,7 @@ class InteractionPayoutContractTests(unittest.TestCase):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
             self.assertIn("v1.0.10", math_actions[0]["text"])
-            self.assertIn("v1.1.10", game_actions[0]["text"])
+            self.assertIn("v1.1.11", game_actions[0]["text"])
 
         asyncio.run(scenario())
 
