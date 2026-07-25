@@ -31,7 +31,7 @@ from app.worker.plugins.base import (
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.38"
+PLUGIN_VERSION = "0.1.39"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -2220,11 +2220,14 @@ class AIRedpacketPlugin(Plugin):
             return False
         if message_id <= 0:
             return False
-        client = getattr(ctx, "client", None)
-        unpin = getattr(client, "unpin_message", None) if client is not None else None
-        if callable(unpin):
-            try:
+        try:
+            client = getattr(ctx, "client", None)
+            unpin = getattr(client, "unpin_message", None) if client is not None else None
+            if callable(unpin):
                 await unpin(chat_id, int(message_id))
+                marker = getattr(self.storage, "mark_redpacket_unpinned", None)
+                if callable(marker):
+                    marker(ctx.account_id, packet_id, int(message_id))
                 await self._log(
                     ctx,
                     "info",
@@ -2232,23 +2235,23 @@ class AIRedpacketPlugin(Plugin):
                     **{"红包ID": packet.get("id"), "聊天ID": chat_id, "消息ID": int(message_id)},
                 )
                 return True
-            except Exception as exc:
-                await self._log(
-                    ctx,
-                    "warn",
-                    "开题消息取消置顶失败",
-                    **{
-                        "红包ID": packet.get("id"),
-                        "聊天ID": chat_id,
-                        "消息ID": int(message_id),
-                        "错误类型": type(exc).__name__,
-                    },
-                )
-                return False
+        except Exception as exc:
+            await self._log(
+                ctx,
+                "warn",
+                "开题消息取消置顶失败，将由结算任务重试",
+                **{
+                    "红包ID": packet.get("id"),
+                    "聊天ID": chat_id,
+                    "消息ID": int(message_id),
+                    "错误类型": type(exc).__name__,
+                },
+            )
+            return False
         await self._log(
             ctx,
             "warn",
-            "开题消息取消置顶跳过：当前没有 userbot 取消置顶能力",
+            "开题消息取消置顶待重试：当前没有 userbot 取消置顶能力",
             **{"红包ID": packet.get("id"), "聊天ID": chat_id, "消息ID": int(message_id)},
         )
         return False
@@ -2483,7 +2486,6 @@ class AIRedpacketPlugin(Plugin):
                         rich=rich,
                     )
                 self.storage.mark_redpacket_settled(ctx.account_id, str(packet["id"]))
-                await self._unpin_packet_opening(ctx, packet)
                 await self._log(
                     ctx,
                     "info",
@@ -2497,6 +2499,10 @@ class AIRedpacketPlugin(Plugin):
                     "AI 红包结算发布失败",
                     **{"红包ID": packet["id"], "错误类型": type(exc).__name__},
                 )
+        pending_unpins = getattr(self.storage, "list_pending_redpacket_unpins", None)
+        if callable(pending_unpins):
+            for packet in pending_unpins(ctx.account_id):
+                await self._unpin_packet_opening(ctx, packet)
 
     async def _run_unfinished_redpacket_reminder(self, ctx: PluginContext, job: Any) -> None:
         fired_at = self._local_datetime(ctx, getattr(job, "fired_at", None))

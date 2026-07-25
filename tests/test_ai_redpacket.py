@@ -201,9 +201,9 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.38")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.38")
-        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.2")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.39")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.39")
+        self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.73.0-beta.15")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
         self.assertEqual(properties["generation_count"]["maximum"], 500)
@@ -1370,9 +1370,17 @@ class StorageFlowTest(unittest.TestCase):
         rows = self.storage.get_redpacket_settlement(1, "settlement")
         self.assertEqual([row["reward"] for row in rows], [20, 10])
         self.assertEqual({row["user_display_name"] for row in rows}, {"名字特别特别特别长甲", "乙"})
+        self.storage.set_redpacket_message_id(1, "settlement", 1357)
         self.assertTrue(self.storage.mark_redpacket_settled(1, "settlement"))
         self.assertFalse(self.storage.mark_redpacket_settled(1, "settlement"))
         self.assertEqual(self.storage.list_unsettled_redpackets(1), [])
+        self.assertEqual(
+            [packet["id"] for packet in self.storage.list_pending_redpacket_unpins(1)],
+            ["settlement"],
+        )
+        self.assertTrue(self.storage.mark_redpacket_unpinned(1, "settlement", 1357))
+        self.assertFalse(self.storage.mark_redpacket_unpinned(1, "settlement", 1357))
+        self.assertEqual(self.storage.list_pending_redpacket_unpins(1), [])
 
     def test_expired_packet_becomes_available_for_settlement(self) -> None:
         self._create_packet("expired-settlement", 1)
@@ -2514,6 +2522,7 @@ class PluginActionTest(unittest.TestCase):
                 actions = await plugin._handle_admin_command(Context(), -1001, 1, 8, ["close", "unpin-me"])
                 self.assertEqual(actions[0]["text"], "红包已关闭。")
                 self.assertEqual(unpinned, [(-1001, 9090)])
+                self.assertIsNone(plugin.storage.get_redpacket("unpin-me")["message_id"])
 
                 # settlement path
                 unpinned.clear()
@@ -2560,7 +2569,69 @@ class PluginActionTest(unittest.TestCase):
 
                 await plugin._run_redpacket_settlements(SettlementContext(), types.SimpleNamespace())
                 self.assertIn((-1001, 7070), unpinned)
-                self.assertIsNotNone(plugin.storage.get_redpacket("settle-unpin")["settled_at"])
+                settled = plugin.storage.get_redpacket("settle-unpin")
+                self.assertIsNotNone(settled["settled_at"])
+                self.assertIsNone(settled["message_id"])
+
+        asyncio.run(run_case())
+
+    def test_settlement_scan_retries_unpin_for_already_settled_packet(self) -> None:
+        async def run_case() -> None:
+            with tempfile.TemporaryDirectory() as tempdir:
+                plugin = plugin_module.AIRedpacketPlugin()
+                plugin.storage = storage_module.AIStorage(Path(tempdir) / "db.sqlite3")
+                plugin.storage.replace_bank(account_id=1, bank_id="bank", title="测试", questions=_questions())
+                plugin.storage.create_redpacket(
+                    redpacket_id="retry-unpin",
+                    account_id=1,
+                    chat_id=-1001,
+                    creator_id=1,
+                    bank_id="bank",
+                    total_amount=10,
+                    rewards=[10],
+                    ttl_seconds=3600,
+                )
+                plugin.storage.set_redpacket_message_id(1, "retry-unpin", 8080)
+                with plugin.storage.transaction() as conn:
+                    conn.execute(
+                        "UPDATE redpacket SET status = 'finished', settled_at = ? WHERE id = ?",
+                        (plugin_module.time.time(), "retry-unpin"),
+                    )
+
+                calls = []
+                logs = []
+
+                class Client:
+                    def __init__(self, fail):
+                        self.fail = fail
+
+                    async def unpin_message(self, chat_id, message_id):
+                        calls.append((chat_id, message_id, self.fail))
+                        if self.fail:
+                            raise PermissionError("sandbox denied")
+
+                async def log(level, message, **detail):
+                    logs.append((level, message, detail))
+
+                class Context:
+                    account_id = 1
+                    config = {}
+                    account_config = {}
+                    messages = None
+
+                first = Context()
+                first.client = Client(True)
+                first.log = log
+                await plugin._run_redpacket_settlements(first, types.SimpleNamespace())
+                self.assertEqual(plugin.storage.get_redpacket("retry-unpin")["message_id"], 8080)
+                self.assertTrue(any("将由结算任务重试" in message for _level, message, _detail in logs))
+
+                second = Context()
+                second.client = Client(False)
+                second.log = log
+                await plugin._run_redpacket_settlements(second, types.SimpleNamespace())
+                self.assertIsNone(plugin.storage.get_redpacket("retry-unpin")["message_id"])
+                self.assertEqual(calls, [(-1001, 8080, True), (-1001, 8080, False)])
 
         asyncio.run(run_case())
 

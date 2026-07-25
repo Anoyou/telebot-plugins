@@ -838,6 +838,38 @@ class AIStorage:
             )
         return result.rowcount == 1
 
+    def list_pending_redpacket_unpins(self, account_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM redpacket
+                WHERE account_id = ? AND message_id IS NOT NULL
+                  AND (
+                    status = 'closed'
+                    OR (status IN ('finished', 'expired') AND settled_at IS NOT NULL)
+                  )
+                ORDER BY created_at
+                """,
+                (account_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_redpacket_unpinned(
+        self,
+        account_id: int,
+        redpacket_id: str,
+        message_id: int,
+    ) -> bool:
+        with self.transaction() as conn:
+            result = conn.execute(
+                """
+                UPDATE redpacket SET message_id = NULL
+                WHERE account_id = ? AND id = ? AND message_id = ?
+                """,
+                (account_id, redpacket_id, int(message_id)),
+            )
+        return result.rowcount == 1
+
     def unfinished_redpackets_created_between(
         self,
         account_id: int,
