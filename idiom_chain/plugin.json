@@ -3,7 +3,7 @@
   "display_name": "成语接龙",
   "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
   "author": "Anoyou",
-  "version": "1.0.7",
+  "version": "1.0.14",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -57,7 +57,8 @@
       "command",
       "timeout",
       "forbidden_words"
-    ]
+    ],
+    "x-usage-guide": "管理员发送 {prefix}{command} 奖励金额 开启成语接龙；群友按上一条成语尾字继续回复，禁词和超时时间可在配置页调整。"
   },
   "license": "MIT",
   "category": "interactive",
@@ -105,14 +106,10 @@
       "result_contract": {
         "actions": [
           "send_message",
+          "payout",
           "end_session",
           "result",
           "settlement"
-        ],
-        "send_via": [
-          "interaction_bot",
-          "userbot_reply",
-          "bbot_notice"
         ]
       },
       "input_schema": {
@@ -138,9 +135,55 @@
         "mode": "announce_only",
         "winner_field": "actor.user_id",
         "amount_field": "prize"
-      }
+      },
+      "dispatch_modes": [
+        "admin_command",
+        "public_keyword"
+      ],
+      "message_channels": {
+        "admin_command": "userbot_reply",
+        "public_keyword": "interaction_bot"
+      },
+      "money_channel": "userbot_reply",
+      "participant_policy": "open_race"
     }
   ],
-  "min_telepilot_version": "0.30.4",
-  "interaction_profile": "session_game"
+  "min_telepilot_version": "0.33.0",
+  "interaction_profile": "session_game",
+  "usage": "管理员发送 {prefix}{command} 奖励金额开启成语接龙；群友按上一条成语尾字继续回复，禁词和超时时间可在配置页调整。普通回复继承 TelePilot 当前会话通道；每轮/终局奖励返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。",
+  "event_subscriptions": [
+    {
+      "events": [
+        "command"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "owner_only",
+      "description": "账号主人或授权管理员通过 UserBot 命令触发。"
+    },
+    {
+      "events": [
+        "message",
+        "session_close"
+      ],
+      "source": [
+        "interaction_bot"
+      ],
+      "scope": "rule_bound",
+      "description": "交互规则命中后由交互 Bot 投递会话事件。"
+    },
+    {
+      "events": [
+        "payment_confirmed"
+      ],
+      "source": [
+        "external_payment_notice",
+        "userbot"
+      ],
+      "scope": "rule_bound",
+      "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
+    }
+  ],
+  "capabilities": {}
 }

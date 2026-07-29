@@ -22,6 +22,11 @@ from typing import Any
 
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
+
+try:  # pragma: no cover - older TelePilot compatibility
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover
+    event_from_interaction_payload = None  # type: ignore[assignment]
 from .manifest import (
     LEGACY_IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT,
     LEGACY_INVALID_PRIZE_MESSAGE_TEMPLATE_DEFAULT,
@@ -31,6 +36,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+PLUGIN_VERSION = "1.1.29"
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -342,13 +348,13 @@ class DiceGridHuntPlugin(Plugin):
         self._template_guide_line = "回复 <code>1-9</code> 选择你认为答案所在的格子。"
         self._template_reward_line = "首个答对者奖励：<b>+{prize}</b> · 超时 {timeout} 秒"
         self._round_message_template = (
-            "<b>九宫格竞猜</b>\n"
+            "<b>九宫格竞猜v{version} 开始</b>\n"
             "目标：<b>{target_sum}</b> · 回 <code>1-9</code>\n"
             "奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s"
         )
         self._in_progress_message_template = IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT
         self._success_message_template = (
-            "{winner} 答对：<b>{answer_index}</b>\n"
+            "{winner} 答对：图 <b>{answer_index}</b>\n"
             "用时 {elapsed}s · 奖励 <b>+{prize}</b>"
         )
         self._timeout_message_template = (
@@ -447,34 +453,39 @@ class DiceGridHuntPlugin(Plugin):
             minimum=10,
             maximum=86400,
         )
-        rd = self._round_from_session(payload)
-        if rd and not rd.answered and not self._round_expired(rd):
-            return [
-                {
-                    "type": "send_message",
-                    "text": self._render_text(
-                        self._in_progress_message_template,
-                        {
-                            "prefix": current_command_prefix(),
-                            "command": self._command,
-                            "force_stop_command": self._force_stop_command,
-                        },
-                    ),
-                    "parse_mode": "html",
-                }
-            ]
-        rd = self._new_round(prize, timeout=timeout)
+        async with self._get_lock(chat_id):
+            rd = self._round_from_session(payload) or self._rounds.get(chat_id)
+            if rd and not rd.answered and not self._round_expired(rd):
+                return [
+                    {
+                        "type": "send_message",
+                        "chat_id": chat_id,
+                        "text": self._render_text(
+                            self._in_progress_message_template,
+                            {
+                                "prefix": current_command_prefix(),
+                                "command": self._command,
+                                "force_stop_command": self._force_stop_command,
+                            },
+                        ),
+                        "parse_mode": "html",
+                    }
+                ]
+            rd = self._new_round(prize, timeout=timeout)
+            self._rounds[chat_id] = rd
 
         if ctx.log:
             await ctx.log("info", f"[dice_grid_hunt] 交互 Bot 已开局 chat={chat_id} prize={prize} timeout={timeout}")
         return [
             {
                 "type": "send_photo",
+                "chat_id": chat_id,
                 "photo_base64": base64.b64encode(_render_grid_png(rd)).decode("ascii"),
                 "filename": "dice_grid_hunt.png",
                 "caption": self._render_round_text(rd, include_guide=True),
                 "parse_mode": "html",
                 "reply_to_message_id": self._payload_message_id(payload),
+                "save_message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
             },
             {"type": "update_session", "data": self._round_to_session(rd)},
         ]
@@ -488,66 +499,70 @@ class DiceGridHuntPlugin(Plugin):
         if pick is None:
             return []
 
-        rd = self._round_from_session(payload)
-        if not rd or rd.answered:
-            return []
-        if self._round_expired(rd):
+        async with self._get_lock(chat_id):
+            rd = self._round_from_session(payload) or self._rounds.get(chat_id)
+            if not rd or rd.answered:
+                return []
+            if self._round_expired(rd):
+                rd.answered = True
+                self._rounds.pop(chat_id, None)
+                return [
+                    {
+                        "type": "send_message",
+                        "chat_id": chat_id,
+                        "text": self._render_timeout_announcement(rd),
+                        "parse_mode": "html",
+                    },
+                    {"type": "end_session"},
+                ]
+
+            user_id = self._interaction_actor_user_id(payload)
+            now = time.monotonic()
+            last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
+            last_at = last_guess_at.get(user_id, 0.0)
+            if user_id in last_guess_at and now - last_at < self._guess_cooldown:
+                return []
+            last_guess_at[user_id] = now
+            rd.last_guess_at = last_guess_at
+
+            if pick != rd.answer_index:
+                self._rounds[chat_id] = rd
+                return [{"type": "update_session", "data": self._round_to_session(rd)}]
+
             rd.answered = True
-            return [
-                {
-                    "type": "send_message",
-                    "chat_id": chat_id,
-                    "text": self._render_timeout_announcement(rd),
-                    "parse_mode": "html",
-                },
-                {"type": "end_session"},
-            ]
-
-        user_id = self._interaction_actor_user_id(payload)
-        now = time.monotonic()
-        last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
-        last_at = last_guess_at.get(user_id, 0.0)
-        if now - last_at < self._guess_cooldown:
-            return []
-        last_guess_at[user_id] = now
-        rd.last_guess_at = last_guess_at
-
-        if pick != rd.answer_index:
-            return [{"type": "update_session", "data": self._round_to_session(rd)}]
-
-        rd.answered = True
-        rd.winner_id = user_id
-        rd.winner_name = self._interaction_actor_name(payload)
-        rd.winner_message_id = self._payload_message_id(payload)
-        payout_account, payout_mode = self._interaction_payout_info(payload)
+            rd.winner_id = user_id
+            rd.winner_name = self._interaction_actor_name(payload)
+            rd.winner_message_id = self._payload_message_id(payload)
+            self._rounds.pop(chat_id, None)
+            payout_account, payout_mode = self._interaction_payout_info(payload)
 
         if ctx.log:
             await ctx.log(
                 "info",
                 f"[dice_grid_hunt] 交互 Bot 答对 chat={chat_id} winner={rd.winner_name!r} answer={rd.answer_index} prize={rd.prize}",
             )
-        actions = [
-            {
-                "type": "send_message",
-                "chat_id": chat_id,
-                "text": self._render_interaction_success(rd, payout_account, payout_mode),
-                "parse_mode": "html",
-                "reply_to_message_id": rd.winner_message_id,
-            }
-        ]
-        payout_requested = payout_mode == "auto"
-        if payout_requested:
-            actions.append(
-                {
-                    "type": "payout",
-                    "chat_id": chat_id,
-                    "amount": rd.prize,
-                    "text": self._render_text(self._prize_message_template, {"prize": rd.prize}),
-                    "parse_mode": "plain",
-                    "reply_to_message_id": rd.winner_message_id,
-                }
-            )
-        actions.extend([
+        success_caption = self._render_interaction_success(rd, payout_account, payout_mode)
+        edit_action: dict[str, Any] = {
+            "type": "edit_caption",
+            "chat_id": chat_id,
+            "message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
+            "caption": success_caption,
+            "text": success_caption,
+            "parse_mode": "html",
+        }
+        payout_action: dict[str, Any] = {
+            "type": "payout",
+            "chat_id": chat_id,
+            "amount": rd.prize,
+            "text": self._render_text(self._prize_message_template, {"prize": rd.prize}),
+            "parse_mode": "plain",
+            "reply_to_message_id": rd.winner_message_id,
+        }
+        if rd.winner_id:
+            payout_action["reply_to_user_id"] = rd.winner_id
+        return [
+            edit_action,
+            payout_action,
             {
                 "type": "result",
                 "success": True,
@@ -563,17 +578,16 @@ class DiceGridHuntPlugin(Plugin):
                     "payout_account_label": payout_account,
                 },
                 "settlement": {
-                    "mode": "announce_only" if payout_mode != "auto" else "auto",
+                    "mode": "auto",
                     "amount": rd.prize,
                     "winner_user_id": rd.winner_id or None,
                     "winner_name": rd.winner_name,
                     "payout_account_label": payout_account,
-                    "status": "payout_requested" if payout_requested else "announced",
+                    "status": "payout_requested",
                 },
             },
             {"type": "end_session"},
-        ])
-        return actions
+        ]
 
     async def _interaction_expired(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         rd = self._round_from_session(payload)
@@ -731,48 +745,118 @@ class DiceGridHuntPlugin(Plugin):
             if not include_guide:
                 return f"<b>{title}</b>\n\n{target_line}"
 
-        return self._render_text(template, template_vars)
+        return self._ensure_round_title_version(self._render_text(template, template_vars))
+
+    def _ensure_round_title_version(self, text: str) -> str:
+        version_label = f"v{MANIFEST.version}"
+        if version_label in text:
+            return text
+        lines = str(text or "").splitlines()
+        if not lines:
+            return text
+        first_line = lines[0]
+        if "九宫格竞猜" not in first_line:
+            return text
+        lines[0] = first_line.replace("九宫格竞猜", f"九宫格竞猜{version_label} 开始", 1)
+        return "\n".join(lines)
 
     def _render_interaction_success(self, rd: RoundState, payout_account: str, payout_mode: str) -> str:
-        winner = escape(rd.winner_name or "玩家")
-        account_holder = escape(payout_account)
-        payout_line = (
-            f"奖金将由 {account_holder} 账号自动发放。"
-            if payout_mode == "auto"
-            else f"请由 {account_holder} 人工回复赢家发放奖金。"
-        )
         elapsed = max(0.0, time.monotonic() - rd.started_at)
+        winner = escape(rd.winner_name or "玩家")
         return (
-            f"答对了：{winner}\n"
-            f"题目：九宫格竞猜，目标点数 {rd.target_sum}，答案第 {rd.answer_index} 格\n"
-            f"用时：{elapsed:.1f}s\n"
-            f"奖金：{rd.prize}\n"
-            f"{payout_line}"
+            f"{self._render_round_text(rd, include_guide=True)}\n\n"
+            f"恭喜 {winner} 答对！\n"
+            f"答案：图 {rd.answer_index}\n"
+            f"用时：{elapsed:.1f}s"
         )
+
+    def _tp_event(self, payload: dict[str, Any]) -> Any:
+        """标准事件信封读取主路径；旧环境或解析失败时返回 None，回退旧平铺 helper。"""
+        if event_from_interaction_payload is None:
+            return None
+        try:
+            return event_from_interaction_payload(payload)
+        except Exception:
+            return None
 
     def _interaction_event_type(self, payload: dict[str, Any]) -> str:
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-        return str(
+        legacy = str(
             source.get("type")
             or trigger.get("type")
             or event.get("type")
             or payload.get("event_type")
             or ""
         ).strip()
+        if legacy:
+            return legacy
+        tp_event = self._tp_event(payload)
+        return str(getattr(tp_event, "type", "") or "").strip() if tp_event is not None else ""
 
     def _interaction_message_text(self, payload: dict[str, Any]) -> str:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            message = getattr(tp_event, "message", None)
+            std_text = str(getattr(message, "text", "") or "").strip() if message is not None else ""
+            if std_text:
+                return std_text
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-        return str(payload.get("message_text") or source.get("text") or event.get("text") or "").strip()
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+        return str(
+            payload.get("message_text")
+            or payload.get("text")
+            or message.get("text")
+            or source.get("text")
+            or event.get("text")
+            or raw.get("text")
+            or ""
+        ).strip()
 
     def _interaction_pick_text(self, payload: dict[str, Any]) -> str:
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
-        callback_data = payload.get("callback_data") or source.get("callback_data")
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+        callback_data = (
+            payload.get("callback_data")
+            or source.get("callback_data")
+            or event.get("callback_data")
+            or event.get("data")
+            or raw.get("callback_data")
+            or raw.get("data")
+        )
         if callback_data not in (None, ""):
             return str(callback_data).strip()
         return self._interaction_message_text(payload)
+
+    def _interaction_actor_user_id(self, payload: dict[str, Any]) -> int:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            for holder_name in ("actor", "sender", "player"):
+                holder = getattr(tp_event, holder_name, None)
+                std_uid = self._positive_int(getattr(holder, "user_id", None), 0, minimum=0) if holder is not None else 0
+                if std_uid:
+                    return std_uid
+        sender = payload.get("sender") if isinstance(payload.get("sender"), dict) else {}
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        player = payload.get("player") if isinstance(payload.get("player"), dict) else {}
+        source_actor = payload.get("source_actor") if isinstance(payload.get("source_actor"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        return self._positive_int(
+            payload.get("sender_user_id")
+            or payload.get("user_id")
+            or sender.get("user_id")
+            or actor.get("user_id")
+            or player.get("user_id")
+            or source_actor.get("user_id")
+            or event.get("user_id")
+            or event.get("sender_user_id"),
+            0,
+            minimum=0,
+        )
 
     def _interaction_actor_name(self, payload: dict[str, Any]) -> str:
         actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
@@ -784,18 +868,6 @@ class DiceGridHuntPlugin(Plugin):
             or payload.get("payer_name")
             or "玩家"
         ).strip() or "玩家"
-
-    def _interaction_actor_user_id(self, payload: dict[str, Any]) -> int:
-        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
-        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-        return self._positive_int(
-            payload.get("sender_user_id")
-            or actor.get("user_id")
-            or event.get("user_id")
-            or payload.get("payer_user_id"),
-            0,
-            minimum=0,
-        )
 
     def _interaction_payout_info(self, payload: dict[str, Any]) -> tuple[str, str]:
         settlement = payload.get("settlement") if isinstance(payload.get("settlement"), dict) else {}
@@ -867,16 +939,49 @@ class DiceGridHuntPlugin(Plugin):
         return int(match.group(1)) if match else None
 
     def _payload_chat_id(self, payload: dict[str, Any]) -> int:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            message = getattr(tp_event, "message", None)
+            std_chat = self._int_value(getattr(message, "chat_id", None)) if message is not None else None
+            if std_chat:
+                return std_chat
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         return self._int_value(payload.get("chat_id") or source.get("chat_id") or event.get("chat_id")) or 0
 
     def _payload_message_id(self, payload: dict[str, Any]) -> int | None:
+        tp_event = self._tp_event(payload)
+        if tp_event is not None:
+            message = getattr(tp_event, "message", None)
+            std_mid = self._positive_int(getattr(message, "message_id", None), 0, minimum=0) if message is not None else 0
+            if std_mid:
+                return std_mid
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         value = payload.get("message_id") or source.get("message_id") or payload.get("source_message_id") or event.get("message_id")
         parsed = self._positive_int(value, 0, minimum=0)
         return parsed or None
+
+    def _payload_reply_to_message_id(self, payload: dict[str, Any]) -> int | None:
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        message_reply_to = message.get("reply_to") if isinstance(message.get("reply_to"), dict) else {}
+        reply_to = payload.get("reply_to") if isinstance(payload.get("reply_to"), dict) else {}
+        value = (
+            reply_to.get("message_id")
+            or payload.get("reply_to_message_id")
+            or message_reply_to.get("message_id")
+            or message.get("reply_to_message_id")
+            or source.get("reply_to_message_id")
+            or event.get("reply_to_message_id")
+        )
+        parsed = self._positive_int(value, 0, minimum=0)
+        return parsed or None
+
+    def _interaction_message_key(self, account_id: int, chat_id: int) -> str:
+        del account_id
+        return f"round:{int(chat_id)}"
 
     def _positive_int(self, value: Any, default: int, *, minimum: int, maximum: int | None = None) -> int:
         try:
@@ -925,7 +1030,7 @@ class DiceGridHuntPlugin(Plugin):
             now = time.monotonic()
             last_guess_at = rd.last_guess_at if rd.last_guess_at is not None else {}
             last_at = last_guess_at.get(user_id, 0.0)
-            if now - last_at < self._guess_cooldown:
+            if user_id in last_guess_at and now - last_at < self._guess_cooldown:
                 return
             last_guess_at[user_id] = now
             rd.last_guess_at = last_guess_at

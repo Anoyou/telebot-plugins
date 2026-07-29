@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 TEMPLATE_SAMPLE_VARS = {
-    "version": "1.1.14",
+    "version": "1.1.29",
     "prefix": "{prefix}",
     "command": "dicegrid",
     "force_stop_command": "stop",
@@ -29,7 +29,7 @@ def _safe_render(template: str) -> str:
 
 
 ROUND_MESSAGE_TEMPLATE_DEFAULT = (
-    "<b>九宫格竞猜</b>\n"
+    "<b>九宫格竞猜v{version} 开始</b>\n"
     "目标：<b>{target_sum}</b> · 回 <code>1-9</code>\n"
     "奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s"
 )
@@ -47,7 +47,7 @@ LEGACY_IN_PROGRESS_MESSAGE_TEMPLATE_DEFAULT = (
     f"<code>{LEGACY_COMMAND_PREFIX}{{command}} {{force_stop_command}}</code> 结束。"
 )
 SUCCESS_MESSAGE_TEMPLATE_DEFAULT = (
-    "{winner} 答对：<b>{answer_index}</b>\n"
+    "{winner} 答对：图 <b>{answer_index}</b>\n"
     "用时 {elapsed}s · 奖励 <b>+{prize}</b>"
 )
 TIMEOUT_MESSAGE_TEMPLATE_DEFAULT = (
@@ -65,6 +65,7 @@ TEMPLATE_PREVIEW_RENDERED = _safe_render(ROUND_MESSAGE_TEMPLATE_DEFAULT)
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 奖励金额 开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板，并在插件预览里查看最终消息。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -104,13 +105,13 @@ CONFIG_SCHEMA = {
         "template_placeholders": {
             "type": "string",
             "title": "可用占位符说明",
-            "default": "开局：{target_sum} 目标点数；{prize} 奖励；{timeout} 限时秒数；{guess_cooldown} 答题冷却。\n结果：{winner} 答对者；{answer_index} 正确格子；{elapsed} 用时秒数。\n指令：{command} 触发指令；{force_stop_command} 结束参数；{example} 示例奖励；{prefix} 系统前缀。\n\n旧版兼容：如果旧配置里仍有 {title}、{target_line}、{guide_line}、{reward_line}；它们会按内置旧模板展开：标题=九宫格竞猜；目标行=目标点数；引导行=回复 1-9；奖励行=奖励与超时。\n\n预览只使用固定示例值。不读取真实群消息；也不会触发发送。",
+            "default": "开局：{version} 插件版本；{target_sum} 目标点数；{prize} 奖励；{timeout} 限时秒数；{guess_cooldown} 答题冷却。\n结果：{winner} 答对者；{answer_index} 正确格子；{elapsed} 用时秒数。\n指令：{command} 触发指令；{force_stop_command} 结束参数；{example} 示例奖励；{prefix} 系统前缀。\n\n旧版兼容：如果旧配置里仍有 {title}、{target_line}、{guide_line}、{reward_line}；它们会按内置旧模板展开：标题=九宫格竞猜；目标行=目标点数；引导行=回复 1-9；奖励行=奖励与超时。\n\n预览只使用固定示例值。不读取真实群消息；也不会触发发送。",
             "readOnly": True,
         },
         "round_message_template": {
             "type": "string",
             "title": "开局消息模板",
-            "description": "支持占位符：{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}、{prefix}。旧配置中的 {title}、{target_line}、{guide_line}、{reward_line} 仍会兼容展开；新模板建议直接写完整文案。",
+            "description": "支持占位符：{version}、{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}、{prefix}。旧配置中的 {title}、{target_line}、{guide_line}、{reward_line} 仍会兼容展开；新模板建议直接写完整文案。",
             "default": ROUND_MESSAGE_TEMPLATE_DEFAULT,
             "minLength": 1,
             "maxLength": 1200,
@@ -247,11 +248,27 @@ CONFIG_SCHEMA = {
 }
 
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = '管理员发送 {prefix}{command} 奖励金额开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'callback_query', 'session_expired', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.14",
-    min_telepilot_version="0.30.4",
+    version="1.1.29",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
@@ -259,88 +276,62 @@ MANIFEST = Manifest(
 
     category="interactive",
     interaction_profile="session_game",
-    interaction_entries=[
-        {
-            "key": "start_dice_grid_hunt",
-            "title": "开始九宫格竞猜",
-            "description": "由交互 Bot 在群内开启一局九宫格骰子竞猜。",
-            "interaction_profile": "session_game",
-            "launch_mode": "hybrid",
-            "session_scope": "chat",
-            "events": [
-                "command",
-                "payment_confirmed",
-                "keyword",
-                "message",
-                "callback_query",
-                "session_expired",
-                "session_close",
-            ],
-            "triggers": {
-                "command": "dicegrid",
-            },
-            "preserve_command_trigger": True,
-            "command_fallback": {
-                "enabled": True,
-                "command": "dicegrid",
-                "mode": "hint_only",
-            },
-            "session_policy": {
-                "ttl_seconds": 90,
-                "duplicate_start": "reject",
-                "close_on": ["winner", "timeout", "session_close"],
-            },
-            "payload_contract": {
-                "required_envelope": ["source", "actor", "trigger", "session"],
-                "required_event_fields": ["type", "chat_id"],
-            },
-            "result_contract": {
-                "actions": [
-                    "send_message",
-                    "send_photo",
-                    "update_session",
-                    "payout",
-                    "end_session",
-                    "result",
-                    "settlement",
-                ],
-                "send_via": ["interaction_bot", "userbot_reply"],
-            },
-            "input_schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "prize": {
-                        "type": "integer",
-                        "title": "奖励",
-                        "default": 100,
-                        "minimum": 1,
-                    },
-                    "timeout": {
-                        "type": "integer",
-                        "title": "答题限时（秒）",
-                        "default": 90,
-                        "minimum": 10,
-                        "maximum": 86400,
-                    },
-                    "valid_seconds": {
-                        "type": "integer",
-                        "title": "平台会话有效期（秒）",
-                        "default": 90,
-                        "minimum": 30,
-                        "maximum": 86400,
-                    },
-                },
-            },
-            "settlement": {
-                "mode": "announce_only",
-                "winner_field": "actor.user_id",
-                "amount_field": "prize",
-            },
-        }
-    ],
+    interaction_entries=[{'key': 'start_dice_grid_hunt',
+  'title': '开始九宫格竞猜',
+  'description': '由交互 Bot 在群内开启一局九宫格骰子竞猜。',
+  'interaction_profile': 'session_game',
+  'launch_mode': 'hybrid',
+  'session_scope': 'chat',
+  'events': ['command',
+             'payment_confirmed',
+             'keyword',
+             'message',
+             'callback_query',
+             'session_expired',
+             'session_close'],
+  'triggers': {'command': 'dicegrid'},
+  'preserve_command_trigger': True,
+  'command_fallback': {'enabled': True, 'command': 'dicegrid', 'mode': 'hint_only'},
+  'session_policy': {'ttl_seconds': 90,
+                     'duplicate_start': 'reject',
+                     'close_on': ['winner', 'timeout', 'session_close']},
+  'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
+                       'required_event_fields': ['type', 'chat_id']},
+  'result_contract': {'actions': ['send_message',
+                                  'send_photo',
+                                  'update_session',
+                                  'edit_caption',
+                                  'payout', 'end_session',
+                                  'result',
+                                  'settlement']},
+  'input_schema': {'type': 'object',
+                   'additionalProperties': False,
+                   'properties': {'prize': {'type': 'integer',
+                                            'title': '奖励',
+                                            'default': 100,
+                                            'minimum': 1},
+                                  'timeout': {'type': 'integer',
+                                              'title': '答题限时（秒）',
+                                              'default': 90,
+                                              'minimum': 10,
+                                              'maximum': 86400},
+                                  'valid_seconds': {'type': 'integer',
+                                                    'title': '平台会话有效期（秒）',
+                                                    'default': 90,
+                                                    'minimum': 30,
+                                                    'maximum': 86400}}},
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
 
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

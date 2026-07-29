@@ -49,6 +49,7 @@ DRAW_TEMPLATE_DEFAULT = (
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员和群友可使用 {prefix}{command} 购买彩票、查询奖池、历史和统计；交互规则可接收付款通知自动下注，配置页可调整别名、开奖周期和消息模板。',
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
@@ -223,11 +224,27 @@ CONFIG_SCHEMA = {
 }
 
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = '管理员和群友可使用 {prefix}{command} 购买彩票、查询奖池、历史和统计；交互规则可接收付款通知自动下注，配置页可调整别名、开奖周期和消息模板。普通回复继承 TelePilot 当前会话通道；开奖派奖返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.7",
-    min_telepilot_version="0.30.4",
+    version="1.0.13",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内彩票玩法，支持下注、奖池滚存、自动开奖、历史和消息模板预览",
@@ -248,17 +265,23 @@ MANIFEST = Manifest(
                      'close_on': ['settled', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'message': {'type': 'string',
                                               'title': '自定义提示',
                                               'default': '开始下注，祝你好运。'}}},
-  'settlement': {'mode': 'announce_only',
-                 'winner_field': 'actor.user_id',
-                 'amount_field': 'prize'}}],
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'paid_pool'}],
     config_schema=CONFIG_SCHEMA,
 )
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

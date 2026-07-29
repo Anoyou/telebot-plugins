@@ -34,8 +34,8 @@
 
 ## ais-byRBQ
 
-1. `,ais help` 显示帮助。
-2. `,ais` 纯文本提问，返回 AI 内容。
+1. `{prefix}ais help` 显示帮助。
+2. `{prefix}ais` 纯文本提问，返回 AI 内容。
 3. 配置 API 后测试联网搜索路径（提问实时问题）。
 4. 模型切换命令验证（如有）。
 5. MCP 子命令（如配置了 MCP）验证 list/add/remove。
@@ -117,8 +117,8 @@
 
 ## redpack-byRBQ
 
-1. `,redpack` 基础发包。
-2. `,redpack img` 数学题红包流程。
+1. `{prefix}redpack` 基础发包。
+2. `{prefix}redpack img` 数学题红包流程。
 3. 领取、结算消息、榜单流程。
 4. 转账确认自动点击（如果场景可复现）。
 

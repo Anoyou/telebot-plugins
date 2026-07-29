@@ -3,6 +3,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 口令 总额 个数 创建文字或图片口令红包；群友直接发送正确口令领取，插件自动回复 +金额 并在领完后发送结算榜单。',
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
@@ -124,11 +125,27 @@ CONFIG_SCHEMA = {
     "required": ["command"]
 }
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = '管理员发送 {prefix}{command} 口令 总额 个数创建文字或图片口令红包；群友直接发送正确口令领取，插件按原兼容实现处理发放和结算榜单。普通回复继承 TelePilot 当前会话通道；资金类动作必须由 payout/受控 userbot 链路执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.19",
-    min_telepilot_version="0.30.4",
+    version="1.1.25",
+    min_telepilot_version="0.59.1",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
     permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message"],
@@ -153,8 +170,7 @@ MANIFEST = Manifest(
                                   'send_file',
                                   'end_session',
                                   'result',
-                                  'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+                                  'settlement'],},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'total_amount': {'type': 'integer',
@@ -168,8 +184,17 @@ MANIFEST = Manifest(
                                             'maximum': 500}}},
   'settlement': {'mode': 'announce_only',
                  'winner_field': 'actor.user_id',
-                 'amount_field': 'total_amount'}}],
+                 'amount_field': 'total_amount'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

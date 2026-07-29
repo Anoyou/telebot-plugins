@@ -1,4 +1,37 @@
 # 更新日志
+## 1.0.26 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 交互字段读取改用标准事件信封 `event_from_interaction_payload` 为主路径（事件类型、chat_id、message_id、文本、金额、玩家/付款人、callback_data 均优先取标准字段），旧平铺 payload helper 保留为 fallback。
+- 同步 `plugin.json` 与 `manifest.py` patch 版本（1.0.25 → 1.0.26），元数据保持一致。
+- 保持原有 21 点游戏规则、下注/赔率/结算逻辑、按钮与命令玩法及玩家可见文案不变。
+- 未做 Tier 3：本插件为重进程状态机（pdict 约 30 项）+ 资金结算玩法，同进程续局零回归依赖 `self._games`；为避免金额/结算回归，暂保留进程内状态机，不新增 `session.data` 镜像。
+
+## 1.0.25 (2026-07-04)
+- 适配 TelePilot 0.49 交互契约：奖励发放改用平台 `payout` 动作。
+- 移除交互入口里的旧发奖通道声明，避免已是最新版本但实际仍不发奖。
+
+
+## 1.0.25 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通回复改为继承 TelePilot 当前会话通道。
+- 赢牌奖励改为返回 `payout` action，由 userbot 执行并写入动作 Trace。
+
+## 1.0.24 (2026-06-29)
+- 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
+- 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
+
+## 1.0.23 (2026-06-28)
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
+- 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
+
+
+## 1.0.22 (2026-06-27)
+- 按最新 TelePilot 插件开发文档补充 `config_schema["x-usage-guide"]`，让插件中心和通用配置页展示明确使用说明。
+- 同步更新 `plugin.json` 与 `manifest.py` 版本，避免触发“未声明详细使用说明”的高级规范警告。
+
+## 1.0.21 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
+- 交互 Bot 回调删除旧按钮消息时改为检测 `ctx.client` 是否可用，兼容受限测试桩和 0.33 facade 注入场景。
+
 ## 1.0.20 (2026-06-26)
 - 点击按钮（要牌/停牌/加倍）或发送文字指令时，自动删除旧 Bot 消息，避免聊天记录堆积。
 - 交互 Bot 回调路径（callback_query / message）删除按钮来源消息，新消息不再 reply_to 已删除消息。
@@ -10,7 +43,7 @@
 - 庄家盖牌展示优化为 `🂠 ♦5（暗牌 ♦）`，显示暗牌花色。
 
 ## 1.0.18 (2026-06-26)
-- 输牌/爆牌时发送扣款消息（`-{bet}`）通过 userbot_reply，与赢牌奖励对称。
+- 输牌/爆牌时发送扣款消息（`-{bet}`）通过 平台资金通道，与赢牌奖励对称。
 - duplicate_start 从 reject 改为 allow，确保多人同时开局不互相干扰。
 - 庄家盖牌展示优化：`🂠 ♦5  [?]`，暗牌更明显。
 
@@ -33,7 +66,7 @@
 
 ## 1.0.12 (2026-06-26)
 - GameState 新增 `trigger_message_id` 字段，记录玩家触发消息 ID。
-- 奖励 `+{amount}` 消息改为回复玩家原始触发消息（`send_via: userbot_reply`），而非操作按钮消息。
+- 奖励 `+{amount}` 消息改为回复玩家原始触发消息（平台资金通道），而非操作按钮消息。
 - 全局文案「筹码」统一替换为「蝌蚪」。
 - 「你的牌」统一改为显示玩家名称（如「张三的牌」），结算界面同步生效。
 - 按钮提示文案改为「请 @{玩家名} 点击下方按钮进行操作」，去除旧 `🔔` mention 格式。
@@ -44,7 +77,7 @@
 - 全交互流程增加详细日志（开局、操作、回调、结算），便于线上排查。
 - 按钮消息末尾增加玩家 @mention 提醒，点击可跳转用户资料。
 - 修正 `_interaction_action` 与 `_interaction_callback_action` 方法签名，统一接收 `ctx` 参数。
-- 结算奖励消息 `send_via: userbot_reply` 保持不变，结算日志明确记录每条动作的 send_via。
+- 结算奖励消息 平台资金通道 保持不变，结算日志明确记录每条动作的 send_via。
 
 ## 1.0.10 (2026-06-26)
 - 交互 Bot 发牌文案去除旧文字指令提示，改为按钮操作引导。
@@ -62,7 +95,7 @@
 - `session_close` 仅清除对应玩家的游戏，不再清空整个聊天的所有牌局。
 
 ## 1.0.7 (2026-06-25)
-- 修复交互 Bot 模式下奖励由 Bot 发放的问题，奖励消息改用 `send_via: userbot_reply` 由管理员账号发放。
+- 修复交互 Bot 模式下奖励由 Bot 发放的问题，奖励消息改用 平台资金通道 由管理员账号发放。
 
 ## 1.0.5 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。

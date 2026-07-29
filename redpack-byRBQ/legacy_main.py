@@ -12,6 +12,7 @@ import asyncio
 import html
 import json
 import math
+import os
 import random
 import re
 import shlex
@@ -36,8 +37,11 @@ except ImportError:
 
 __version__ = "1.5.5"
 
+# 仅用于读取随插件分发的字体资源，不用于运行数据持久化。
 plugin_dir = Path(__file__).parent
-config_file = plugin_dir / "redpack_config.json"
+LEGACY_CONFIG_FILE = plugin_dir / "redpack_config.json"
+LEGACY_ACCOUNT_CONFIG_NAME = "redpack_config_{account_id}.json"
+config_file: Path | None = None
 
 DEFAULT_AMOUNT = 88888
 DEFAULT_COUNT = 10
@@ -1154,7 +1158,7 @@ class RedPackConfig:
 
     def load(self) -> None:
         """加载配置"""
-        if not config_file.exists():
+        if config_file is None or not config_file.exists():
             return
 
         try:
@@ -1219,6 +1223,8 @@ class RedPackConfig:
     def save(self) -> bool:
         """保存配置"""
         try:
+            if config_file is None:
+                raise RuntimeError("TelePilot 未提供 ctx.data_dir")
             with open(config_file, "w", encoding="utf-8") as file:
                 json.dump(
                     {
@@ -1685,6 +1691,40 @@ class RedPackConfig:
 
 
 config = RedPackConfig()
+
+
+def _copy_legacy_file_once(source: Path, target: Path) -> bool:
+    """原子复制旧文件；目标已存在时保持原样。"""
+    if target.exists() or not source.is_file():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as temp_file:
+            temp_file.write(source.read_bytes())
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
+
+
+def configure_data_dir(data_dir: Path | None, account_id: int) -> None:
+    """绑定当前账号的持久化目录并重载状态。"""
+    global config_file, config
+    if data_dir is None:
+        raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 redpack 配置")
+    account_dir = Path(data_dir) / str(int(account_id))
+    account_dir.mkdir(parents=True, exist_ok=True)
+    config_file = account_dir / "redpack_config.json"
+    legacy_account_file = plugin_dir / LEGACY_ACCOUNT_CONFIG_NAME.format(account_id=int(account_id))
+    _copy_legacy_file_once(legacy_account_file, config_file)
+    _copy_legacy_file_once(LEGACY_CONFIG_FILE, config_file)
+    config = RedPackConfig()
 
 
 def parse_send_payload(payload: str) -> tuple[Optional[str], int, int, Optional[str]]:

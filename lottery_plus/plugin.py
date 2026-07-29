@@ -13,6 +13,7 @@ from typing import Any
 
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -104,10 +105,12 @@ class LotteryPlusPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_lottery_plus":
             return None
+        # 新主路径：标准事件信封；旧平铺 payload 作为 fallback（行为保留）。
+        tp_event = event_from_interaction_payload(payload)
         event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
-        event_type = str(event.get("type") or payload.get("event_type") or "").strip()
-        chat_id = self._payload_chat_id(payload, event)
-        reply_to = self._payload_message_id(payload, event)
+        event_type = self._resolve_event_type(payload, event, tp_event)
+        chat_id = self._payload_chat_id(payload, event, tp_event)
+        reply_to = self._payload_message_id(payload, event, tp_event)
         if not chat_id:
             return [{"type": "send_message", "text": "❌ 彩票模块需要在群聊里使用。", "reply_to_message_id": reply_to}]
 
@@ -117,14 +120,14 @@ class LotteryPlusPlugin(Plugin):
             self._ensure_auto_draw(chat_id, ctx)
 
             if event_type == "payment_confirmed":
-                amount = self._int_value(payload.get("amount") or event.get("data", {}).get("amount"))
+                amount = self._payment_amount(payload, event, tp_event)
                 parsed = self._parse_bet_from_amount(amount)
                 if parsed is None:
                     return [
                         {"type": "send_message", "text": self._render_amount_help(amount), "reply_to_message_id": reply_to},
                         {"type": "end_session"},
                     ]
-                user_id, user_name = self._interaction_user(payload, event, prefer_payer=True)
+                user_id, user_name = self._interaction_user(payload, event, prefer_payer=True, tp_event=tp_event)
                 text = self._place_bet(st, user_id, user_name, parsed[0], str(parsed[1]))
                 return [{"type": "send_message", "text": text, "reply_to_message_id": reply_to}, {"type": "end_session"}]
 
@@ -149,27 +152,71 @@ class LotteryPlusPlugin(Plugin):
             return 0
 
     @staticmethod
-    def _payload_chat_id(payload: dict[str, Any], event: dict[str, Any]) -> int:
+    def _resolve_event_type(payload: dict[str, Any], event: dict[str, Any], tp_event: Any = None) -> str:
+        # 旧平铺路径优先判定（保证 keyword/未标注类型的启动语义不变）；
+        # 仅当旧字段缺失、且信封 source.type 明确存在时再采用信封类型。
+        legacy = str(event.get("type") or payload.get("event_type") or "").strip()
+        if legacy:
+            return legacy
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        if source.get("type") and tp_event is not None:
+            return str(getattr(tp_event, "type", "") or "").strip()
+        return legacy
+
+    @staticmethod
+    def _payload_chat_id(payload: dict[str, Any], event: dict[str, Any], tp_event: Any = None) -> int:
+        if tp_event is not None:
+            chat_id = getattr(getattr(tp_event, "message", None), "chat_id", None)
+            if chat_id:
+                return LotteryPlusPlugin._int_value(chat_id)
         return LotteryPlusPlugin._int_value(payload.get("chat_id") or event.get("chat_id"))
 
     @staticmethod
-    def _payload_message_id(payload: dict[str, Any], event: dict[str, Any]) -> int | None:
+    def _payload_message_id(payload: dict[str, Any], event: dict[str, Any], tp_event: Any = None) -> int | None:
+        if tp_event is not None:
+            message_id = getattr(getattr(tp_event, "message", None), "message_id", None)
+            if message_id:
+                return LotteryPlusPlugin._int_value(message_id) or None
         value = LotteryPlusPlugin._int_value(payload.get("message_id") or event.get("message_id") or payload.get("source_message_id"))
         return value or None
+
+    @staticmethod
+    def _payment_amount(payload: dict[str, Any], event: dict[str, Any], tp_event: Any = None) -> int:
+        if tp_event is not None:
+            payment = getattr(tp_event, "payment", None)
+            amount = getattr(payment, "amount", None) if payment is not None else None
+            if amount:
+                return LotteryPlusPlugin._int_value(amount)
+        return LotteryPlusPlugin._int_value(payload.get("amount") or event.get("data", {}).get("amount"))
 
     @staticmethod
     def _synthetic_user_id(name: str) -> int:
         raw = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
         return -int(raw, 16)
 
-    def _interaction_user(self, payload: dict[str, Any], event: dict[str, Any], *, prefer_payer: bool) -> tuple[int, str]:
+    def _interaction_user(self, payload: dict[str, Any], event: dict[str, Any], *, prefer_payer: bool, tp_event: Any = None) -> tuple[int, str]:
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        raw_user_id: Any = None
+        raw_name: Any = None
+        # 新主路径：从标准信封读取付款人/发送者。
+        if tp_event is not None:
+            if prefer_payer:
+                payer = getattr(getattr(tp_event, "payment", None), "payer", None)
+                if payer is not None:
+                    raw_user_id = getattr(payer, "user_id", None)
+                    raw_name = getattr(payer, "display_name", None)
+            else:
+                sender = getattr(tp_event, "sender", None)
+                if sender is not None:
+                    raw_user_id = getattr(sender, "user_id", None)
+                    raw_name = getattr(sender, "display_name", None)
+        # 旧平铺 fallback：信封缺字段时回退。
         if prefer_payer:
-            raw_user_id = payload.get("payer_user_id") or event_data.get("payer_user_id")
-            raw_name = payload.get("payer_name") or event_data.get("payer_name")
+            raw_user_id = raw_user_id or payload.get("payer_user_id") or event_data.get("payer_user_id")
+            raw_name = raw_name or payload.get("payer_name") or event_data.get("payer_name")
         else:
-            raw_user_id = payload.get("sender_user_id") or event.get("user_id")
-            raw_name = payload.get("sender_name") or event.get("display_name")
+            raw_user_id = raw_user_id or payload.get("sender_user_id") or event.get("user_id")
+            raw_name = raw_name or payload.get("sender_name") or event.get("display_name")
         name = str(raw_name or "玩家").strip() or "玩家"
         user_id = self._int_value(raw_user_id)
         return (user_id or self._synthetic_user_id(name), name)
@@ -600,6 +647,27 @@ class LotteryPlusPlugin(Plugin):
             for uid, amount in user_paid.items():
                 amount = min(amount, max_payout)
                 paid += amount
+                messages = getattr(ctx, "messages", None) if ctx is not None else None
+                apply_actions = getattr(messages, "apply", None)
+                if callable(apply_actions):
+                    try:
+                        await apply_actions(
+                            [
+                                {
+                                    "type": "payout",
+                                    "chat_id": chat_id,
+                                    "amount": amount,
+                                    "text": f"+{amount}",
+                                    "parse_mode": "plain",
+                                    "reply_to_user_id": uid,
+                                    "reply_to_search_limit": 50,
+                                }
+                            ],
+                            entry_key="start_lottery_plus",
+                        )
+                        continue
+                    except Exception:
+                        pass
                 if event is not None:
                     await event.reply(f"+{amount}")
                 elif ctx and ctx.client:

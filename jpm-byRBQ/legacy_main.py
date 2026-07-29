@@ -6,7 +6,9 @@ JPM 插件 - 关键词触发回复
 import asyncio
 import contextlib
 import json
+import os
 import random
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -17,13 +19,49 @@ from pagermaid.enums import Message, Client
 from pagermaid.utils import logs
 
 
-# 配置文件路径
-plugin_dir = Path(__file__).parent
-config_file = plugin_dir / "jpm_config.json"
-trigger_log_file = plugin_dir / "jpm_trigger_log.json"
+# 配置文件路径；由 plugin.py 在账号启动时绑定到 ctx.data_dir。
+LEGACY_CONFIG_FILE = Path(__file__).parent / "jpm_config.json"
+LEGACY_TRIGGER_LOG_FILE = Path(__file__).parent / "jpm_trigger_log.json"
+config_file: Path | None = None
+trigger_log_file: Path | None = None
 
 # 默认频率限制（秒）
 DEFAULT_RATE_LIMIT = 3600
+
+
+def _copy_legacy_file_once(source: Path, target: Path) -> bool:
+    """原子复制旧文件；目标已存在时保持原样。"""
+    if target.exists() or not source.is_file():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as temp_file:
+            temp_file.write(source.read_bytes())
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
+
+
+def configure_data_dir(data_dir: Path | None, account_id: int) -> None:
+    """绑定当前账号的持久化目录并重载状态。"""
+    global config_file, trigger_log_file, config_manager, trigger_log
+    if data_dir is None:
+        raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 jpm 配置")
+    account_dir = Path(data_dir) / str(int(account_id))
+    account_dir.mkdir(parents=True, exist_ok=True)
+    config_file = account_dir / "jpm_config.json"
+    trigger_log_file = account_dir / "jpm_trigger_log.json"
+    _copy_legacy_file_once(LEGACY_CONFIG_FILE, config_file)
+    _copy_legacy_file_once(LEGACY_TRIGGER_LOG_FILE, trigger_log_file)
+    config_manager = JPMConfigManager()
+    trigger_log = TriggerLogManager()
 
 
 @Hook.on_startup()
@@ -299,7 +337,7 @@ class JPMConfigManager:
 
     def load(self) -> None:
         """从文件加载配置"""
-        if config_file.exists():
+        if config_file is not None and config_file.exists():
             try:
                 with open(config_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -319,6 +357,8 @@ class JPMConfigManager:
     def save(self) -> bool:
         """保存配置到文件"""
         try:
+            if config_file is None:
+                raise RuntimeError("TelePilot 未提供 ctx.data_dir")
             with open(config_file, "w", encoding="utf-8") as f:
                 json.dump(
                     {
@@ -422,7 +462,7 @@ class TriggerLogManager:
 
     def load(self) -> None:
         """从文件加载触发记录"""
-        if trigger_log_file.exists():
+        if trigger_log_file is not None and trigger_log_file.exists():
             try:
                 with open(trigger_log_file, "r", encoding="utf-8") as f:
                     self.logs = json.load(f)
@@ -436,6 +476,8 @@ class TriggerLogManager:
     def save(self) -> None:
         """保存触发记录到文件"""
         try:
+            if trigger_log_file is None:
+                raise RuntimeError("TelePilot 未提供 ctx.data_dir")
             with open(trigger_log_file, "w", encoding="utf-8") as f:
                 json.dump(self.logs, f, indent=4)
         except Exception as e:

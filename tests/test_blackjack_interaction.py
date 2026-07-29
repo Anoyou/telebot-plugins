@@ -135,7 +135,7 @@ class BlackjackInteractionTest(unittest.TestCase):
 
                 self.assertIsNotNone(actions)
                 self.assertEqual(actions[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"], "bj:hit:111")
-                self.assertIn("玩家A 下注 10 筹码", actions[0]["text"])
+                self.assertIn("玩家A 下注 10 蝌蚪", actions[0]["text"])
                 self.assertNotIn("通知Bot 下注", actions[0]["text"])
 
                 callback_actions = await plugin.on_interaction(ctx, "start_blackjack", callback_payload("bj:hit:111"))

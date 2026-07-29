@@ -1,0 +1,596 @@
+{
+  "name": "ai_redpacket",
+  "display_name": "AI 答题红包",
+  "description": "从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
+  "author": "Anoyou",
+  "version": "0.1.39",
+  "entry": "plugin.py",
+  "category": "interactive",
+  "min_telepilot_version": "0.73.0-beta.15",
+  "cleanup_mode": "resource",
+  "permissions": [
+    "send_message",
+    "edit_message",
+    "delete_message",
+    "read_chat",
+    "external_http",
+    "ai_text"
+  ],
+  "allowed_hosts": [
+    "**.com",
+    "**.net",
+    "**.org",
+    "**.io",
+    "**.dev",
+    "**.app",
+    "**.xyz",
+    "**.cn",
+    "**.top",
+    "**.site",
+    "**.online",
+    "**.info",
+    "**.me",
+    "**.tv",
+    "**.ai",
+    "**.co",
+    "**.cc",
+    "**.wiki",
+    "**.edu",
+    "**.gov",
+    "**.jp",
+    "**.hk",
+    "**.tw"
+  ],
+  "commands": [
+    "airp",
+    "airp-7"
+  ],
+  "tags": [
+    "redpacket",
+    "quiz",
+    "ai",
+    "interaction-bot",
+    "payout"
+  ],
+  "usage": "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；{prefix}{command} reset [用户ID] 重置当前群进行中的红包轮次限制；{prefix}{command} reset all 重置当前群进行中的所有红包轮次限制；{prefix}{command}-7 查询本周排行榜；{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。匿名管理员不能参与答题红包；非匿名管理员和普通成员可正常参与。未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。开题消息 ID 会写入本地数据库，list 与小时播报可稳定跳转；可选择 UserBot 或交互 Bot 置顶，手动结束或自动结算后取消置顶。普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。",
+  "strict_trace": true,
+  "capabilities": {},
+  "interaction_profile": "session_game",
+  "config_schema": {
+    "type": "object",
+    "x-ui-mode": "single",
+    "x-category": "interactive",
+    "x-usage-guide": "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；{prefix}{command} reset [用户ID] 重置当前群进行中的红包轮次限制；{prefix}{command} reset all 重置当前群进行中的所有红包轮次限制；{prefix}{command}-7 查询本周排行榜；{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。匿名管理员不能参与答题红包；非匿名管理员和普通成员可正常参与。未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。开题消息 ID 会写入本地数据库，list 与小时播报可稳定跳转；可选择 UserBot 或交互 Bot 置顶，手动结束或自动结算后取消置顶。普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。",
+    "additionalProperties": false,
+    "properties": {
+      "usage_preview": {
+        "type": "string",
+        "title": "使用说明（只读）",
+        "readOnly": true,
+        "default": "1. 填写题库来源 URL，并保存插件配置。\n2. 选择 Provider 和模型，点击“生成/补齐题库”；已有题目会保留并补齐到目标数量。\n3. 直接发送 {prefix}{command} 按默认配置创建总额 150000、40 份的红包。\n4. 用户点击领取按钮，通过交互 Bot 完成三选一答题。\n5. 答对奖励固定由 userbot payout 发放；金额只支持整数。\n6. 测试后可发送 {prefix}{command} reset 重置自己在当前群进行中的红包轮次限制，或发送 {prefix}{command} reset all 重置所有参与者的当前轮次限制。\n7. 发送 {prefix}{command} bank list 查看题库；管理员用 {prefix}{command} list、普通群员用 /airp list 查看进行中红包的领取进度、开题消息链接和补发入口。管理员原命令自动删除但列表回执保留。\n8. 发送 {prefix}{command} close 红包ID 关闭红包，{prefix}{command} help 查看完整帮助。\n9. 发送 {prefix}{command}-7 查询本周排行榜；每周日 10:00 默认自动发布上一完整周期。\n10. 管理员创建、重置或关闭红包成功后会自动删除原命令消息；参数错误或操作失败时保留。\n11. 重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。\n12. 匿名管理员不能参与答题红包；非匿名管理员和普通成员可正常参与。未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态且不会重复发放。答错后的新答案按钮有 2 秒冷却，连点不会消耗答题机会。\n13. 红包实际到期时间不会晚于创建日次日 08:30；前一日红包如在 08:00 仍未领完，会按群发送一次提醒，08:30 后自动结算。"
+      },
+      "command": {
+        "type": "string",
+        "title": "管理指令名",
+        "x-ui-section": "基础设置",
+        "x-ui-columns": 2,
+        "x-ui-order": 10,
+        "default": "airp",
+        "minLength": 1,
+        "maxLength": 32,
+        "pattern": "^\\S+$",
+        "description": "只填写指令本体，不包含系统指令前缀。"
+      },
+      "question_source_url": {
+        "type": "string",
+        "title": "题库来源 URL",
+        "x-ui-section": "题库来源",
+        "x-ui-columns": 1,
+        "x-ui-order": 100,
+        "default": "",
+        "description": "首次生成时抓取并缓存正文；后续补齐题库会复用缓存，创建红包不会抓网页或调用 AI。"
+      },
+      "telepilot_provider": {
+        "type": "string",
+        "title": "题库生成 Provider（可选）",
+        "x-ui-section": "AI 生成",
+        "x-ui-columns": 2,
+        "x-ui-order": 200,
+        "default": "",
+        "x-ui-widget": "llm-provider-select",
+        "description": "留空由 TelePilot 自动选择可用 Provider。"
+      },
+      "telepilot_model": {
+        "type": "string",
+        "title": "题库生成模型（可选）",
+        "x-ui-section": "AI 生成",
+        "x-ui-columns": 2,
+        "x-ui-order": 210,
+        "default": "",
+        "x-ui-widget": "llm-model-select",
+        "x-ui-provider-field": "telepilot_provider",
+        "x-ui-model-modality": "text",
+        "description": "选择 Provider 后可指定模型；留空使用该 Provider 的默认模型。"
+      },
+      "generation_count": {
+        "type": "integer",
+        "title": "题库目标题数",
+        "x-ui-section": "AI 生成",
+        "x-ui-columns": 2,
+        "x-ui-order": 220,
+        "default": 200,
+        "minimum": 100,
+        "maximum": 500,
+        "description": "范围 100-500。已有题库不足目标数量时会保留原题并继续补齐；达到目标后不会调用 AI。"
+      },
+      "default_questions": {
+        "type": "integer",
+        "title": "默认红包份数（每份一题）",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 400,
+        "default": 40,
+        "minimum": 1,
+        "maximum": 500,
+        "description": "创建红包未指定数量时，从题库抽取多少道题并分成多少份奖励；每位用户只回答其中一道题。"
+      },
+      "default_total_amount": {
+        "type": "integer",
+        "title": "默认红包总金额",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 390,
+        "default": 150000,
+        "minimum": 1,
+        "maximum": 1000000000,
+        "description": "单独发送管理指令时使用的总奖池金额，必须是整数。"
+      },
+      "question_bank_status": {
+        "type": "string",
+        "title": "题库状态（只读）",
+        "x-ui-section": "题库来源",
+        "x-ui-columns": 1,
+        "x-ui-order": 110,
+        "default": "尚未生成",
+        "readOnly": true,
+        "description": "生成成功后显示题库名称、实际有效题目数和默认题库 ID。"
+      },
+      "question_bank_id": {
+        "type": "string",
+        "title": "默认题库",
+        "x-ui-section": "基础设置",
+        "x-ui-columns": 2,
+        "x-ui-order": 20,
+        "x-ui-widget": "dynamic-select",
+        "x-ui-options-field": "question_bank_options",
+        "default": "",
+        "description": "选择创建红包时默认使用的题库；点击生成/补齐题库后会自动刷新选项。"
+      },
+      "question_bank_options": {
+        "type": "array",
+        "title": "题库选项",
+        "default": [],
+        "x-ui-hidden": true,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "value": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "value",
+            "label"
+          ]
+        }
+      },
+      "question_bank_count": {
+        "type": "integer",
+        "title": "题库实际题目数",
+        "default": 0,
+        "readOnly": true,
+        "x-ui-hidden": true
+      },
+      "question_bank_generated_at": {
+        "type": "string",
+        "title": "题库生成时间",
+        "default": "",
+        "readOnly": true,
+        "x-ui-hidden": true
+      },
+      "daily_limit": {
+        "type": "integer",
+        "title": "每轮成功领取上限",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 410,
+        "default": 1,
+        "minimum": 1,
+        "maximum": 100,
+        "description": "同一个 Telegram 用户在每个红包轮次中最多答对并领取多少次；跨过零点不会重置，新红包自动重新计算。"
+      },
+      "retry_count": {
+        "type": "integer",
+        "title": "答错后重试次数",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 420,
+        "default": 1,
+        "minimum": 0,
+        "maximum": 10,
+        "description": "每道题首次答错后还能重试多少次；设为 0 表示答错后立即结束本轮挑战。"
+      },
+      "pin_packet_message": {
+        "type": "boolean",
+        "title": "自动置顶红包入口",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 425,
+        "default": true,
+        "description": "创建红包后，开题消息发送成功时自动置顶；结束后会自动取消置顶。交互 Bot 无管理权限时，请把置顶通道改成 userbot。"
+      },
+      "packet_pin_channel": {
+        "type": "string",
+        "title": "开题消息置顶通道",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 426,
+        "default": "userbot",
+        "enum": [
+          "userbot",
+          "interaction_bot"
+        ],
+        "enumNames": [
+          "UserBot（推荐）",
+          "交互 Bot"
+        ],
+        "description": "开题消息仍由交互 Bot 发送并保留按钮；置顶动作可改用 UserBot 权限执行，避免交互 Bot 不是管理员时置顶失败。"
+      },
+      "reward_min": {
+        "type": "integer",
+        "title": "单题最低金额",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 430,
+        "default": 1,
+        "minimum": 1,
+        "maximum": 1000000000,
+        "description": "红包金额只允许整数。"
+      },
+      "reward_max": {
+        "type": "integer",
+        "title": "单题最高金额",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 440,
+        "default": 10000,
+        "minimum": 1,
+        "maximum": 1000000000,
+        "description": "红包金额只允许整数，且不得低于最低金额。"
+      },
+      "redpacket_ttl_seconds": {
+        "type": "integer",
+        "title": "红包有效期（秒）",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 450,
+        "default": 86400,
+        "minimum": 60,
+        "maximum": 604800
+      },
+      "answer_timeout_seconds": {
+        "type": "integer",
+        "title": "题目预约时间（秒）",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 460,
+        "default": 300,
+        "minimum": 30,
+        "maximum": 3600,
+        "description": "按此实际配置为每次答题或重试计时；超时后题目消息会提示失效并回归题库，本次不消耗次数，5 秒后自动删除。"
+      },
+      "timezone": {
+        "type": "string",
+        "title": "提醒与周榜时区",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 470,
+        "default": "Asia/Shanghai"
+      },
+      "weekly_auto_publish": {
+        "type": "boolean",
+        "title": "每周日自动发布周榜",
+        "x-ui-section": "红包与答题",
+        "x-ui-columns": 2,
+        "x-ui-order": 480,
+        "default": true,
+        "description": "开启后，每周日 10:00 自动发布上一周期（上周日 10:00 至本周日 10:00）的排行榜。"
+      },
+      "max_source_chars": {
+        "type": "integer",
+        "title": "网页正文最大字符数",
+        "x-ui-section": "AI 生成",
+        "x-ui-columns": 2,
+        "x-ui-order": 230,
+        "default": 120000,
+        "minimum": 1000,
+        "maximum": 300000
+      },
+      "ai_timeout_seconds": {
+        "type": "integer",
+        "title": "AI 生成超时（秒）",
+        "x-ui-section": "AI 生成",
+        "x-ui-columns": 2,
+        "x-ui-order": 240,
+        "default": 600,
+        "minimum": 30,
+        "maximum": 3600
+      },
+      "generation_concurrency": {
+        "type": "integer",
+        "title": "AI 并发批次数",
+        "x-ui-section": "AI 生成",
+        "x-ui-columns": 2,
+        "x-ui-order": 250,
+        "default": 3,
+        "minimum": 1,
+        "maximum": 5,
+        "description": "仅在目标超过单次 200 题或需要补齐时生效。Provider 容易限流时可调低。"
+      },
+      "generation_max_output_tokens": {
+        "type": "integer",
+        "title": "单次最大输出 Token",
+        "x-ui-section": "AI 生成",
+        "x-ui-columns": 2,
+        "x-ui-order": 260,
+        "default": 65536,
+        "minimum": 4096,
+        "maximum": 131072,
+        "description": "题库属于长时间离线任务。默认允许一次输出完整 100-200 题；模型最大输出较小时可调低。"
+      },
+      "question_generation_prompt": {
+        "type": "string",
+        "title": "AI 出题系统提示词",
+        "x-ui-section": "AI 出题要求",
+        "x-ui-columns": 1,
+        "x-ui-order": 300,
+        "default": "",
+        "x-ui-placeholder": "你是 TelePilot AI 红包插件的题库生成器。\n只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。\n每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。\n题目必须能从正文中直接得到答案，不要编造，不要出主观题。",
+        "description": "留空使用插件内置提示词；自定义时仍必须要求 JSONL 和三选一题型。"
+      },
+      "packet_message_template": {
+        "type": "string",
+        "title": "红包开场模板",
+        "default": "<h1>AI 答题红包</h1><ul><li>总金额：<code>{total_amount}</code></li><li>题目数量：<code>{question_count}</code></li><li>红包 ID：<code>{redpacket_id}</code></li><li>今日日期：<code>{date}</code></li></ul><p>每人每轮最多成功领取 {daily_limit} 次；每题答错后可重试 {retry_count} 次。</p>",
+        "description": "场景占位符：{total_amount} 总金额、{question_count} 题目数、{redpacket_id} 红包 ID。所有模板均可使用 {date}、{daily_limit}、{retry_count}、{prefix}、{command}。新模板使用 Telegram Rich HTML；升级前保存的自定义 Telegram HTML 继续按普通消息发送。"
+      },
+      "question_message_template": {
+        "type": "string",
+        "title": "答题题面模板",
+        "default": "<p><b>{answerer_name} 这是你的专属雨露</b></p><h1>AI 红包题目</h1><p>{question}</p>{options}<p>请选择唯一正确答案。</p>",
+        "description": "场景占位符：{answerer_name} 答题者姓名、{question} 题目、{options} 三个选项；另可使用全部通用占位符。新模板使用 Telegram Rich HTML；旧自定义模板保持普通 Telegram HTML。"
+      },
+      "success_message_template": {
+        "type": "string",
+        "title": "答对结果模板",
+        "default": "<p><b>答题者：{answerer_name}</b></p><h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答对了，获得 {reward}</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
+        "description": "场景占位符：{answerer_name} 答题者姓名、{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。"
+      },
+      "failed_message_template": {
+        "type": "string",
+        "title": "挑战失败模板",
+        "default": "<p><b>答题者：{answerer_name}</b></p><h1>AI 红包答题结果</h1><p>{question}</p><details open><summary>答题机会已用完，本轮挑战已结束</summary><p><b>正确答案：</b>{answer}</p><p><b>解析：</b>{explanation}</p><p><b>来源：</b>{source}</p></details>",
+        "description": "场景占位符：{answerer_name} 答题者姓名、{question}、{reward}、{answer}、{explanation}、{source}；另可使用全部通用占位符。"
+      },
+      "settlement_message_template": {
+        "type": "string",
+        "title": "红包结算模板",
+        "default": "<h1>AI 红包每日结算</h1><ul><li>红包 ID：<code>{redpacket_id}</code></li><li>状态：{status}</li><li>已领取：<code>{claimed_amount}</code> / <code>{total_amount}</code></li><li>领取人数：<code>{claim_count}</code></li></ul><p><b>运气王：</b>{luckiest_name} · {luckiest_reward}</p><p><b>倒霉蛋：</b>{unluckiest_name} · {unluckiest_reward}</p>{ranking}",
+        "description": "场景占位符：{redpacket_id}、{status}、{claimed_amount}、{total_amount}、{question_count}、{claim_count}、{luckiest_name}、{luckiest_reward}、{unluckiest_name}、{unluckiest_reward}、{ranking}；另可使用全部通用占位符。"
+      },
+      "reminder_message_template": {
+        "type": "string",
+        "title": "未领完红包提醒模板",
+        "default": "<h1>昨日雨露均沾即将到期</h1><p>以下 {packet_date} 创建的红包仍未领完，将于今日 {expire_time} 自动结束并结算：</p><ul>{redpackets}</ul>",
+        "description": "场景占位符：{packet_date} 红包创建日期、{expire_time} 当日截止时间、{redpackets} 未领完红包、领取进度和跳转链接；另可使用全部通用占位符。"
+      },
+      "list_message_template": {
+        "type": "string",
+        "title": "红包列表模板",
+        "default": "<b>正在进行的 AI 红包</b>\n{packets}\n\n未收到奖励：请先在群里发言，再点击下方对应红包的“申请补发奖励”。",
+        "description": "用于 {prefix}{command} list、/airp list，以及每 1 小时自动播报（1 分钟后自动删除）的进行中列表。场景占位符：{packets} 红包条目或空列表提示、{packet_count} 进行中红包数量；另可使用全部通用占位符。"
+      },
+      "weekly_message_template": {
+        "type": "string",
+        "title": "每周榜单模板",
+        "default": "<h1>{weekly_title}</h1><p>周期：<code>{period_start}</code> 至 <code>{period_end}</code></p><details><summary>答对次数 TOP 5</summary>{count_ranking}</details><details><summary>获得奖金 TOP 5</summary>{reward_ranking}</details>",
+        "description": "场景占位符：{weekly_title}、{period_start}、{period_end}、{count_ranking}、{reward_ranking}；另可使用全部通用占位符。"
+      },
+      "template_placeholders": {
+        "type": "string",
+        "title": "模板占位符（只读）",
+        "readOnly": true,
+        "default": "通用（所有模板均可用）：{date} {daily_limit} {retry_count} {prefix} {command}\n红包：{total_amount} {question_count} {redpacket_id}\n列表：{packets} {packet_count}\n题目：{answerer_name} {question} {options}\n结果：{answerer_name} {question} {reward} {answer} {explanation} {source}\n结算：{status} {claimed_amount} {total_amount} {question_count} {claim_count} {luckiest_name} {luckiest_reward} {unluckiest_name} {unluckiest_reward} {ranking}\n提醒：{packet_date} {expire_time} {redpackets}\n周榜：{weekly_title} {period_start} {period_end} {count_ranking} {reward_ranking}"
+      },
+      "packet_message_preview": {
+        "type": "string",
+        "title": "红包开场预览",
+        "readOnly": true,
+        "default": ""
+      },
+      "question_message_preview": {
+        "type": "string",
+        "title": "答题题面预览",
+        "readOnly": true,
+        "default": ""
+      },
+      "success_message_preview": {
+        "type": "string",
+        "title": "答对结果预览",
+        "readOnly": true,
+        "default": ""
+      },
+      "failed_message_preview": {
+        "type": "string",
+        "title": "挑战失败预览",
+        "readOnly": true,
+        "default": ""
+      },
+      "settlement_message_preview": {
+        "type": "string",
+        "title": "红包结算预览",
+        "readOnly": true,
+        "default": ""
+      },
+      "reminder_message_preview": {
+        "type": "string",
+        "title": "未领完红包提醒预览",
+        "readOnly": true,
+        "default": ""
+      },
+      "list_message_preview": {
+        "type": "string",
+        "title": "红包列表预览",
+        "readOnly": true,
+        "default": ""
+      },
+      "weekly_message_preview": {
+        "type": "string",
+        "title": "每周榜单预览",
+        "readOnly": true,
+        "default": ""
+      }
+    },
+    "required": [
+      "command",
+      "question_source_url",
+      "default_questions",
+      "reward_min",
+      "reward_max"
+    ]
+  },
+  "config_actions": [
+    {
+      "key": "generate_question_bank",
+      "title": "继续生成/补齐题库",
+      "description": "首次抓取并缓存上方 URL 正文；每批成功后立即保存。可在任务窗口中断或终止，切换 Provider/模型后从已有题目继续。",
+      "placement": "field:question_source_url",
+      "submit_label": "继续生成/补齐题库",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      }
+    }
+  ],
+  "event_subscriptions": [
+    {
+      "events": [
+        "command"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "owner_only",
+      "description": "管理员通过 UserBot 命令生成题库、创建和管理红包。"
+    },
+    {
+      "events": [
+        "message"
+      ],
+      "source": [
+        "interaction_bot"
+      ],
+      "scope": "all_allowed_chats",
+      "entry_key": "ai_redpacket_claim",
+      "filters": {
+        "keywords": [
+          "/airp list"
+        ]
+      },
+      "description": "群员发送 /airp list 自助查询进行中红包和申请补发；代码层仅开放只读列表。"
+    },
+    {
+      "events": [
+        "callback_query",
+        "session_close",
+        "session_expired"
+      ],
+      "source": [
+        "interaction_bot"
+      ],
+      "scope": "all_allowed_chats",
+      "entry_key": "ai_redpacket_claim",
+      "description": "交互 Bot 承接群员 /airp list、领取按钮、三选一答题和会话清理。"
+    }
+  ],
+  "interaction_entries": [
+    {
+      "key": "ai_redpacket_claim",
+      "title": "AI 红包领取与答题",
+      "description": "处理红包领取按钮和三选一答题按钮。",
+      "interaction_profile": "session_game",
+      "launch_mode": "hybrid",
+      "dispatch_modes": [
+        "public_keyword"
+      ],
+      "events": [
+        "message",
+        "callback_query",
+        "session_close",
+        "session_expired"
+      ],
+      "session_scope": "user",
+      "session_policy": {
+        "ttl_seconds": 3600,
+        "duplicate_start": "continue",
+        "close_on": [
+          "completed",
+          "session_close",
+          "session_expired"
+        ]
+      },
+      "payload_contract": {
+        "required_envelope": [
+          "source",
+          "actor",
+          "trigger",
+          "session"
+        ],
+        "required_event_fields": [
+          "type",
+          "chat_id"
+        ]
+      },
+      "result_contract": {
+        "actions": [
+          "send_message",
+          "send_rich_message",
+          "edit_message",
+          "delete_message",
+          "pin_message",
+          "answer_callback",
+          "payout",
+          "end_session"
+        ]
+      },
+      "settlement": {
+        "mode": "auto",
+        "recipient_field": "reply_to_user_id",
+        "amount_field": "amount"
+      },
+      "message_channels": {
+        "public_keyword": "interaction_bot"
+      },
+      "money_channel": "userbot_reply",
+      "preserve_command_trigger": true,
+      "callback_fast_ack": false
+    }
+  ],
+  "license": "MIT"
+}

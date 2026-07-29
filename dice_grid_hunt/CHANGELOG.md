@@ -1,8 +1,74 @@
 # 更新日志
-## 1.1.14 (2026-07-10)
-- 修复交互 Bot 路径仍依赖插件进程内存的问题：开局后会把九宫格回合写入平台 session，后续猜错会继续 `update_session` 保存冷却状态。
-- 补齐 `callback_query`、`session_expired`、`update_session` 和 `payout` 交互契约声明，避免平台按旧能力处理。
-- 答对后在自动发奖模式下明确返回 `payout` 动作，并保留发奖账号与结算状态，防止只公告不发奖。
+## 1.1.29 (2026-07-14)
+- 移除题图发送与 caption 编辑动作中硬编码的 `send_via` / `send_via_options`，普通会话消息现由 TelePilot 按 `session.channel` 自动路由，保持 `payout` 固定走 userbot。
+
+## 1.1.28 (2026-07-10)
+- 修复交互 Bot 开局和答题仍依赖插件进程内存的问题：开局写入平台 session，后续答题从 `payload.session.data` 恢复局面。
+- 猜错时返回 `update_session` 保存用户答题冷却，避免进程重载或会话续投递后同一用户限制丢失。
+- 补齐 `callback_query`、`session_expired`、`update_session` 和 `valid_seconds` 交互契约声明，保留原图 `edit_caption` 和自动 `payout` 发奖链路。
+
+## 1.1.27 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 读取改用标准事件信封 `event_from_interaction_payload(payload)` 作为主路径（事件类型、聊天、消息文本/ID、发起人 ID），旧平铺 payload helper 全部保留为 fallback，标准字段取不到时自动回退。
+- 事件类型路由仍保持旧平铺优先、信封兜底，keyword/付款开局与答题分发语义不变；九宫格题图、答对 `edit_caption`、`payout` 发奖与每回合全量状态重发流程完全保留，玩法与文案零改动。
+- 同步 `plugin.json` 与 `manifest.py` 版本号。
+
+## 1.1.26 (2026-07-06)
+- 修复交互 Bot 会话答题时未读取 TelePilot 当前标准 payload 的 `message.text`，导致答对后返回空动作、无法触发 `edit_caption` 的问题。
+- 答对后的 caption 编辑统一依赖开局题图保存键定位原图片，避免玩家回复其他消息时误把 `reply_to_message_id` 当作图片消息 ID。
+- 交互链路发奖 action 补充 `reply_to_user_id`，方便平台在消息 ID 缺失时使用近期发言兜底，并提升结算日志可排查性。
+
+## 1.1.25 (2026-07-06)
+- 九宫格开局题图 action 显式携带 `chat_id`，避免不同交互入口下仅依赖事件兜底导致保存原图消息 ID 不稳定。
+- 答对编辑 caption 同时携带 `message_id` / `edit_message_id` 和保存键，并声明优先交互 Bot、可回退 UserBot 的发送通道。
+- 兼容 TelePilot payload 中 `message.reply_to.message_id` 形态的原图回复 ID。
+
+## 1.1.24 (2026-07-06)
+- 答对后编辑原图 caption 时优先使用玩家回复的原图 `message_id`，保留保存键兜底，避免题图消息 ID 未命中时只发奖不编辑。
+- 补充交互 Bot 回归测试，覆盖回复原图编辑和保存键兜底两种路径。
+
+## 1.1.23 (2026-07-06)
+- 九宫格题图发送和答对 caption 编辑显式走 `interaction_bot`，避免会话通道路由不一致导致原图无法编辑。
+- 兼容已保存的旧开局模板：运行时自动为“九宫格竞猜”标题补上版本号。
+
+## 1.1.22 (2026-07-06)
+- 答对后编辑原图 caption 时不再重复追加奖金行，保留开局题面里的奖励展示。
+
+## 1.1.21 (2026-07-06)
+- 答对后编辑原图 caption 的结果文案改为 24 点同款结构，并同时携带 `caption` / `text` 字段适配 TelePilot 执行器。
+
+## 1.1.20 (2026-07-06)
+- 交互 Bot 开局题图保存消息 ID，答对后改为 `edit_caption` 原地更新原图片 caption，不再额外发送答对公告。
+- 答对结果复用成功模板并默认显示“图 N”，发奖仍保持原 `payout` action 链路。
+- 修正首次答题在极短运行时间环境下可能被冷却判断误拦的问题。
+
+## 1.1.19 (2026-07-05)
+- 答对公告移除发奖状态承诺文案；实际发奖仍继续返回 `payout` action 交给 TelePilot 执行。
+
+## 1.1.18 (2026-07-04)
+- 适配 TelePilot 0.49 交互契约：奖励发放改用平台 `payout` 动作。
+- 移除交互入口里的旧发奖通道声明，避免已是最新版本但实际仍不发奖。
+
+
+## 1.1.18 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
+- 答对后新增 `payout` action，修复只公告结算但不触发 userbot 发奖的问题。
+
+## 1.1.17 (2026-06-29)
+- 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
+- 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
+
+## 1.1.16 (2026-06-28)
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
+- 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
+
+
+## 1.1.15 (2026-06-27)
+- 按最新 TelePilot 插件开发文档补充 `config_schema["x-usage-guide"]`，让插件中心和通用配置页展示明确使用说明。
+- 同步更新 `plugin.json` 与 `manifest.py` 版本，避免触发“未声明详细使用说明”的高级规范警告。
+
+## 1.1.14 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
 
 ## 1.1.13 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。

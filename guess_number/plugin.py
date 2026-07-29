@@ -11,7 +11,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -206,6 +208,28 @@ class GuessNumberPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[guess_number] 已停止")
 
+    @staticmethod
+    def _event_message_id(event: Any) -> int | None:
+        """标准事件信封里的 message_id，取不到返回 None（由调用方回退旧路径）。"""
+        if event is None or event.message is None:
+            return None
+        return _positive_int(event.message.message_id, 0) or None
+
+    @staticmethod
+    def _event_actor(event: Any, payload: dict[str, Any]) -> tuple[int, str]:
+        """标准事件信封里的行为主体，缺字段时回退旧平铺 payload。"""
+        actor_id = 0
+        actor_name = ""
+        if event is not None:
+            ref = event.actor if (event.actor and event.actor.user_id) else event.sender
+            if ref is not None:
+                actor_id = _positive_int(ref.user_id, 0, minimum=0)
+                actor_name = str(ref.display_name or ref.username or "").strip()
+        if actor_id and actor_name:
+            return actor_id, actor_name
+        fb_id, fb_name = _interaction_actor(payload)
+        return (actor_id or fb_id), (actor_name or fb_name)
+
     async def on_interaction(
         self,
         ctx: PluginContext,
@@ -214,14 +238,18 @@ class GuessNumberPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_guess_number":
             return None
-        event_type = _interaction_event_type(payload)
-        chat_id = _interaction_chat_id(payload)
+        # 主路径：标准事件信封；旧平铺 payload 仅作 fallback（见下方 helper）。
+        event = event_from_interaction_payload(payload)
+        # 局内 start/guess 语义需要旧 trigger 分类（框架层 start 与 guess 都是
+        # type=message），因此路由仍以旧 helper 为准，取不到时回退 event.type。
+        event_type = _interaction_event_type(payload) or event.type
+        chat_id = (event.message.chat_id if event.message else None) or _interaction_chat_id(payload)
         if not chat_id:
             return [{"type": "send_message", "text": "❌ 猜数字需要在群聊里使用。"}]
         if event_type in {"payment_confirmed", "keyword"}:
-            return await self._interaction_start(ctx, payload, chat_id)
+            return await self._interaction_start(ctx, payload, chat_id, event)
         if event_type == "message":
-            return await self._interaction_guess(ctx, payload, chat_id)
+            return await self._interaction_guess(ctx, payload, chat_id, event)
         if event_type == "session_close":
             async with self._get_lock(chat_id):
                 self._games.pop(chat_id, None)
@@ -233,14 +261,20 @@ class GuessNumberPlugin(Plugin):
         ctx: PluginContext,
         payload: dict[str, Any],
         chat_id: int,
+        event: Any = None,
     ) -> list[dict[str, Any]]:
-        prize = _positive_int(payload.get("prize") or _interaction_amount(payload), 0, minimum=1)
+        # 标准字段优先，旧平铺 payload 作 fallback。
+        event_amount = 0
+        if event is not None and event.payment is not None:
+            event_amount = _positive_int(event.payment.amount, 0, minimum=1)
+        reply_to = self._event_message_id(event) or _interaction_message_id(payload)
+        prize = _positive_int(payload.get("prize") or event_amount or _interaction_amount(payload), 0, minimum=1)
         if prize <= 0:
             return [
                 {
                     "type": "send_message",
                     "text": f"请指定奖励金额。例：{{prefix}}{self._command} 100",
-                    "reply_to_message_id": _interaction_message_id(payload),
+                    "reply_to_message_id": reply_to,
                 },
                 {"type": "end_session"},
             ]
@@ -268,7 +302,7 @@ class GuessNumberPlugin(Plugin):
                     {
                         "type": "send_message",
                         "text": "🎯 当前聊天已有进行中的猜数字。",
-                        "reply_to_message_id": _interaction_message_id(payload),
+                        "reply_to_message_id": reply_to,
                     }
                 ]
             self._games[chat_id] = game
@@ -285,7 +319,7 @@ class GuessNumberPlugin(Plugin):
                     f"限时 {timeout} 秒，直接发送数字即可。"
                 ),
                 "parse_mode": "html",
-                "reply_to_message_id": _interaction_message_id(payload),
+                "reply_to_message_id": reply_to,
             }
         ]
 
@@ -294,17 +328,23 @@ class GuessNumberPlugin(Plugin):
         ctx: PluginContext,
         payload: dict[str, Any],
         chat_id: int,
+        event: Any = None,
     ) -> list[dict[str, Any]]:
-        text = _interaction_message_text(payload)
+        # 标准字段优先，旧平铺 payload 作 fallback。
+        text = ""
+        if event is not None and event.message is not None:
+            text = str(event.message.text or "").strip()
+        if not text:
+            text = _interaction_message_text(payload)
         if not text.lstrip("-").isdigit():
             return []
         guess = int(text)
-        reply_to = _interaction_message_id(payload)
+        reply_to = self._event_message_id(event) or _interaction_message_id(payload)
         async with self._get_lock(chat_id):
             game = self._games.get(chat_id)
             if not game or game.finished:
                 return [{"type": "no_session"}]
-            actor_id, actor_name = _interaction_actor(payload)
+            actor_id, actor_name = self._event_actor(event, payload)
             game.attempts += 1
             if guess == game.target:
                 game.finished = True
@@ -313,7 +353,14 @@ class GuessNumberPlugin(Plugin):
                 game.history.append(f"{actor_name}: {guess} → ✅ 中！")
                 self._games.pop(chat_id, None)
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": reply_to, "send_via": "userbot_reply"},
+                    {
+                        "type": "payout",
+                        "chat_id": chat_id,
+                        "amount": game.prize,
+                        "text": f"+{game.prize}",
+                        "parse_mode": "plain",
+                        "reply_to_message_id": reply_to,
+                    },
                     {
                         "type": "send_message",
                         "text": (
@@ -332,11 +379,12 @@ class GuessNumberPlugin(Plugin):
                             "answer": game.target,
                         },
                         "settlement": {
-                            "mode": "announce_only",
+                            "mode": "auto",
                             "winner_user_id": actor_id,
                             "winner_name": actor_name,
                             "amount": game.prize,
                             "amount_field": "prize",
+                            "status": "payout_requested",
                         },
                     },
                     {"type": "end_session"},
@@ -377,10 +425,11 @@ class GuessNumberPlugin(Plugin):
         # 没有游戏 → 开始新游戏
         prize = self._parse_prize(args)
         if prize <= 0:
-            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            prefix = current_command_prefix(fallback=",")
+            await event.reply(f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
             return
 
-        # 解析范围：默认 1-100，可 ,guess 奖励 1 1000 自定义
+        # 解析范围：默认 1-100，可用“指令 奖励 1 1000”自定义。
         low, high = 1, 100
         max_attempts = 0  # 0 = 不限制
         game_args = args[1:]
@@ -413,11 +462,12 @@ class GuessNumberPlugin(Plugin):
             self._games[chat_id] = gs
 
         limit_hint = f"（最多 {max_attempts} 次）" if max_attempts else ""
+        prefix = current_command_prefix(fallback=",")
         msg = await event.reply(
             f"<b>🔢 猜数字</b>\n\n"
             f"奖励：<b>+{prize}</b>\n"
             f"范围：{low} ~ {high}{limit_hint}\n"
-            f"直接发数字就能猜，或者用 ,{self._command} 数字\n\n"
+            f"直接发数字就能猜，或者用 {prefix}{self._command} 数字\n\n"
             f"来猜吧！",
             parse_mode="html",
         )

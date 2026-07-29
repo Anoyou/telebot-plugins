@@ -13,6 +13,7 @@ from typing import Any
 from telethon import events
 
 from app.worker.plugins.base import Plugin, PluginContext, public_entity_display_name, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 # ─────────────────────────────────────────────────────
 # 常量
@@ -21,7 +22,10 @@ TOTAL_CHAMBER = 6
 JOIN_TIMEOUT = 60
 TURN_TIMEOUT = 30
 COURAGE_MULTIPLIER: dict[int, float] = {0: 1.00, 1: 1.10, 2: 1.25, 3: 1.45, 4: 1.70}
-REDIS_MSG_KEY_PREFIX = "dead_revolver:msg:"
+REDIS_MSG_KEY_PREFIX = "msg:"
+REDIS_GUIDANCE_KEY_PREFIX = "guidance:"
+DEFAULT_START_KEYWORD = "开始挑战"
+LEGACY_START_COMMAND = "dr_start"
 
 
 def _courage_multiplier(courage: int) -> float:
@@ -44,7 +48,45 @@ def _next_player_id(players: list[Player]) -> int:
 
 
 def _interaction_msg_key(account_id: int, chat_id: int) -> str:
-    return f"{REDIS_MSG_KEY_PREFIX}{account_id}:{chat_id}"
+    return f"{REDIS_MSG_KEY_PREFIX}{chat_id}"
+
+
+def _guidance_msg_key(account_id: int, chat_id: int) -> str:
+    return f"{REDIS_GUIDANCE_KEY_PREFIX}{chat_id}"
+
+
+async def _read_saved_message_id(ctx: PluginContext, key: str) -> int | None:
+    messages = getattr(ctx, "messages", None)
+    reader = getattr(messages, "read_saved_message_id", None)
+    if callable(reader):
+        try:
+            message_id = await reader(key)
+            if message_id is not None:
+                return _int_payload(message_id)
+        except Exception:
+            pass
+    if ctx.redis is None:
+        return None
+    try:
+        raw = await ctx.redis.get(key)
+    except Exception:
+        return None
+    return _int_payload(raw)
+
+
+async def _delete_saved_message_id(ctx: PluginContext, key: str) -> None:
+    messages = getattr(ctx, "messages", None)
+    delete_saved = getattr(messages, "delete_saved_message_id", None)
+    if callable(delete_saved):
+        try:
+            await delete_saved(key)
+        except Exception:
+            pass
+    if ctx.redis is not None:
+        try:
+            await ctx.redis.delete(key)
+        except Exception:
+            pass
 
 
 def _int_or_zero(val: Any) -> int:
@@ -60,6 +102,13 @@ def _int_payload(value: Any) -> int | None:
 def _payload_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     return value if isinstance(value, dict) else {}
+
+
+def _normalized_identity(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith("@"):
+        text = text[1:].strip()
+    return text.casefold()
 
 
 def _extract_chat_id(payload: dict[str, Any]) -> int | None:
@@ -83,6 +132,112 @@ def _extract_user_id(payload: dict[str, Any]) -> int | None:
 def _extract_display_name(payload: dict[str, Any]) -> str:
     actor = _payload_dict(payload, "actor")
     return str(payload.get("sender_name") or actor.get("display_name") or payload.get("payer_name") or "未知用户")
+
+
+def _extract_payment_user_id(payload: dict[str, Any]) -> int | None:
+    payment = _payload_dict(payload, "payment")
+    player = _payload_dict(payload, "player")
+    reply_to = _payload_dict(payload, "reply_to")
+    actor = _payload_dict(payload, "actor")
+    event = _payload_dict(payload, "event")
+    for value in (
+        payload.get("payer_user_id"),
+        payment.get("payer_user_id"),
+        payment.get("payer", {}).get("user_id") if isinstance(payment.get("payer"), dict) else None,
+        player.get("user_id"),
+        reply_to.get("user_id"),
+        reply_to.get("sender_user_id"),
+        event.get("reply_to_user_id"),
+        actor.get("user_id"),
+        payload.get("user_id"),
+    ):
+        user_id = _int_payload(value)
+        if user_id is not None:
+            return user_id
+    return None
+
+
+def _extract_payment_display_name(payload: dict[str, Any]) -> str:
+    payment = _payload_dict(payload, "payment")
+    player = _payload_dict(payload, "player")
+    reply_to = _payload_dict(payload, "reply_to")
+    actor = _payload_dict(payload, "actor")
+    for value in (
+        payload.get("payer_name"),
+        payment.get("payer_name"),
+        payment.get("payer_display_name"),
+        payment.get("payer", {}).get("display_name") if isinstance(payment.get("payer"), dict) else None,
+        player.get("display_name"),
+        reply_to.get("display_name"),
+        actor.get("display_name"),
+        payload.get("sender_name"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "未知用户"
+
+
+def _extract_payment_amount(payload: dict[str, Any]) -> int:
+    payment = _payload_dict(payload, "payment")
+    source = _payload_dict(payload, "source")
+    event = _payload_dict(payload, "event")
+    for value in (
+        payload.get("amount"),
+        payload.get("payment_amount"),
+        payment.get("amount"),
+        source.get("amount"),
+        event.get("amount"),
+    ):
+        amount = _int_payload(value)
+        if amount is not None:
+            return amount
+    return 0
+
+
+def _extract_payment_source_message_id(payload: dict[str, Any]) -> int | None:
+    payment = _payload_dict(payload, "payment")
+    reply_to = _payload_dict(payload, "reply_to")
+    for value in (
+        payload.get("payer_message_id"),
+        payment.get("reply_to_message_id"),
+        reply_to.get("message_id"),
+        payload.get("source_message_id"),
+        payment.get("source_message_id"),
+        payload.get("message_id"),
+    ):
+        message_id = _int_payload(value)
+        if message_id is not None:
+            return message_id
+    return None
+
+
+def _extract_message_text(payload: dict[str, Any]) -> str:
+    source = _payload_dict(payload, "source")
+    trigger = _payload_dict(payload, "trigger")
+    event = _payload_dict(payload, "event")
+    value = (
+        payload.get("message_text")
+        or payload.get("text")
+        or source.get("message_text")
+        or source.get("text")
+        or trigger.get("message_text")
+        or trigger.get("text")
+        or event.get("message_text")
+        or event.get("text")
+    )
+    return str(value or "").strip()
+
+
+def _configured_start_keyword(*configs: dict[str, Any] | None) -> str:
+    for cfg in configs:
+        if not isinstance(cfg, dict):
+            continue
+        value = cfg.get("start_keyword") or cfg.get("start_command")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return DEFAULT_START_KEYWORD
 
 
 def _event_chat_id(event: Any) -> int | None:
@@ -166,6 +321,7 @@ class GameState:
     tracked_msg_ids: list[int] = field(default_factory=list)
     guidance_msg_id: int | None = None
     created_at: float = 0.0
+    start_keyword: str = DEFAULT_START_KEYWORD
 
 
 # ─────────────────────────────────────────────────────
@@ -184,16 +340,29 @@ class DeadRevolverPlugin(Plugin):
         self._locks: dict[int, asyncio.Lock] = {}
         self._ctx: PluginContext | None = None
         self._self_tg_user_id: int | None = None
+        self._self_tg_username: str | None = None
+        self._self_receiver_names: set[str] = set()
+        self._start_keyword = DEFAULT_START_KEYWORD
 
     # ── 生命周期 ────────────────────────────────
     async def on_startup(self, ctx: PluginContext) -> None:
         self._ctx = ctx
-        self.commands = {"dr": self._cmd_create, "dr_start": self._cmd_start}
+        self._start_keyword = _configured_start_keyword(getattr(ctx, "config", None) or {})
+        self.commands = {
+            "dr": self._cmd_create,
+            LEGACY_START_COMMAND: self._cmd_start,
+            DEFAULT_START_KEYWORD: self._cmd_start,
+            self._start_keyword: self._cmd_start,
+        }
         try:
             me = await ctx.client.get_me()
             self._self_tg_user_id = int(getattr(me, "id", 0) or 0) or None
+            self._self_tg_username = getattr(me, "username", None)
+            self._self_receiver_names = self._receiver_names_from_entity(me)
         except Exception:
             self._self_tg_user_id = None
+            self._self_tg_username = None
+            self._self_receiver_names = set()
         await self._log("info", "死亡左轮插件已启动。")
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
@@ -211,11 +380,15 @@ class DeadRevolverPlugin(Plugin):
     # ── 交互 Bot 入口 ──────────────────────────
     async def on_interaction(self, ctx: PluginContext, entry_key: str, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
         if entry_key != "join_paid_game": return None
-        event_type = _extract_event_type(payload)
-        chat_id = _extract_chat_id(payload)
+        # 主路径：标准事件信封。旧平铺 payload helper 作为字段兜底保留。
+        event = event_from_interaction_payload(payload)
+        event_type = event.type or _extract_event_type(payload)
+        chat_id = event.message.chat_id
+        if chat_id is None:
+            chat_id = _extract_chat_id(payload)
         if chat_id is None: return []
         if event_type == "keyword":
-            return await self._ibot_create(ctx, payload, chat_id)
+            return await self._ibot_keyword(ctx, payload, chat_id)
         if event_type == "payment_confirmed":
             return await self._ibot_payment(ctx, payload, chat_id)
         if event_type == "callback_query":
@@ -224,11 +397,32 @@ class DeadRevolverPlugin(Plugin):
             await self._ibot_close(ctx, chat_id)
         return []
 
+    async def _ibot_keyword(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
+        text = _extract_message_text(payload)
+        sender_id = _extract_user_id(payload)
+        configured_keyword = _configured_start_keyword(
+            _payload_dict(payload, "module_config"),
+            getattr(ctx, "config", None) or {},
+            {"start_keyword": self._start_keyword},
+        )
+        is_start_keyword = text in {LEGACY_START_COMMAND, DEFAULT_START_KEYWORD, configured_keyword}
+        async with self._lock_for(chat_id):
+            gs = self._games.get(chat_id)
+            if gs is not None and self._matches_start_keyword(gs, text):
+                error = await self._start_existing_game(ctx, gs, sender_id)
+                if error:
+                    return [{"type": "send_message", "text": error}]
+                return []
+        if is_start_keyword:
+            return [{"type": "send_message", "text": "当前没有进行中的死亡左轮游戏。"}]
+        return await self._ibot_create(ctx, payload, chat_id)
+
     async def _ibot_create(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
         sender_id = _extract_user_id(payload)
         if sender_id is None: return []
         module_config = _payload_dict(payload, "module_config")
         fee = _int_payload(module_config.get("entry_fee")) or 100
+        start_keyword = _configured_start_keyword(module_config, getattr(ctx, "config", None) or {}, {"start_keyword": self._start_keyword})
         msg_text = str(payload.get("message_text") or "").strip()
         parsed_fee = self._parse_fee(msg_text.split())
         if parsed_fee > 0: fee = parsed_fee
@@ -238,7 +432,8 @@ class DeadRevolverPlugin(Plugin):
             if existing and existing.phase in ("joining", "playing"):
                 return [{"type": "send_message", "text": "当前已有进行中的死亡左轮游戏。"}]
             game = GameState(game_id=secrets.token_hex(4), chat_id=chat_id, host_user_id=sender_id,
-                             entry_fee=fee, interaction_bot=True, created_at=time.time())
+                             entry_fee=fee, interaction_bot=True, created_at=time.time(),
+                             start_keyword=start_keyword)
             self._games[chat_id] = game
             game.timeout_task = asyncio.create_task(self._join_timeout(ctx, game))
         await self._log("info", f"死亡左轮游戏已创建（交互Bot）：{game.game_id} 门票 {fee}。",
@@ -246,11 +441,15 @@ class DeadRevolverPlugin(Plugin):
         return [{"type": "send_message", "text": self._render_lobby(game), "pin": True, "save_message_id_key": _interaction_msg_key(ctx.account_id, chat_id)}]
 
     async def _ibot_payment(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int) -> list[dict[str, Any]]:
-        user_id = _extract_user_id(payload)
+        user_id = _extract_payment_user_id(payload)
         if user_id is None: return []
-        display_name = _extract_display_name(payload)
-        source = _payload_dict(payload, "source")
-        paid = _int_payload(payload.get("amount") or source.get("amount")) or 0
+        display_name = _extract_payment_display_name(payload)
+        paid = _extract_payment_amount(payload)
+        if not self._payment_receiver_matches_self(payload):
+            return [{
+                "type": "send_message",
+                "text": f"这笔付款没有转给{self._receiver_label()}，不会加入死亡左轮。",
+            }]
 
         async with self._lock_for(chat_id):
             gs = self._games.get(chat_id)
@@ -260,21 +459,21 @@ class DeadRevolverPlugin(Plugin):
             if paid != gs.entry_fee:
                 return [{"type": "send_message", "text": f"转账金额不符，本局门票为 {gs.entry_fee}，请转账恰好此金额报名。"}]
             player = Player(player_id=_next_player_id(gs.players), user_id=user_id, display_name=display_name,
-                            paid=paid, message_id=_int_payload(payload.get("source_message_id")) or _int_payload(payload.get("message_id")))
+                            paid=paid, message_id=_extract_payment_source_message_id(payload))
             gs.players.append(player)
 
         lobby = self._render_lobby(gs)
         msg_key = _interaction_msg_key(ctx.account_id, chat_id)
         actions: list[dict[str, Any]] = [
-            {"type": "send_message", "text": f"{html.escape(display_name)} 已报名死亡左轮！当前 {len(gs.players)} 名玩家。", "send_via": "interaction_bot"},
+            {"type": "send_message", "text": f"{html.escape(display_name)} 已报名死亡左轮！当前 {len(gs.players)} 名玩家。"},
         ]
-        lobby_action: dict[str, Any] = {"type": "send_message", "text": lobby, "send_via": "interaction_bot"}
-        if ctx.redis:
-            raw = await ctx.redis.get(msg_key)
-            if raw: lobby_action["edit_message_id"] = _int_or_zero(raw)
-            else: lobby_action.update(pin=True, save_message_id_key=msg_key)
+        lobby_action: dict[str, Any] = {"type": "send_message", "text": lobby}
+        saved_message_id = await _read_saved_message_id(ctx, msg_key)
+        if saved_message_id is not None:
+            lobby_action["edit_message_id"] = saved_message_id
         else:
             lobby_action["pin"] = True
+            lobby_action["save_message_id_key"] = msg_key
         actions.append(lobby_action)
         return actions
 
@@ -322,7 +521,7 @@ class DeadRevolverPlugin(Plugin):
         gs = self._games.pop(chat_id, None)
         if gs and gs.timeout_task and not gs.timeout_task.done(): gs.timeout_task.cancel()
         self._locks.pop(chat_id, None)
-        if ctx.redis: await ctx.redis.delete(_interaction_msg_key(ctx.account_id, chat_id))
+        await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, chat_id))
         await self._log("info", f"死亡左轮交互 Bot 会话已清理：聊天 {chat_id}。", chat_id=chat_id)
 
     # ── 命令 handler ────────────────────────────
@@ -330,6 +529,7 @@ class DeadRevolverPlugin(Plugin):
                           account_id: int, ctx: PluginContext) -> None:
         fee = self._parse_fee(args)
         if fee <= 0: await event.reply("请指定门票金额，例如：dr 100"); return
+        start_keyword = _configured_start_keyword(getattr(ctx, "config", None) or {}, {"start_keyword": self._start_keyword})
         chat_id = _event_chat_id(event)
         if chat_id is None: return
         async with self._lock_for(chat_id):
@@ -339,7 +539,7 @@ class DeadRevolverPlugin(Plugin):
             sender_id = _event_sender_id(event)
             if sender_id is None: return
             game = GameState(game_id=secrets.token_hex(4), chat_id=chat_id, host_user_id=sender_id,
-                             entry_fee=fee, created_at=time.time())
+                             entry_fee=fee, created_at=time.time(), start_keyword=start_keyword)
             msg = await event.reply(self._render_lobby(game))
             game.game_message_id = msg.id
             try: await client.pin_message(chat_id, msg.id)
@@ -356,12 +556,10 @@ class DeadRevolverPlugin(Plugin):
         async with self._lock_for(chat_id):
             gs = self._games.get(chat_id)
             if gs is None: await event.reply("当前没有进行中的死亡左轮游戏。"); return
-            if gs.phase != "joining": await event.reply("游戏已经开始或已结束。"); return
             sender_id = _event_sender_id(event)
-            if sender_id != gs.host_user_id: await event.reply("只有庄家可以开始游戏。"); return
-            if len(gs.players) < 2: await event.reply("至少需要 2 名玩家才能开始。"); return
-            if gs.timeout_task and not gs.timeout_task.done(): gs.timeout_task.cancel()
-            await self._start_game(ctx, gs)
+            error = await self._start_existing_game(ctx, gs, sender_id)
+            if error:
+                await event.reply(error)
 
     # ── on_message ───────────────────────────────
     async def on_message(self, ctx: PluginContext, event: events.NewMessage.Event) -> None:
@@ -375,6 +573,20 @@ class DeadRevolverPlugin(Plugin):
         if gs is None: return
 
         if gs.interaction_bot:
+            if self._matches_start_keyword(gs, text):
+                error: str | None = None
+                start_gs: GameState | None = None
+                async with self._lock_for(chat_id):
+                    gs2 = self._games.get(chat_id)
+                    if gs2 is not None and self._matches_start_keyword(gs2, text):
+                        start_gs = gs2
+                        error = await self._start_existing_game(ctx, gs2, sender_id)
+                if error and start_gs is not None:
+                    msg_id = await self._send_bot_msg(ctx, start_gs, error)
+                    if msg_id is None:
+                        try: await ctx.client.send_message(chat_id, error)
+                        except Exception: pass
+                return
             handled = await self._userbot_transfer(ctx, event, gs, text, sender_id)
             if not handled:
                 async with self._lock_for(chat_id):
@@ -386,6 +598,12 @@ class DeadRevolverPlugin(Plugin):
         async with self._lock_for(chat_id):
             gs2 = self._games.get(chat_id)
             if gs2 is None: return
+            if self._matches_start_keyword(gs2, text):
+                error = await self._start_existing_game(ctx, gs2, sender_id)
+                if error:
+                    try: await ctx.client.send_message(chat_id, error)
+                    except Exception: pass
+                return
             if text.startswith("+"):
                 await self._userbot_join(ctx, event, gs2, sender_id, text)
                 return
@@ -415,6 +633,8 @@ class DeadRevolverPlugin(Plugin):
 
     async def _userbot_transfer(self, ctx: PluginContext, event: events.NewMessage.Event,
                                 gs: GameState, text: str, sender_id: int) -> bool:
+        if not bool((getattr(ctx, "config", None) or {}).get("legacy_transfer_notice_fallback")):
+            return False
         payer_match = re.search(r"^\s*(.+?)\s*(?:转出|射出|转账)\s*(\d+)\b", text, re.M)
         receiver_match = re.search(r"^\s*(.+?)\s*(?:收到|接收|收款)\s*(\d+)\b", text, re.M)
         if not payer_match or not receiver_match: return False
@@ -422,21 +642,9 @@ class DeadRevolverPlugin(Plugin):
         except ValueError: return False
         if paid != gs.entry_fee: return False
 
-        from app.db.base import AsyncSessionLocal
-        from app.services.account_bot_service import get_transfer_notice_config
-        async with AsyncSessionLocal() as db:
-            cfg = await get_transfer_notice_config(db, ctx.account_id)
-        if not cfg.get("enabled"): return False
-        trusted = cfg.get("trusted_bot_id")
-        if trusted and str(sender_id) != str(trusted): return False
-        rules = cfg.get("rules") or []
-        has_payment_rule = any(
-            isinstance(r, dict) and r.get("enabled", True)
-            and str(r.get("trigger_mode") or "payment") in ("payment", "both")
-            and (not r.get("chat_ids") or gs.chat_id in (r.get("chat_ids") or []))
-            for r in rules
-        )
-        if not has_payment_rule: return False
+        receiver_name = receiver_match.group(1).strip()
+        if not self._transfer_notice_receiver_matches_self(event, receiver_name):
+            return False
 
         reply_id = getattr(event.message, "reply_to_msg_id", None)
         user_id: int | None = None
@@ -445,6 +653,9 @@ class DeadRevolverPlugin(Plugin):
                 replied = await ctx.client.get_messages(gs.chat_id, ids=reply_id)
                 user_id = getattr(replied, "sender_id", None)
             except Exception: pass
+        # 通知消息没有 reply_id 时回退到发送者，避免付款报名漏记。
+        if user_id is None:
+            user_id = sender_id
         if user_id is None: return False
 
         payload: dict[str, Any] = {
@@ -459,35 +670,17 @@ class DeadRevolverPlugin(Plugin):
             "message_text": text,
             "amount": paid,
             "payer_user_id": user_id,
+            "receiver_name": receiver_name,
+            "payment": {
+                "amount": paid,
+                "payer_name": payer_match.group(1).strip(),
+                "receiver_name": receiver_name,
+            },
             "source_message_id": reply_id,
         }
         actions = await self._ibot_payment(ctx, payload, gs.chat_id)
         if actions:
-            from app.db.base import AsyncSessionLocal
-            from app.services.account_bot_service import get_interaction_bot_token, send_message, edit_message, call_bot_api
-            async with AsyncSessionLocal() as db:
-                token = await get_interaction_bot_token(db, ctx.account_id)
-            if token:
-                for action in actions:
-                    action_type = str(action.get("type") or "")
-                    if action_type != "send_message": continue
-                    txt = str(action.get("text") or "").strip()
-                    if not txt: continue
-                    edit_id = _int_payload(action.get("edit_message_id"))
-                    if edit_id:
-                        try: await edit_message(token, gs.chat_id, edit_id, txt)
-                        except Exception: pass
-                    else:
-                        try:
-                            result = await send_message(token, gs.chat_id, txt)
-                            sent_id = result.get("message_id") if isinstance(result, dict) else None
-                            if sent_id:
-                                gs.tracked_msg_ids.append(sent_id)
-                                asyncio.create_task(self._delete_after(token, gs.chat_id, sent_id, 15))
-                            if action.get("pin") and sent_id:
-                                try: await call_bot_api(token, "pinChatMessage", {"chat_id": gs.chat_id, "message_id": sent_id})
-                                except Exception: pass
-                        except Exception: pass
+            await self._apply_message_actions(ctx, gs, actions)
         return True
 
     async def _handle_input(self, ctx: PluginContext, gs: GameState, text: str, sender_id: int) -> None:
@@ -502,10 +695,34 @@ class DeadRevolverPlugin(Plugin):
         self._cancel_turn_timer(gs)
         await self._fire_shot(ctx, gs, current, target if target_id != current.player_id else None)
 
+    def _matches_start_keyword(self, gs: GameState, text: str) -> bool:
+        value = str(text or "").strip()
+        return value in {LEGACY_START_COMMAND, DEFAULT_START_KEYWORD, gs.start_keyword}
+
+    async def _start_existing_game(self, ctx: PluginContext, gs: GameState, sender_id: int | None) -> str | None:
+        if gs.phase != "joining":
+            return "游戏已经开始或已结束。"
+        if sender_id != gs.host_user_id:
+            return "只有庄家可以开始游戏。"
+        if len(gs.players) < 2:
+            return "至少需要 2 名玩家才能开始。"
+        if gs.timeout_task and not gs.timeout_task.done():
+            gs.timeout_task.cancel()
+        await self._start_game(ctx, gs)
+        return None
+
     # ── 定时器 ───────────────────────────────────
     def _cancel_turn_timer(self, gs: GameState) -> None:
-        if gs.turn_timer and not gs.turn_timer.done():
-            gs.turn_timer.cancel()
+        task = gs.turn_timer
+        if task is None:
+            return
+        if task.done():
+            gs.turn_timer = None
+            return
+        if task is asyncio.current_task():
+            return
+        task.cancel()
+        gs.turn_timer = None
 
     def _start_turn_timer(self, ctx: PluginContext, gs: GameState) -> None:
         self._cancel_turn_timer(gs)
@@ -613,6 +830,7 @@ class DeadRevolverPlugin(Plugin):
     # ── 发送引导 ─────────────────────────────────
     async def _send_turn_guidance(self, ctx: PluginContext, gs: GameState, current: Player,
                                   alive: list[Player], *, start: bool = False) -> None:
+        await self._delete_guidance_message(ctx, gs)
         if start:
             txt = f"🔫 <b>游戏开始！</b>（第 1 轮，弹巢 {_bullet_count(gs.round_num, len(alive))} 发实弹）\n"
         else:
@@ -633,20 +851,18 @@ class DeadRevolverPlugin(Plugin):
 
         if gs.interaction_bot:
             lobby_id = await self._resolve_lobby_id(ctx, gs)
-            token = await self._get_bot_token(ctx)
-            if token:
-                if lobby_id:
-                    try: await self._bot_api(token, "editMessageText", {"chat_id": gs.chat_id, "message_id": lobby_id, "text": result_text, "parse_mode": "HTML"})
-                    except Exception: pass
-                if winner:
-                    try: await self._bot_api(token, "sendMessage", {"chat_id": gs.chat_id, "text": f"🏆 {html.escape(winner.display_name)} 获胜！勇气 {winner.courage}，奖金 +{prize}", "parse_mode": "HTML"})
-                    except Exception: pass
-                if winner and prize > 0:
-                    try:
-                        if winner.message_id: await ctx.client.send_message(gs.chat_id, f"+{prize}", reply_to=winner.message_id)
-                        else: await ctx.client.send_message(gs.chat_id, f"+{prize}")
-                    except Exception: pass
-                await self._cleanup_messages(ctx, gs, token, lobby_id)
+            if lobby_id:
+                await self._edit_bot_msg(ctx, gs, lobby_id, result_text)
+            if winner:
+                await self._send_bot_msg(ctx, gs, f"🏆 {html.escape(winner.display_name)} 获胜！勇气 {winner.courage}，奖金 +{prize}")
+            if winner and prize > 0:
+                await self._send_platform_payout(
+                    ctx,
+                    gs,
+                    prize,
+                    reply_to=winner.message_id,
+                )
+            await self._cleanup_messages(ctx, gs, lobby_id)
         else:
             if gs.game_message_id:
                 try: await ctx.client.edit_message(gs.chat_id, gs.game_message_id, result_text)
@@ -662,31 +878,35 @@ class DeadRevolverPlugin(Plugin):
                 try: await ctx.client.delete_messages(gs.chat_id, gs.game_message_id)
                 except Exception: pass
 
-        if gs.interaction_bot and ctx.redis:
-            await ctx.redis.delete(_interaction_msg_key(ctx.account_id, gs.chat_id))
+        if gs.interaction_bot:
+            await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
         self._games.pop(gs.chat_id, None); self._locks.pop(gs.chat_id, None)
 
     async def _cancel_game(self, ctx: PluginContext, gs: GameState, reason: str) -> None:
         gs.phase = "ended"
         self._cancel_turn_timer(gs)
         refund_players = [p for p in gs.players if p.paid > 0]
-        refund_lines: list[str] = []
+        refund_count = len(refund_players)
+        total_refund = sum(p.paid for p in refund_players)
+        cancel_text = self._render_lobby(gs) + f"\n\n⚠️ {reason}"
         if refund_players:
-            refund_lines.append("\n📋 <b>需退款的玩家</b>")
-            for p in refund_players: refund_lines.append(f"  {html.escape(p.display_name)}：{p.paid}")
-            refund_lines.append("请手动退还以上玩家的门票费用。")
-        cancel_text = self._render_lobby(gs) + f"\n\n⚠️ {reason}" + "\n".join(refund_lines)
+            cancel_text += f"\n📋 正在自动退还 {refund_count} 名玩家的门票费用（共 {total_refund}）…"
 
         if gs.interaction_bot:
             lobby_id = await self._resolve_lobby_id(ctx, gs)
-            token = await self._get_bot_token(ctx)
-            if token:
-                try: await self._bot_api(token, "sendMessage", {"chat_id": gs.chat_id, "text": f"⚠️ {html.escape(reason)}", "parse_mode": "HTML"})
-                except Exception: pass
-                if refund_players:
-                    try: await self._bot_api(token, "sendMessage", {"chat_id": gs.chat_id, "text": "\n".join(refund_lines), "parse_mode": "HTML"})
-                    except Exception: pass
-                await self._cleanup_messages(ctx, gs, token, lobby_id)
+            if lobby_id:
+                await self._edit_bot_msg(ctx, gs, lobby_id, cancel_text)
+            await self._send_bot_msg(ctx, gs, f"⚠️ {html.escape(reason)}")
+            for p in refund_players:
+                await self._send_platform_payout(
+                    ctx,
+                    gs,
+                    p.paid,
+                    reply_to=p.message_id,
+                )
+            if refund_players:
+                await self._send_bot_msg(ctx, gs, f"✅ 已自动退还 {refund_count} 名玩家的门票费用。")
+            await self._cleanup_messages(ctx, gs, lobby_id)
         else:
             if gs.game_message_id:
                 try: await ctx.client.edit_message(gs.chat_id, gs.game_message_id, cancel_text)
@@ -701,57 +921,181 @@ class DeadRevolverPlugin(Plugin):
                     else: await ctx.client.send_message(gs.chat_id, f"+{p.paid}")
                 except Exception: pass
 
-        if gs.interaction_bot and ctx.redis:
-            await ctx.redis.delete(_interaction_msg_key(ctx.account_id, gs.chat_id))
+        if gs.interaction_bot:
+            await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
         self._games.pop(gs.chat_id, None); self._locks.pop(gs.chat_id, None)
 
     # ── 交互 Bot 工具 ───────────────────────────
-    async def _get_bot_token(self, ctx: PluginContext) -> str | None:
-        from app.db.base import AsyncSessionLocal
-        from app.services.account_bot_service import get_interaction_bot_token
-        async with AsyncSessionLocal() as db:
-            return await get_interaction_bot_token(db, ctx.account_id)
-
-    async def _bot_api(self, token: str, method: str, payload: dict[str, Any]) -> Any:
-        from app.services.account_bot_service import call_bot_api
-        return await call_bot_api(token, method, payload)
-
-    async def _resolve_lobby_id(self, ctx: PluginContext, gs: GameState) -> int | None:
-        if gs.game_message_id: return gs.game_message_id
-        if ctx.redis:
-            raw = await ctx.redis.get(_interaction_msg_key(ctx.account_id, gs.chat_id))
-            return _int_or_zero(raw) if raw else None
-        return None
-
-    async def _send_bot_msg(self, ctx: PluginContext, gs: GameState, txt: str,
-                            reply_to: int | None = None, reply_markup: dict | None = None) -> int | None:
-        token = await self._get_bot_token(ctx)
-        if not token: return None
+    async def _send_platform_message(self, ctx: PluginContext, gs: GameState, txt: str,
+                                     *, send_via: str | None = None,
+                                     reply_to: int | None = None,
+                                     reply_markup: dict | None = None,
+                                     edit_message_id: int | None = None,
+                                     save_message_id_key: str | None = None,
+                                     pin: bool = False) -> int | None:
+        messages = getattr(ctx, "messages", None)
+        if messages is not None:
+            if edit_message_id is not None:
+                kwargs = dict(
+                    chat_id=gs.chat_id,
+                    message_id=edit_message_id,
+                    text=txt,
+                    reply_markup=reply_markup,
+                )
+                if send_via is not None:
+                    kwargs["channel"] = send_via
+                await messages.edit(**kwargs)
+                return edit_message_id
+            kwargs = dict(
+                chat_id=gs.chat_id,
+                text=txt,
+                reply_to_message_id=reply_to,
+                reply_markup=reply_markup,
+                save_message_id_key=save_message_id_key,
+                pin=pin,
+            )
+            if send_via is not None:
+                kwargs["channel"] = send_via
+            await messages.send(**kwargs)
+            return None
+        if ctx.client is None:
+            return None
         try:
-            from app.services.account_bot_service import send_message
-            result = await send_message(token, gs.chat_id, txt, reply_to_message_id=reply_to, reply_markup=reply_markup)
-            msg_id = result.get("message_id") if isinstance(result, dict) else None
-            if msg_id: gs.tracked_msg_ids.append(msg_id)
-            return msg_id
+            if edit_message_id is not None:
+                await ctx.client.edit_message(gs.chat_id, edit_message_id, txt)
+                return edit_message_id
+            msg = await ctx.client.send_message(gs.chat_id, txt, reply_to=reply_to)
+            msg_id = getattr(msg, "id", None)
+            if pin and msg_id is not None:
+                try: await ctx.client.pin_message(gs.chat_id, msg_id)
+                except Exception: pass
+            return _int_payload(msg_id)
         except Exception:
             return None
 
-    async def _edit_bot_msg(self, ctx: PluginContext, gs: GameState, msg_id: int, txt: str) -> None:
-        token = await self._get_bot_token(ctx)
-        if not token: return
-        try:
-            from app.services.account_bot_service import edit_message
-            await edit_message(token, gs.chat_id, msg_id, txt)
+    async def _send_platform_payout(
+        self,
+        ctx: PluginContext,
+        gs: GameState,
+        amount: int,
+        *,
+        reply_to: int | None = None,
+    ) -> None:
+        action = {
+            "type": "payout",
+            "chat_id": gs.chat_id,
+            "amount": amount,
+            "text": f"+{amount}",
+            "parse_mode": "plain",
+            "reply_to_message_id": reply_to,
+        }
+        messages = getattr(ctx, "messages", None)
+        apply = getattr(messages, "apply", None)
+        if callable(apply):
+            await apply([action], entry_key="join_paid_game")
+            return
+        actions = getattr(messages, "actions", None)
+        if isinstance(actions, list):
+            actions.append(action)
+            return
+        if ctx.client is not None:
+            try:
+                await ctx.client.send_message(gs.chat_id, f"+{amount}", reply_to=reply_to)
+            except Exception:
+                pass
+
+    async def _delete_platform_message(self, ctx: PluginContext, gs: GameState, msg_id: int,
+                                       *, send_via: str | None = None) -> None:
+        messages = getattr(ctx, "messages", None)
+        if messages is not None:
+            kwargs = {"chat_id": gs.chat_id, "message_id": msg_id}
+            if send_via is not None:
+                kwargs["channel"] = send_via
+            await messages.delete(**kwargs)
+            return
+        if ctx.client is None:
+            return
+        try: await ctx.client.delete_messages(gs.chat_id, msg_id)
         except Exception: pass
 
-    async def _cleanup_messages(self, ctx: PluginContext, gs: GameState, token: str, lobby_id: int | None) -> None:
-        from app.services.account_bot_service import delete_message as del_msg
+    async def _apply_message_actions(self, ctx: PluginContext, gs: GameState,
+                                     actions: list[dict[str, Any]]) -> None:
+        messages = getattr(ctx, "messages", None)
+        if messages is not None:
+            messages.actions.extend(actions)
+            return
+        for action in actions:
+            action_type = str(action.get("type") or "")
+            if action_type != "send_message":
+                continue
+            txt = str(action.get("text") or "").strip()
+            if not txt:
+                continue
+            edit_id = _int_payload(action.get("edit_message_id"))
+            msg_id = await self._send_platform_message(
+                ctx,
+                gs,
+                txt,
+                send_via=str(action.get("send_via")) if action.get("send_via") else None,
+                edit_message_id=edit_id,
+                save_message_id_key=str(action.get("save_message_id_key") or "") or None,
+                pin=bool(action.get("pin")),
+            )
+            if msg_id:
+                gs.tracked_msg_ids.append(msg_id)
+
+    async def _resolve_lobby_id(self, ctx: PluginContext, gs: GameState) -> int | None:
+        if gs.game_message_id: return gs.game_message_id
+        return await _read_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
+
+    async def _send_bot_msg(self, ctx: PluginContext, gs: GameState, txt: str,
+                            reply_to: int | None = None, reply_markup: dict | None = None) -> int | None:
+        save_key = _guidance_msg_key(ctx.account_id, gs.chat_id) if reply_markup else None
+        msg_id = await self._send_platform_message(
+            ctx,
+            gs,
+            txt,
+            reply_to=reply_to,
+            reply_markup=reply_markup,
+            save_message_id_key=save_key,
+        )
+        if msg_id:
+            gs.tracked_msg_ids.append(msg_id)
+            if reply_markup:
+                gs.guidance_msg_id = msg_id
+        return msg_id
+
+    async def _edit_bot_msg(self, ctx: PluginContext, gs: GameState, msg_id: int, txt: str) -> None:
+        await self._send_platform_message(ctx, gs, txt, edit_message_id=msg_id)
+
+    async def _delete_guidance_message(self, ctx: PluginContext, gs: GameState) -> None:
+        msg_id = gs.guidance_msg_id
+        if msg_id is None:
+            msg_id = await _read_saved_message_id(
+                ctx,
+                _guidance_msg_key(ctx.account_id, gs.chat_id),
+            )
+        if msg_id is None:
+            return
+        await self._delete_platform_message(ctx, gs, msg_id)
+        if gs.guidance_msg_id == msg_id:
+            gs.guidance_msg_id = None
+        await _delete_saved_message_id(ctx, _guidance_msg_key(ctx.account_id, gs.chat_id))
+        gs.tracked_msg_ids = [mid for mid in gs.tracked_msg_ids if mid != msg_id]
+
+    async def _cleanup_messages(self, ctx: PluginContext, gs: GameState, lobby_id: int | None) -> None:
+        seen: set[int] = set()
         for mid in gs.tracked_msg_ids:
-            try: await del_msg(token, gs.chat_id, mid)
-            except Exception: pass
-        if lobby_id:
-            try: await self._bot_api(token, "unpinChatMessage", {"chat_id": gs.chat_id, "message_id": lobby_id})
-            except Exception: pass
+            if mid in seen:
+                continue
+            seen.add(mid)
+            await self._delete_platform_message(ctx, gs, mid)
+        guidance_id = gs.guidance_msg_id
+        if guidance_id and guidance_id not in seen:
+            await self._delete_platform_message(ctx, gs, guidance_id)
+        await _delete_saved_message_id(ctx, _guidance_msg_key(ctx.account_id, gs.chat_id))
+        gs.tracked_msg_ids = []
+        gs.guidance_msg_id = None
 
     # ── 消息管理 ─────────────────────────────────
     async def _update_lobby(self, ctx: PluginContext, gs: GameState, text: str) -> None:
@@ -759,9 +1103,7 @@ class DeadRevolverPlugin(Plugin):
         msg_id = gs.game_message_id
         if gs.interaction_bot and msg_id is None:
             msg_key = _interaction_msg_key(ctx.account_id, gs.chat_id)
-            if ctx.redis:
-                raw = await ctx.redis.get(msg_key)
-                if raw: msg_id = _int_or_zero(raw)
+            msg_id = await _read_saved_message_id(ctx, msg_key)
         if msg_id is None: return
         if gs.interaction_bot:
             await self._edit_bot_msg(ctx, gs, msg_id, text)
@@ -769,12 +1111,79 @@ class DeadRevolverPlugin(Plugin):
             try: await ctx.client.edit_message(gs.chat_id, msg_id, text)
             except Exception: pass
 
-    async def _delete_after(self, token: str, chat_id: int, msg_id: int, delay: int) -> None:
-        await asyncio.sleep(delay)
-        try:
-            from app.services.account_bot_service import delete_message as del_msg
-            await del_msg(token, chat_id, msg_id)
-        except Exception: pass
+    def _receiver_names_from_entity(self, entity: Any) -> set[str]:
+        names: set[str] = set()
+        username = getattr(entity, "username", None)
+        if username:
+            names.add(_normalized_identity(username))
+        first_name = str(getattr(entity, "first_name", "") or "").strip()
+        last_name = str(getattr(entity, "last_name", "") or "").strip()
+        for item in (first_name, last_name, f"{first_name} {last_name}".strip()):
+            if item:
+                names.add(_normalized_identity(item))
+        display_name = public_entity_display_name(
+            entity,
+            fallback_id=None,
+            default="",
+        )
+        if display_name:
+            names.add(_normalized_identity(display_name))
+        return {item for item in names if item}
+
+    def _receiver_label(self) -> str:
+        if self._self_tg_username:
+            return f"@{self._self_tg_username}"
+        if self._self_receiver_names:
+            return "当前 UserBot 收款人"
+        return "当前 UserBot 收款人（暂未读取到账号名）"
+
+    def _receiver_text_matches_self(self, value: Any) -> bool:
+        candidate = _normalized_identity(value)
+        return bool(candidate and candidate in self._self_receiver_names)
+
+    def _transfer_notice_receiver_matches_self(self, event: Any, receiver_name: str) -> bool:
+        if self._receiver_text_matches_self(receiver_name):
+            return True
+        if self._self_tg_user_id is None:
+            return False
+        entities = getattr(getattr(event, "message", None), "entities", None) or []
+        return any(
+            getattr(getattr(ent, "user", None), "id", None) == self._self_tg_user_id
+            for ent in entities
+        )
+
+    def _payment_receiver_matches_self(self, payload: dict[str, Any]) -> bool:
+        payment = _payload_dict(payload, "payment")
+        source = _payload_dict(payload, "source")
+        receiver = _payload_dict(payment, "receiver")
+        receiver_ids = [
+            receiver.get("user_id"),
+            payment.get("receiver_user_id"),
+            payload.get("receiver_user_id"),
+            source.get("receiver_user_id"),
+        ]
+        clean_ids = [item for item in (_int_payload(value) for value in receiver_ids) if item is not None]
+        if clean_ids:
+            return self._self_tg_user_id is not None and any(item == self._self_tg_user_id for item in clean_ids)
+
+        receiver_names = [
+            receiver.get("username"),
+            receiver.get("display_name"),
+            receiver.get("name"),
+            payment.get("receiver_username"),
+            payment.get("receiver_display_name"),
+            payment.get("receiver_name"),
+            payload.get("receiver_username"),
+            payload.get("receiver_display_name"),
+            payload.get("receiver_name"),
+            source.get("receiver_username"),
+            source.get("receiver_display_name"),
+            source.get("receiver_name"),
+        ]
+        clean_names = [item for item in receiver_names if str(item or "").strip()]
+        if clean_names:
+            return any(self._receiver_text_matches_self(item) for item in clean_names)
+        return False
 
     def _current_player(self, gs: GameState) -> Player | None:
         if gs.turn_index >= len(gs.turn_order): return None
@@ -797,7 +1206,6 @@ class DeadRevolverPlugin(Plugin):
     def _render_lobby(self, gs: GameState) -> str:
         lines = [
             "🔫 <b>死亡左轮</b>",
-            f"游戏 ID：<code>{gs.game_id}</code>",
             f"门票：{gs.entry_fee}",
             "",
             "📋 <b>玩法规则</b>",
@@ -813,13 +1221,13 @@ class DeadRevolverPlugin(Plugin):
             lines.append(f"  {p.player_id}. {name}{paid_tag}")
         if not gs.players:
             lines.append("  （暂无玩家）")
+        start_keyword = html.escape(gs.start_keyword or self._start_keyword or DEFAULT_START_KEYWORD)
         lines.extend([
             "",
-            "📌 <b>参与方式</b>",
-            f"• 转账 <b>{gs.entry_fee}</b> 到此群 → 自动报名（精确金额，多转少转均无效）",
-            f"• 或发送 <b>+{gs.entry_fee}</b> 快速加入",
-            "• 庄家发送 <b>dr_start</b> 开始（需至少 2 人）",
-            f"• {max(0, int(JOIN_TIMEOUT - (time.time() - gs.created_at)))} 秒后自动开始或取消",
+            "📌 参与方式",
+            f"• 转账 {gs.entry_fee} → 自动报名",
+            f"• 庄家发送{start_keyword} 开始（需至少 2 人）",
+            f"⏰ {max(0, int(JOIN_TIMEOUT - (time.time() - gs.created_at)))} 秒后自动开始或取消",
         ])
         return "\n".join(lines)
 

@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '配置目标群和白名单 Bot 后启用功能总开关；插件会监听 incoming 消息，按开关删除非白名单 @bot、inline Bot、Bot 发言或入群服务消息。建议先开启演练模式确认命中范围。',
     "x-category": "automation",
     "x-interaction-entries": [],
     "additionalProperties": False,
@@ -100,11 +101,20 @@ CONFIG_SCHEMA = {
 }
 
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = ('配置目标群和白名单 Bot 后启用功能总开关；插件会监听 incoming 消息，按开关删除非白名单 @bot、inline Bot、Bot '
+ '发言或入群服务消息。建议先开启演练模式确认命中范围。事件订阅：监听 userbot 收到的群消息；命中规则后按配置删除、禁言、踢出或封禁，建议先用演练模式观察命中范围。')
+EVENT_SUBSCRIPTIONS = [{'events': ['message'],
+  'source': ['userbot'],
+  'scope': 'all_allowed_chats',
+  'description': '监听 userbot 收到的群消息，按白名单和演练模式处理非白名单 Bot、inline Bot 与 Bot 发言。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.4",
-    min_telepilot_version="0.30.4",
+    version="1.1.8",
+    min_telepilot_version="0.33.0",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
     permissions=["send_message", "delete_message", "read_chat", "moderate_chat"],
@@ -113,5 +123,10 @@ MANIFEST = Manifest(
     config_schema=CONFIG_SCHEMA,
 )
 
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

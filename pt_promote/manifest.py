@@ -42,11 +42,23 @@ INFO_OK_TEMPLATE_DEFAULT = (
     "{details_url}"
 )
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = '发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 free/2x、时长、竞价和奖励参数。普通回复继承 TelePilot 当前会话通道，不再由插件硬编码 interaction_bot/userbot_reply；可在 Trace/action 记录中排查。事件订阅：管理员命令走 userbot；群内关键词和会话消息走 interaction_bot。'
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.14",
-    min_telepilot_version="0.30.4",
+    version="1.0.23",
+    min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
     category="utility",
@@ -57,7 +69,7 @@ MANIFEST = Manifest(
   'interaction_profile': 'utility_trigger',
   'launch_mode': 'hybrid',
   'session_scope': 'user',
-  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'events': ['keyword', 'message', 'session_close'],
   'preserve_command_trigger': True,
   'command_fallback': {'enabled': True, 'command': 'pt', 'mode': 'hint_only'},
   'session_policy': {'ttl_seconds': 600,
@@ -65,17 +77,20 @@ MANIFEST = Manifest(
                      'close_on': ['completed', 'failed', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+  'result_contract': {'actions': ['send_message', 'end_session', 'result']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'torrent_id': {'type': 'string', 'title': '种子 ID', 'default': ''},
-                                  'options': {'type': 'string', 'title': '促销参数', 'default': ''}}}}],
+                                  'options': {'type': 'string', 'title': '促销参数', 'default': ''}}},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'participant_policy': 'notify_only'}],
     permissions=["send_message", "edit_message", "external_http"],
     allowed_hosts=["www.qingwapt.com"],
     config_schema={
         "type": "object",
         "x-ui-mode": "single",
+        "x-usage-guide": '发送 {prefix}{command} 种子ID [促销参数] 触发青娃 PT 置顶促销；先在全局配置填站点 Cookie，再按示例设置 free/2x、时长、竞价和奖励参数。',
         "additionalProperties": False,
         "properties": {
             "command": {
@@ -119,6 +134,8 @@ MANIFEST = Manifest(
                 "type": "string",
                 "title": "Cookie",
                 "description": "登录后浏览器复制的完整 Cookie 字符串",
+                "format": "password",
+                "x-sensitive": True,
                 "default": "",
                 "level": "global",
             },
@@ -229,5 +246,10 @@ MANIFEST = Manifest(
         "required": ["command", "cookie", "torrent_cooldown_seconds"],
     },
 )
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

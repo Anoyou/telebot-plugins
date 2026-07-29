@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.14",
+  "version": "1.1.29",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -65,14 +65,14 @@
       "template_placeholders": {
         "type": "string",
         "title": "可用占位符说明",
-        "default": "开局：{target_sum} 目标点数；{prize} 奖励；{timeout} 限时秒数；{guess_cooldown} 答题冷却。\n结果：{winner} 答对者；{answer_index} 正确格子；{elapsed} 用时秒数。\n指令：{command} 触发指令；{force_stop_command} 结束参数；{example} 示例奖励；{prefix} 系统前缀。\n\n旧版兼容：如果旧配置里仍有 {title}、{target_line}、{guide_line}、{reward_line}；它们会按内置旧模板展开：标题=九宫格竞猜；目标行=目标点数；引导行=回复 1-9；奖励行=奖励与超时。\n\n预览只使用固定示例值。不读取真实群消息；也不会触发发送。",
+        "default": "开局：{version} 插件版本；{target_sum} 目标点数；{prize} 奖励；{timeout} 限时秒数；{guess_cooldown} 答题冷却。\n结果：{winner} 答对者；{answer_index} 正确格子；{elapsed} 用时秒数。\n指令：{command} 触发指令；{force_stop_command} 结束参数；{example} 示例奖励；{prefix} 系统前缀。\n\n旧版兼容：如果旧配置里仍有 {title}、{target_line}、{guide_line}、{reward_line}；它们会按内置旧模板展开：标题=九宫格竞猜；目标行=目标点数；引导行=回复 1-9；奖励行=奖励与超时。\n\n预览只使用固定示例值。不读取真实群消息；也不会触发发送。",
         "readOnly": true
       },
       "round_message_template": {
         "type": "string",
         "title": "开局消息模板",
-        "description": "支持占位符：{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}、{prefix}。旧配置中的 {title}、{target_line}、{guide_line}、{reward_line} 仍会兼容展开；新模板建议直接写完整文案。",
-        "default": "<b>九宫格竞猜</b>\n目标：<b>{target_sum}</b> · 回 <code>1-9</code>\n奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s",
+        "description": "支持占位符：{version}、{target_sum}、{prize}、{timeout}、{guess_cooldown}、{command}、{prefix}。旧配置中的 {title}、{target_line}、{guide_line}、{reward_line} 仍会兼容展开；新模板建议直接写完整文案。",
+        "default": "<b>九宫格竞猜v{version} 开始</b>\n目标：<b>{target_sum}</b> · 回 <code>1-9</code>\n奖 <b>+{prize}</b> · {timeout}s · 冷却 {guess_cooldown}s",
         "minLength": 1,
         "maxLength": 1200
       },
@@ -88,7 +88,7 @@
         "type": "string",
         "title": "答对结果模板",
         "description": "支持占位符：{winner}、{answer_index}、{target_sum}、{elapsed}、{prize}",
-        "default": "{winner} 答对：<b>{answer_index}</b>\n用时 {elapsed}s · 奖励 <b>+{prize}</b>",
+        "default": "{winner} 答对：图 <b>{answer_index}</b>\n用时 {elapsed}s · 奖励 <b>+{prize}</b>",
         "minLength": 1,
         "maxLength": 1200
       },
@@ -143,7 +143,7 @@
         "type": "string",
         "title": "模板渲染预览（只读 - 开局消息）",
         "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
-        "default": "<b>九宫格竞猜</b>\n目标：<b>17</b> · 回 <code>1-9</code>\n奖 <b>+100</b> · 90s · 冷却 2.0s",
+        "default": "<b>九宫格竞猜v1.1.28 开始</b>\n目标：<b>17</b> · 回 <code>1-9</code>\n奖 <b>+100</b> · 90s · 冷却 2.0s",
         "readOnly": true
       },
       "in_progress_preview": {
@@ -157,7 +157,7 @@
         "type": "string",
         "title": "模板渲染预览（只读 - 答对结果）",
         "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
-        "default": "小明 答对：<b>6</b>\n用时 8.2s · 奖励 <b>+100</b>",
+        "default": "小明 答对：图 <b>6</b>\n用时 8.2s · 奖励 <b>+100</b>",
         "readOnly": true
       },
       "timeout_preview": {
@@ -204,7 +204,8 @@
       "prize_message_template",
       "delete_after_round",
       "force_stop_command"
-    ]
+    ],
+    "x-usage-guide": "管理员发送 {prefix}{command} 奖励金额 开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板，并在插件预览里查看最终消息。"
   },
   "license": "MIT",
   "category": "interactive",
@@ -261,14 +262,11 @@
           "send_message",
           "send_photo",
           "update_session",
+          "edit_caption",
           "payout",
           "end_session",
           "result",
           "settlement"
-        ],
-        "send_via": [
-          "interaction_bot",
-          "userbot_reply"
         ]
       },
       "input_schema": {
@@ -301,8 +299,56 @@
         "mode": "announce_only",
         "winner_field": "actor.user_id",
         "amount_field": "prize"
-      }
+      },
+      "dispatch_modes": [
+        "admin_command",
+        "public_keyword"
+      ],
+      "message_channels": {
+        "admin_command": "userbot_reply",
+        "public_keyword": "interaction_bot"
+      },
+      "money_channel": "userbot_reply",
+      "participant_policy": "open_race"
     }
   ],
-  "min_telepilot_version": "0.30.4"
+  "min_telepilot_version": "0.33.0",
+  "usage": "管理员发送 {prefix}{command} 奖励金额开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。",
+  "event_subscriptions": [
+    {
+      "events": [
+        "command"
+      ],
+      "source": [
+        "userbot"
+      ],
+      "scope": "owner_only",
+      "description": "账号主人或授权管理员通过 UserBot 命令触发。"
+    },
+    {
+      "events": [
+        "message",
+        "callback_query",
+        "session_expired",
+        "session_close"
+      ],
+      "source": [
+        "interaction_bot"
+      ],
+      "scope": "rule_bound",
+      "description": "交互规则命中后由交互 Bot 投递会话事件。"
+    },
+    {
+      "events": [
+        "payment_confirmed"
+      ],
+      "source": [
+        "external_payment_notice",
+        "userbot"
+      ],
+      "scope": "rule_bound",
+      "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
+    }
+  ],
+  "capabilities": {}
 }

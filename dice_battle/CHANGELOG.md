@@ -1,6 +1,37 @@
 # 更新日志
+## 1.0.13 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封 `event_from_interaction_payload(payload)` 读取事件类型、聊天、消息、发起人与付款金额，旧平铺 payload helper 保留为 fallback。
+- 同步 `plugin.json` 与 `manifest.py` 版本号。
+- 保持原有骰子对战规则、命令行为与玩家可见文案不变。
+
+## 1.0.12 (2026-07-04)
+- 适配 TelePilot 0.49 交互契约：奖励发放改用平台 `payout` 动作。
+- 移除交互入口里的旧发奖通道声明，避免已是最新版本但实际仍不发奖。
+
+
+## 1.0.11 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
+- 对战赢家奖励改为 `payout` action，由 userbot 执行。
+
+## 1.0.10 (2026-06-29)
+- 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
+- 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
+
+## 1.0.9 (2026-06-28)
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
+- 保留 `interaction_bot` 与 `平台资金通道` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
+
+
+## 1.0.8 (2026-06-27)
+- 按最新 TelePilot 插件开发文档补充 `config_schema["x-usage-guide"]`，让插件中心和通用配置页展示明确使用说明。
+- 同步更新 `plugin.json` 与 `manifest.py` 版本，避免触发“未声明详细使用说明”的高级规范警告。
+
+## 1.0.7 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
+
 ## 1.0.6 (2026-06-25)
-- 修复交互 Bot 模式下奖励由 Bot 发放的问题，奖励消息改用 `send_via: userbot_reply` 由管理员账号发放。
+- 修复交互 Bot 模式下奖励由 Bot 发放的问题，奖励消息改用 平台资金通道 由管理员账号发放。
 
 ## 1.0.5 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。

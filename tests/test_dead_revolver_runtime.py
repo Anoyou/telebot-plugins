@@ -1,0 +1,330 @@
+from __future__ import annotations
+
+import asyncio
+import importlib.util
+import json
+import sys
+import types
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_plugin_module():
+    app_module = types.ModuleType("app")
+    worker_module = types.ModuleType("app.worker")
+    plugins_module = types.ModuleType("app.worker.plugins")
+    base_module = types.ModuleType("app.worker.plugins.base")
+    plugin_events_module = types.ModuleType("app.worker.plugins.events")
+    telethon_module = types.ModuleType("telethon")
+    events_module = types.ModuleType("telethon.events")
+
+    class Plugin:
+        pass
+
+    class PluginContext:
+        def __init__(self, account_id: int = 1) -> None:
+            self.account_id = account_id
+            self.feature_key = "dead_revolver"
+            self.log = None
+            self.config = {}
+            self.client = None
+            self.redis = None
+            self.messages = None
+
+    def register(cls):
+        return cls
+
+    def public_entity_display_name(entity, *, fallback_id=None, default="玩家"):
+        name = getattr(entity, "first_name", None) or getattr(entity, "username", None)
+        if name:
+            return str(name)
+        return str(fallback_id) if fallback_id not in (None, "") else default
+
+    def event_from_interaction_payload(payload):
+        source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        actor = payload.get("actor") if isinstance(payload.get("actor"), dict) else {}
+        return types.SimpleNamespace(
+            type=source.get("type") or event.get("type") or payload.get("event_type") or "",
+            message=types.SimpleNamespace(
+                chat_id=message.get("chat_id") or source.get("chat_id") or event.get("chat_id") or payload.get("chat_id"),
+                message_id=message.get("message_id") or source.get("message_id") or event.get("message_id") or payload.get("message_id"),
+                text=message.get("text") or source.get("text") or event.get("text") or payload.get("text") or "",
+            ),
+            sender=types.SimpleNamespace(
+                user_id=actor.get("user_id") or payload.get("sender_user_id"),
+                display_name=actor.get("display_name") or payload.get("sender_name") or "玩家",
+            ),
+            callback=types.SimpleNamespace(
+                id=source.get("callback_query_id") or event.get("callback_query_id") or payload.get("callback_query_id"),
+                data=source.get("callback_data") or event.get("callback_data") or payload.get("callback_data") or "",
+            ),
+        )
+
+    base_module.Plugin = Plugin
+    base_module.PluginContext = PluginContext
+    base_module.register = register
+    base_module.public_entity_display_name = public_entity_display_name
+    plugin_events_module.event_from_interaction_payload = event_from_interaction_payload
+    telethon_module.events = events_module
+
+    sys.modules.setdefault("app", app_module)
+    sys.modules.setdefault("app.worker", worker_module)
+    sys.modules.setdefault("app.worker.plugins", plugins_module)
+    sys.modules["app.worker.plugins.base"] = base_module
+    sys.modules["app.worker.plugins.events"] = plugin_events_module
+    sys.modules.setdefault("telethon", telethon_module)
+    sys.modules.setdefault("telethon.events", events_module)
+
+    spec = importlib.util.spec_from_file_location(
+        "dead_revolver_plugin_under_test",
+        ROOT / "dead_revolver" / "plugin.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module, PluginContext
+
+
+plugin_module, PluginContext = _load_plugin_module()
+
+
+class DeadRevolverRuntimeTest(unittest.TestCase):
+    def _plugin_with_receiver(self):
+        plugin = plugin_module.DeadRevolverPlugin()
+        plugin._self_tg_user_id = 100
+        plugin._self_tg_username = "receiverbot"
+        plugin._self_receiver_names = {"receiverbot", "收款人"}
+        return plugin
+
+    def test_cancel_turn_timer_does_not_cancel_current_timeout_task(self) -> None:
+        async def run_case() -> bool:
+            plugin = plugin_module.DeadRevolverPlugin()
+            gs = plugin_module.GameState(game_id="g1", chat_id=100, host_user_id=1, entry_fee=10)
+            gs.turn_timer = asyncio.current_task()
+            plugin._cancel_turn_timer(gs)
+            await asyncio.sleep(0)
+            return True
+
+        self.assertTrue(asyncio.run(run_case()))
+
+    def test_next_turn_guidance_deletes_previous_button_message(self) -> None:
+        class MessageOps:
+            def __init__(self) -> None:
+                self.actions: list[dict] = []
+
+            async def send(self, **kwargs):
+                self.actions.append({"type": "send_message", **kwargs})
+
+            async def delete(self, **kwargs):
+                self.actions.append({"type": "delete_message", **kwargs})
+
+        async def run_case() -> None:
+            plugin = plugin_module.DeadRevolverPlugin()
+            ctx = PluginContext()
+            ctx.messages = MessageOps()
+            gs = plugin_module.GameState(game_id="g1", chat_id=100, host_user_id=1, entry_fee=10)
+            gs.interaction_bot = True
+            gs.guidance_msg_id = 11
+            gs.tracked_msg_ids = [11]
+            current = plugin_module.Player(player_id=1, user_id=10, display_name="玩家A")
+            other = plugin_module.Player(player_id=2, user_id=20, display_name="玩家B")
+
+            await plugin._send_turn_guidance(ctx, gs, current, [current, other])
+
+            self.assertEqual([action["type"] for action in ctx.messages.actions], ["delete_message", "send_message"])
+            self.assertEqual(ctx.messages.actions[0]["message_id"], 11)
+            self.assertEqual(ctx.messages.actions[1]["chat_id"], 100)
+            self.assertIn("轮到 玩家A", ctx.messages.actions[1]["text"])
+            self.assertIn("inline_keyboard", ctx.messages.actions[1]["reply_markup"])
+            self.assertEqual(gs.guidance_msg_id, None)
+            self.assertEqual(gs.tracked_msg_ids, [])
+
+        asyncio.run(run_case())
+
+    def test_resolve_lobby_id_uses_messages_facade(self) -> None:
+        class MessageOps:
+            async def read_saved_message_id(self, key: str) -> int | None:
+                self.key = key
+                return 321
+
+        async def run_case() -> None:
+            plugin = plugin_module.DeadRevolverPlugin()
+            ctx = PluginContext()
+            ctx.messages = MessageOps()
+            gs = plugin_module.GameState(game_id="g1", chat_id=100, host_user_id=1, entry_fee=10)
+            gs.interaction_bot = True
+
+            self.assertEqual(await plugin._resolve_lobby_id(ctx, gs), 321)
+            self.assertEqual(ctx.messages.key, plugin_module._interaction_msg_key(1, 100))
+
+        asyncio.run(run_case())
+
+    def test_lobby_copy_uses_participation_block(self) -> None:
+        plugin = self._plugin_with_receiver()
+        gs = plugin_module.GameState(
+            game_id="g1",
+            chat_id=100,
+            host_user_id=1,
+            entry_fee=10,
+            start_keyword="开局",
+        )
+
+        text = plugin._render_lobby(gs)
+
+        self.assertIn("📌 参与方式", text)
+        self.assertIn("• 转账 10 → 自动报名", text)
+        self.assertIn("• 庄家发送开局 开始（需至少 2 人）", text)
+        self.assertNotIn("+10 快速加入", text)
+        self.assertNotIn("转给其他人不会报名", text)
+
+    def test_interaction_create_uses_configured_start_keyword(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+
+            actions = await plugin._ibot_create(
+                ctx,
+                {
+                    "actor": {"user_id": 1, "display_name": "庄家"},
+                    "event_type": "keyword",
+                    "chat_id": 100,
+                    "message_text": "dr",
+                    "module_config": {"entry_fee": 10, "start_keyword": "开局"},
+                },
+                100,
+            )
+
+            self.assertEqual(plugin._games[100].start_keyword, "开局")
+            self.assertIn("• 庄家发送开局 开始（需至少 2 人）", actions[0]["text"])
+            plugin._games[100].timeout_task.cancel()
+            await asyncio.sleep(0)
+
+        asyncio.run(run_case())
+
+    def test_payment_event_rejects_wrong_receiver(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+            gs = plugin_module.GameState(
+                game_id="g1",
+                chat_id=100,
+                host_user_id=1,
+                entry_fee=10,
+                interaction_bot=True,
+            )
+            plugin._games[100] = gs
+
+            actions = await plugin._ibot_payment(
+                ctx,
+                {
+                    "actor": {"user_id": 10, "display_name": "玩家A"},
+                    "event_type": "payment_confirmed",
+                    "amount": 10,
+                    "payment": {
+                        "amount": 10,
+                        "payer_name": "玩家A",
+                        "receiver_user_id": 200,
+                        "receiver_name": "其他人",
+                    },
+                },
+                100,
+            )
+
+            self.assertEqual(len(gs.players), 0)
+            self.assertEqual(actions[0]["type"], "send_message")
+            self.assertIn("没有转给@receiverbot", actions[0]["text"])
+
+        asyncio.run(run_case())
+
+    def test_payment_event_accepts_current_receiver(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+            gs = plugin_module.GameState(
+                game_id="g1",
+                chat_id=100,
+                host_user_id=1,
+                entry_fee=10,
+                interaction_bot=True,
+            )
+            plugin._games[100] = gs
+
+            actions = await plugin._ibot_payment(
+                ctx,
+                {
+                    "actor": {"user_id": 10, "display_name": "玩家A"},
+                    "event_type": "payment_confirmed",
+                    "amount": 10,
+                    "payment": {
+                        "amount": 10,
+                        "payer_name": "玩家A",
+                        "receiver_user_id": 100,
+                        "receiver_name": "收款人",
+                    },
+                },
+                100,
+            )
+
+            self.assertEqual([p.user_id for p in gs.players], [10])
+            self.assertTrue(any("已报名死亡左轮" in action.get("text", "") for action in actions))
+
+        asyncio.run(run_case())
+
+    def test_payment_event_accepts_event_bus_payload(self) -> None:
+        async def run_case() -> None:
+            plugin = self._plugin_with_receiver()
+            ctx = PluginContext()
+            gs = plugin_module.GameState(
+                game_id="g1",
+                chat_id=100,
+                host_user_id=1,
+                entry_fee=10,
+                interaction_bot=True,
+            )
+            plugin._games[100] = gs
+
+            actions = await plugin._ibot_payment(
+                ctx,
+                {
+                    "event_type": "payment_confirmed",
+                    "source": {
+                        "type": "payment_confirmed",
+                        "channel": "external_payment_notice",
+                        "chat_id": 100,
+                        "message_id": 70,
+                    },
+                    "actor": {"user_id": None, "display_name": "玩家A"},
+                    "player": {"user_id": None, "display_name": "玩家A"},
+                    "reply_to": {"user_id": 10, "display_name": "玩家A", "message_id": 55, "text": "+10"},
+                    "payment": {"amount": 10, "payer_name": "玩家A", "receiver_name": "收款人"},
+                    "message_id": 70,
+                },
+                100,
+            )
+
+            self.assertEqual([p.user_id for p in gs.players], [10])
+            self.assertEqual(gs.players[0].message_id, 55)
+            self.assertTrue(any("已报名死亡左轮" in action.get("text", "") for action in actions))
+
+        asyncio.run(run_case())
+
+    def test_payment_event_subscription_declares_entry_key(self) -> None:
+        data = json.loads((ROOT / "dead_revolver" / "plugin.json").read_text(encoding="utf-8"))
+        payment_subscriptions = [
+            item
+            for item in data["event_subscriptions"]
+            if "payment_confirmed" in item.get("events", [])
+        ]
+
+        self.assertTrue(payment_subscriptions)
+        self.assertTrue(all(item.get("entry_key") == "join_paid_game" for item in payment_subscriptions))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -8,6 +8,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 下注金额发起骰子对战；也可以在交互中心绑定关键词或付款触发，挑战者和对手按提示掷骰比大小。普通回复继承当前会话通道，赢家奖励返回 payout，由平台 userbot 执行。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -30,11 +31,27 @@ CONFIG_SCHEMA = {
 }
 
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = '管理员发送 {prefix}{command} 下注金额发起骰子对战；也可以在交互中心绑定关键词或付款触发，挑战者和对手按提示掷骰比大小。普通回复继承 TelePilot 当前会话通道；赢家奖励返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="dice_battle",
     display_name="骰子比大小",
-    version="1.0.6",
-    min_telepilot_version="0.30.4",
+    version="1.0.13",
+    min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内骰子对战，两人各掷骰子比点数，支持下注",
@@ -56,8 +73,7 @@ MANIFEST = Manifest(
                      'close_on': ['winner', 'draw', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement'],
-                      'send_via': ['interaction_bot', 'userbot_reply', 'bbot_notice']},
+  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',
@@ -74,11 +90,18 @@ MANIFEST = Manifest(
                                                  'default': 2,
                                                  'minimum': 1,
                                                  'maximum': 6}}},
-  'settlement': {'mode': 'announce_only',
-                 'winner_field': 'actor.user_id',
-                 'amount_field': 'prize'}}],
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
 )
 
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

@@ -1,4 +1,29 @@
 # 更新日志
+
+## 1.1.25 (2026-07-14)
+- 首次启动时若新目录尚无配置，优先原子复制账号旧红包配置并兼容通用旧配置到 `ctx.data_dir` 账号目录；不覆盖新文件且保留旧文件。
+
+## 1.1.24 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
+- 更新使用说明，明确资金类动作归 userbot/payout 链路。
+
+## 1.1.23 (2026-06-29)
+- 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
+- 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
+
+## 1.1.22 (2026-06-28)
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
+- 保留 `interaction_bot` 与 `userbot_reply` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
+
+
+## 1.1.21 (2026-06-27)
+- 按最新 TelePilot 插件开发文档补充 `config_schema["x-usage-guide"]`，让插件中心和通用配置页展示明确使用说明。
+- 同步更新 `plugin.json` 与 `manifest.py` 版本，避免触发“未声明详细使用说明”的高级规范警告。
+
+## 1.1.20 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
+
 ## 1.1.19 (2026-06-19)
 - 按 TelePilot 最新交互 Bot 入口规范补齐 `launch_mode`、事件白名单、会话策略、payload/result contract 和结算声明。
 - 保留原有 UserBot 命令触发，交互 Bot 入口只负责触发和高频互动承接，不改变插件本体配置。

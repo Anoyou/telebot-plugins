@@ -1,4 +1,40 @@
-# Changelog
+# 更新日志
+
+## 1.0.23 (2026-07-12)
+- 将 Cookie 配置显式标记为密码与敏感字段，使 TelePilot 保存时使用 `secret:v1` 加密信封，并在界面中按敏感输入处理。
+- 同步 `manifest.py` 与 `plugin.json` 元数据。
+
+## 1.0.22 (2026-07-10)
+- 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封 `event_from_interaction_payload`（事件类型、message.text 参数解析、message_id），旧平铺 payload 字段保留为 fallback。
+- 元数据同步：`plugin.json` 与 `manifest.py` 版本递增并保持一致。
+- 保持原有种子促销流程、参数解析与文案逻辑不变。
+
+## 1.0.21 (2026-07-04)
+- 移除旧 `result_contract.send_via` 样板，普通回复改为继承当前会话通道。
+- 更新使用说明，避免继续把 interaction_bot/userbot_reply 当插件必填通道。
+
+## 1.0.20 (2026-06-30)
+- 移除 PT 种子促销的付款确认触发声明：`interaction_entries` 与 `event_subscriptions` 不再包含 `payment_confirmed`。
+- 删除交互入口中的 `money_channel` 元数据，明确该插件只通过管理员命令或交互 Bot 关键词/会话消息触发。
+- 运行时不再接受 `payment_confirmed` 事件，避免无付款需求的促销插件被误配置成付款入口。
+
+## 1.0.19 (2026-06-29)
+- 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
+- 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
+
+## 1.0.18 (2026-06-28)
+- 按 TelePilot 0.36 最新开发指南收束交互插件主动发送通道，移除 `result_contract.send_via` 中已废弃的 旧 notice 通道值。
+- 保留 `interaction_bot` 与 `userbot_reply` 双通道声明，避免插件中心提示 `result_contract.send_via` 含有未支持值。
+
+
+
+## 1.0.17 (2026-06-27)
+- 按最新 TelePilot 插件开发文档补充 `config_schema["x-usage-guide"]`，让插件中心和通用配置页展示明确使用说明。
+- 同步更新 `plugin.json` 与 `manifest.py` 版本，避免触发“未声明详细使用说明”的高级规范警告。
+
+## 1.0.16 (2026-06-27)
+- 按 TelePilot 0.33 交互框架文档补齐 `dispatch_modes`、`message_channels`、`money_channel` 与 `participant_policy`，明确交互 Bot、UserBot 和资金动作边界。
+- 将最低 TelePilot 版本提升到 `0.33.0`，并同步 `plugin.json` 与 `manifest.py` 的版本、分类和交互入口声明。
 
 ## 1.0.15 (2026-06-26)
 - 修复状态消息模板中 `{torrent_id}` 等占位符未被实际值替换的 bug。原因是 `_status_template` 把 message 当作一个值传给外层模板，`format_map` 只替换顶层占位符，message 内部的变量不会被递归处理。现在先用 payload 预格式化 message 再传入外层模板。

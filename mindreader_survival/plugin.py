@@ -19,6 +19,7 @@ from typing import Any
 
 from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 from .manifest import (
     MANIFEST,
     PLAYER_KEYWORDS,
@@ -567,9 +568,14 @@ class MindreaderSurvivalPlugin(Plugin):
 
         # 付费加入
         if etype == "payment_confirmed":
+            # 新主路径：信封 payment.amount；旧平铺 event.data.amount / payload.amount 作 fallback。
+            amount = None
+            tpe = self._tpe(payload)
+            if tpe is not None:
+                amount = getattr(getattr(tpe, "payment", None), "amount", None)
             event = payload.get("event", {}) if isinstance(payload.get("event"), dict) else {}
             data = event.get("data", {}) if isinstance(event.get("data"), dict) else {}
-            amount = self._pint(data.get("amount") or payload.get("amount") or self._ticket_price, self._ticket_price)
+            amount = self._pint(amount or data.get("amount") or payload.get("amount") or self._ticket_price, self._ticket_price)
             return await self.biz_add_player(ctx, chat_id, uid, name, amount=amount, username=self._uname(payload))
 
         return []
@@ -705,37 +711,83 @@ class MindreaderSurvivalPlugin(Plugin):
                 pass
         await event.reply(text, parse_mode="html")
 
+    @staticmethod
+    def _tpe(p):
+        # 新主路径：标准事件信封。取不到时各 helper 回退旧平铺字段。
+        try:
+            return event_from_interaction_payload(p)
+        except Exception:
+            return None
+
     def _evt_type(self, p):
+        # 旧平铺路径优先判定（保持 keyword 等启动语义不变）；缺失时用信封 source.type。
         src = p.get("source", {}) if isinstance(p.get("source"), dict) else {}
         trg = p.get("trigger", {}) if isinstance(p.get("trigger"), dict) else {}
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}
-        return str(src.get("type") or trg.get("type") or evt.get("type") or p.get("event_type") or "").strip()
+        legacy = str(src.get("type") or trg.get("type") or evt.get("type") or p.get("event_type") or "").strip()
+        if legacy:
+            return legacy
+        tpe = self._tpe(p)
+        if tpe is not None and src.get("type"):
+            return str(getattr(tpe, "type", "") or "").strip()
+        return legacy
 
     def _cid(self, p):
+        tpe = self._tpe(p)
+        if tpe is not None:
+            cid = getattr(getattr(tpe, "message", None), "chat_id", None)
+            if cid:
+                return self._pint(cid, 0)
         src = p.get("source", {}) if isinstance(p.get("source"), dict) else {}
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}
         return self._pint(p.get("chat_id") or src.get("chat_id") or evt.get("chat_id"), 0)
 
     def _uid(self, p):
+        tpe = self._tpe(p)
+        if tpe is not None:
+            uid = getattr(getattr(tpe, "actor", None), "user_id", None)
+            if uid:
+                return self._pint(uid, 0)
         actor = p.get("actor", {}) if isinstance(p.get("actor"), dict) else {}
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}
         return self._pint(actor.get("user_id") or evt.get("user_id") or p.get("sender_user_id"), 0)
 
     def _mid(self, p):
+        tpe = self._tpe(p)
+        if tpe is not None:
+            mid = getattr(getattr(tpe, "message", None), "message_id", None)
+            if mid:
+                v = self._pint(mid, 0)
+                return v if v > 0 else None
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}
         v = self._pint(evt.get("message_id") or p.get("message_id"), 0)
         return v if v > 0 else None
 
     def _aname(self, p):
+        tpe = self._tpe(p)
+        if tpe is not None:
+            name = getattr(getattr(tpe, "actor", None), "display_name", None)
+            if name:
+                return str(name).strip() or "玩家"
         actor = p.get("actor", {}) if isinstance(p.get("actor"), dict) else {}
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}
         return str(actor.get("display_name") or evt.get("display_name") or evt.get("payer_name") or p.get("sender_name") or "玩家").strip() or "玩家"
 
     def _uname(self, p):
+        tpe = self._tpe(p)
+        if tpe is not None:
+            uname = getattr(getattr(tpe, "actor", None), "username", None)
+            if uname:
+                return str(uname).strip()
         actor = p.get("actor", {}) if isinstance(p.get("actor"), dict) else {}
         return str(actor.get("username", "") or "").strip()
 
     def _evt_text(self, p):
+        tpe = self._tpe(p)
+        if tpe is not None:
+            text = getattr(getattr(tpe, "message", None), "text", None)
+            if text:
+                return str(text).strip()
         evt = p.get("event", {}) if isinstance(p.get("event"), dict) else {}
         return str(evt.get("text") or p.get("message_text") or "").strip()
 

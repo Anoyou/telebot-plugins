@@ -9,6 +9,7 @@ AI 查询插件 - 向AI模型提问并返回回复
 import asyncio
 import html
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -31,9 +32,11 @@ except ImportError:
     MCPClient = None
     ConfigManager = None
 
-# 数据目录和配置文件路径
-DATA_DIR = Path("ai_query")
-DATA_FILE = DATA_DIR / "config.json"
+# 数据目录和配置文件路径；由 plugin.py 在账号启动时绑定到 ctx.data_dir。
+LEGACY_DATA_DIR = Path("ai_query")
+LEGACY_DATA_FILE = LEGACY_DATA_DIR / "config.json"
+DATA_DIR: Path | None = None
+DATA_FILE: Path | None = None
 PENDING_SELECTION = {}  # 待选择的模型列表消息
 DEFAULT_SEARCH_CONFIG = {
     "enabled": True,
@@ -173,9 +176,40 @@ if HAS_MCP:
     mcp_config_manager: Optional[ConfigManager] = None
 
 
+def _copy_legacy_file_once(source: Path, target: Path) -> bool:
+    """原子复制旧文件；目标已存在时保持原样。"""
+    if target.exists() or not source.is_file():
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as temp_file:
+            temp_file.write(source.read_bytes())
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        try:
+            os.link(temp_name, target)
+        except FileExistsError:
+            return False
+        return True
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
+
+
+def configure_data_dir(data_dir: Path | None, account_id: int) -> None:
+    """绑定当前账号的持久化目录，避免把状态写入插件代码目录。"""
+    global DATA_DIR, DATA_FILE
+    if data_dir is None:
+        raise RuntimeError("TelePilot 未提供 ctx.data_dir，无法保存 ais 配置")
+    DATA_DIR = Path(data_dir) / str(int(account_id))
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_FILE = DATA_DIR / "config.json"
+    _copy_legacy_file_once(LEGACY_DATA_FILE, DATA_FILE)
+
+
 def load_config() -> dict:
     """加载AI配置"""
-    if DATA_FILE.exists():
+    if DATA_FILE is not None and DATA_FILE.exists():
         try:
             data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
             return normalize_config(data)
@@ -188,6 +222,8 @@ def load_config() -> dict:
 def save_config(config: dict) -> bool:
     """保存AI配置"""
     try:
+        if DATA_DIR is None or DATA_FILE is None:
+            raise RuntimeError("TelePilot 未提供 ctx.data_dir")
         config = normalize_config(config)
         DATA_DIR.mkdir(exist_ok=True, parents=True)
         DATA_FILE.write_text(

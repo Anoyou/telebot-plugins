@@ -1,4 +1,21 @@
 # 更新日志
+
+## 1.1.8 (2026-07-14)
+- 修正运行时版本常量滞后于 `plugin.json` 与 `manifest.py` 的问题，三处版本统一为 `1.1.8`。
+
+## 1.1.7 (2026-06-29)
+- 按 TelePilot 0.41 最新插件开发指南补充顶层 `usage`、`event_subscriptions` 与 `capabilities` 元数据，插件中心可直接展示使用说明、事件订阅和能力声明。
+- 同步 `plugin.json` 与 `manifest.py` 版本和 Event Bus 元数据，保留旧交互入口作为迁移兼容声明。
+
+
+## 1.1.6 (2026-06-27)
+- 按最新 TelePilot 插件开发文档补充 `config_schema["x-usage-guide"]`，让插件中心和通用配置页展示明确使用说明。
+- 同步更新 `plugin.json` 与 `manifest.py` 版本，避免触发“未声明详细使用说明”的高级规范警告。
+
+## 1.1.5 (2026-06-27)
+- 按 TelePilot 0.33 插件开发文档更新远程元数据，将最低 TelePilot 版本提升到 `0.33.0`。
+- 同步 `plugin.json` 与 `manifest.py` 版本，保持配置页模式和插件分类声明一致。
+
 ## 1.1.4 (2026-06-19)
 - 按最新插件开发指南补充 `min_telepilot_version`，并将配置页模式从旧兼容别名 `schema` 更新为推荐的 `single`。
 

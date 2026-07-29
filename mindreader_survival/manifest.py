@@ -111,6 +111,7 @@ IN_PROGRESS_MESSAGE_TEMPLATE = (
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
+    "x-usage-guide": '管理员发送 {prefix}{command} 创建读心生存赛，玩家通过付款或关键词加入，每轮回复数字选择答案；最终存活者按规则瓜分奖池。',
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -149,62 +150,6 @@ CONFIG_SCHEMA = {
             "minLength": 1,
             "maxLength": 2000,
         },
-        "join_message_template": {
-            "type": "string",
-            "title": "等待加入消息模板",
-            "description": "占位符：{ticket_price}、{total_rounds}、{prefix}、{command}",
-            "default": JOIN_MESSAGE_TEMPLATE,
-            "minLength": 1,
-            "maxLength": 1000,
-        },
-        "round_start_template": {
-            "type": "string",
-            "title": "每轮开始消息模板",
-            "description": "占位符：{round_num}、{total_rounds}、{alive_count}、{pool}、{options_text}、{timeout}",
-            "default": ROUND_START_TEMPLATE,
-            "minLength": 1,
-            "maxLength": 1000,
-        },
-        "round_result_template": {
-            "type": "string",
-            "title": "每轮结果消息模板",
-            "description": "占位符：{round_num}、{answer_text}、{answer}、{commit_hash}、{survived_count}、{eliminated_count}、{eliminated_names}",
-            "default": ROUND_RESULT_TEMPLATE,
-            "minLength": 1,
-            "maxLength": 1000,
-        },
-        "game_over_solo_template": {
-            "type": "string",
-            "title": "游戏结束模板（单人获胜）",
-            "description": "占位符：{winner_name}、{pool}、{prize}、{admin_fee}",
-            "default": GAME_OVER_SOLO_TEMPLATE,
-            "minLength": 1,
-            "maxLength": 800,
-        },
-        "game_over_multi_template": {
-            "type": "string",
-            "title": "游戏结束模板（多人获胜）",
-            "description": "占位符：{survived_count}、{pool}、{prize_each}、{admin_fee}",
-            "default": GAME_OVER_MULTI_TEMPLATE,
-            "minLength": 1,
-            "maxLength": 800,
-        },
-        "game_over_all_eliminated_template": {
-            "type": "string",
-            "title": "全员淘汰模板",
-            "description": "占位符：{pool}、{admin_prize}",
-            "default": GAME_OVER_ALL_ELIMINATED_TEMPLATE,
-            "minLength": 1,
-            "maxLength": 800,
-        },
-        "game_over_cancelled_template": {
-            "type": "string",
-            "title": "游戏取消模板",
-            "description": "占位符：{pool}、{player_count}、{refund_each}",
-            "default": GAME_OVER_CANCELLED_TEMPLATE,
-            "minLength": 1,
-            "maxLength": 800,
-        },
     },
     "required": [
         "command",
@@ -218,90 +163,77 @@ CONFIG_SCHEMA = {
 
 # ── Manifest ─────────────────────────────────────────────────
 
+# TelePilot 0.41 Event Bus metadata.
+USAGE = '管理员发送 {prefix}{command} 创建读心生存赛，玩家通过付款或关键词加入，每轮回复数字选择答案；最终存活者按规则瓜分奖池。普通回复继承 TelePilot 当前会话通道；结算结果返回 result/settlement，实际发奖类动作应由 payout/受控 userbot 链路执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
+EVENT_SUBSCRIPTIONS = [{'events': ['command'],
+  'source': ['userbot'],
+  'scope': 'owner_only',
+  'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
+ {'events': ['message', 'session_close'],
+  'source': ['interaction_bot'],
+  'scope': 'rule_bound',
+  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
+ {'events': ['payment_confirmed'],
+  'source': ['external_payment_notice', 'userbot'],
+  'scope': 'rule_bound',
+  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+CAPABILITIES = {}
+
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.1.3",
+    version="1.1.10",
+    min_telepilot_version="0.33.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
     permissions=["send_message", "edit_message", "read_chat"],
 
     category="interactive",
     interaction_profile="reward_pool",
-    interaction_entries=[
-        {
-            "key": "start_mindreader",
-            "title": "读心生存赛",
-            "description": "玩家通过转账加入，管理员通过关键词管理游戏。",
-            "interaction_profile": "reward_pool",
-            "launch_mode": "hybrid",
-            "session_scope": "chat",
-            "events": [
-                "payment_confirmed",
-                "keyword",
-                "message",
-                "session_close",
-            ],
-            "preserve_command_trigger": True,
-            "command_fallback": {
-                "enabled": True,
-                "command": "mind",
-                "mode": "hint_only",
-            },
-            "session_policy": {
-                "ttl_seconds": 1800,
-                "duplicate_start": "reject",
-                "close_on": ["game_over", "timeout", "session_close"],
-            },
-            "payload_contract": {
-                "required_envelope": ["source", "actor", "trigger", "session"],
-                "required_event_fields": ["type", "chat_id"],
-            },
-            "result_contract": {
-                "actions": [
-                    "send_message",
-                    "end_session",
-                    "result",
-                    "settlement",
-                ],
-                "send_via": ["interaction_bot", "userbot_reply", "bbot_notice"],
-            },
-            "input_schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "ticket_price": {
-                        "type": "integer",
-                        "title": "门票价格",
-                        "default": 100,
-                        "minimum": 1,
-                    },
-                    "total_rounds": {
-                        "type": "integer",
-                        "title": "总轮数",
-                        "default": 5,
-                        "minimum": 2,
-                        "maximum": 10,
-                    },
-                    "round_timeout": {
-                        "type": "integer",
-                        "title": "每轮限时（秒）",
-                        "default": 30,
-                        "minimum": 10,
-                        "maximum": 120,
-                    },
-                },
-                "required": ["ticket_price"],
-            },
-            "settlement": {
-                "mode": "announce_only",
-                "winner_field": "actor.user_id",
-                "amount_field": "prize",
-            },
-        }
-    ],
+    interaction_entries=[{'key': 'start_mindreader',
+  'title': '读心生存赛',
+  'description': '玩家通过转账加入，管理员通过关键词管理游戏。',
+  'interaction_profile': 'reward_pool',
+  'launch_mode': 'hybrid',
+  'session_scope': 'chat',
+  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'preserve_command_trigger': True,
+  'command_fallback': {'enabled': True, 'command': 'mind', 'mode': 'hint_only'},
+  'session_policy': {'ttl_seconds': 1800,
+                     'duplicate_start': 'reject',
+                     'close_on': ['game_over', 'timeout', 'session_close']},
+  'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
+                       'required_event_fields': ['type', 'chat_id']},
+  'result_contract': {'actions': ['send_message', 'end_session', 'result', 'settlement']},
+  'input_schema': {'type': 'object',
+                   'additionalProperties': False,
+                   'properties': {'ticket_price': {'type': 'integer',
+                                                   'title': '门票价格',
+                                                   'default': 100,
+                                                   'minimum': 1},
+                                  'total_rounds': {'type': 'integer',
+                                                   'title': '总轮数',
+                                                   'default': 5,
+                                                   'minimum': 2,
+                                                   'maximum': 10},
+                                  'round_timeout': {'type': 'integer',
+                                                    'title': '每轮限时（秒）',
+                                                    'default': 30,
+                                                    'minimum': 10,
+                                                    'maximum': 120}},
+                   'required': ['ticket_price']},
+  'settlement': {'mode': 'announce_only', 'winner_field': 'actor.user_id', 'amount_field': 'prize'},
+  'dispatch_modes': ['admin_command', 'public_keyword'],
+  'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
+  'money_channel': 'userbot_reply',
+  'participant_policy': 'paid_pool'}],
     config_schema=CONFIG_SCHEMA,
 )
 
+
+# Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
 
 __all__ = ["MANIFEST"]

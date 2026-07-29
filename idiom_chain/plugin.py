@@ -12,7 +12,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.worker.command import current_command_prefix
 from app.worker.plugins.base import Plugin, PluginContext, register
+from app.worker.plugins.events import event_from_interaction_payload
 
 try:
     from app.worker.plugins.base import public_entity_display_name
@@ -1015,6 +1017,28 @@ class IdiomChainPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[idiom_chain] 已停止")
 
+    @staticmethod
+    def _event_message_id(event: Any) -> int | None:
+        """标准事件信封里的 message_id，取不到返回 None（由调用方回退旧路径）。"""
+        if event is None or event.message is None:
+            return None
+        return _positive_int(event.message.message_id, 0) or None
+
+    @staticmethod
+    def _event_actor(event: Any, payload: dict[str, Any]) -> tuple[int, str]:
+        """标准事件信封里的行为主体，缺字段时回退旧平铺 payload。"""
+        actor_id = 0
+        actor_name = ""
+        if event is not None:
+            ref = event.actor if (event.actor and event.actor.user_id) else event.sender
+            if ref is not None:
+                actor_id = _positive_int(ref.user_id, 0, minimum=0)
+                actor_name = str(ref.display_name or ref.username or "").strip()
+        if actor_id and actor_name:
+            return actor_id, actor_name
+        fb_id, fb_name = _interaction_actor(payload)
+        return (actor_id or fb_id), (actor_name or fb_name)
+
     async def on_interaction(
         self,
         ctx: PluginContext,
@@ -1023,14 +1047,18 @@ class IdiomChainPlugin(Plugin):
     ) -> list[dict[str, Any]] | None:
         if entry_key != "start_idiom_chain":
             return None
-        event_type = _interaction_event_type(payload)
-        chat_id = _interaction_chat_id(payload)
+        # 主路径：标准事件信封；旧平铺 payload 仅作 fallback（见下方 helper）。
+        event = event_from_interaction_payload(payload)
+        # 局内 start/answer 语义需要旧 trigger 分类（框架层两者同为
+        # type=message），因此路由仍以旧 helper 为准，取不到时回退 event.type。
+        event_type = _interaction_event_type(payload) or event.type
+        chat_id = (event.message.chat_id if event.message else None) or _interaction_chat_id(payload)
         if not chat_id:
             return [{"type": "send_message", "text": "❌ 成语接龙需要在群聊里使用。"}]
         if event_type in {"payment_confirmed", "keyword"}:
-            return await self._interaction_start(ctx, payload, chat_id)
+            return await self._interaction_start(ctx, payload, chat_id, event)
         if event_type == "message":
-            return await self._interaction_answer(ctx, payload, chat_id)
+            return await self._interaction_answer(ctx, payload, chat_id, event)
         if event_type == "session_close":
             async with self._get_lock(chat_id):
                 self._games.pop(chat_id, None)
@@ -1042,17 +1070,23 @@ class IdiomChainPlugin(Plugin):
         ctx: PluginContext,
         payload: dict[str, Any],
         chat_id: int,
+        event: Any = None,
     ) -> list[dict[str, Any]]:
-        prize = _positive_int(payload.get("prize") or _interaction_amount(payload), 0, minimum=1)
+        # 标准字段优先，旧平铺 payload 作 fallback。
+        event_amount = 0
+        if event is not None and event.payment is not None:
+            event_amount = _positive_int(event.payment.amount, 0, minimum=1)
+        reply_to = self._event_message_id(event) or _interaction_message_id(payload)
+        prize = _positive_int(payload.get("prize") or event_amount or _interaction_amount(payload), 0, minimum=1)
         if prize <= 0:
             return [
-                {"type": "send_message", "text": f"请指定奖励金额。例：{{prefix}}{self._command} 100", "reply_to_message_id": _interaction_message_id(payload)},
+                {"type": "send_message", "text": f"请指定奖励金额。例：{{prefix}}{self._command} 100", "reply_to_message_id": reply_to},
                 {"type": "end_session"},
             ]
         timeout = _positive_int(payload.get("timeout") or payload.get("valid_seconds"), self._timeout, minimum=10)
         async with self._get_lock(chat_id):
             if chat_id in self._games and self._games[chat_id].waiting:
-                return [{"type": "send_message", "text": "📜 当前聊天已有进行中的成语接龙。", "reply_to_message_id": _interaction_message_id(payload)}]
+                return [{"type": "send_message", "text": "📜 当前聊天已有进行中的成语接龙。", "reply_to_message_id": reply_to}]
             starter = random.choice(random.choice(list(IDIOM_DB.values())))
             game = ChainGame(
                 current_idiom=starter,
@@ -1070,7 +1104,7 @@ class IdiomChainPlugin(Plugin):
                 "type": "send_message",
                 "text": self._format_game_prompt(game),
                 "parse_mode": "html",
-                "reply_to_message_id": _interaction_message_id(payload),
+                "reply_to_message_id": reply_to,
             }
         ]
 
@@ -1079,10 +1113,17 @@ class IdiomChainPlugin(Plugin):
         ctx: PluginContext,
         payload: dict[str, Any],
         chat_id: int,
+        event: Any = None,
     ) -> list[dict[str, Any]]:
-        text = _interaction_message_text(payload)
+        # 标准字段优先，旧平铺 payload 作 fallback。
+        text = ""
+        if event is not None and event.message is not None:
+            text = str(event.message.text or "").strip()
+        if not text:
+            text = _interaction_message_text(payload)
         if len(text) != 4:
             return []
+        reply_to = self._event_message_id(event) or _interaction_message_id(payload)
         async with self._get_lock(chat_id):
             game = self._games.get(chat_id)
             if not game or not game.waiting:
@@ -1090,8 +1131,8 @@ class IdiomChainPlugin(Plugin):
             last_char = game.current_idiom[-1]
             ok, reason = _validate_answer(text, last_char, game.used_idioms, self._forbidden_words, game.used_forbidden)
             if not ok:
-                return [{"type": "send_message", "text": f"❌ {reason}", "reply_to_message_id": _interaction_message_id(payload)}]
-            actor_id, actor_name = _interaction_actor(payload)
+                return [{"type": "send_message", "text": f"❌ {reason}", "reply_to_message_id": reply_to}]
+            actor_id, actor_name = self._event_actor(event, payload)
             game.used_idioms.add(text)
             for forbidden in self._forbidden_words:
                 if forbidden in text:
@@ -1109,7 +1150,14 @@ class IdiomChainPlugin(Plugin):
                 prompt = self._format_game_prompt(game)
                 self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, started_at, game.timeout)))
                 return [
-                    {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                    {
+                        "type": "payout",
+                        "chat_id": chat_id,
+                        "amount": game.prize,
+                        "text": f"+{game.prize}",
+                        "parse_mode": "plain",
+                        "reply_to_message_id": reply_to,
+                    },
                     {
                         "type": "send_message",
                         "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n\n{prompt}",
@@ -1119,13 +1167,20 @@ class IdiomChainPlugin(Plugin):
                         "type": "result",
                         "success": True,
                         "result": {"winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "answer": text},
-                        "settlement": {"mode": "announce_only", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize"},
+                        "settlement": {"mode": "auto", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize", "status": "payout_requested"},
                     },
                 ]
             game.waiting = False
             self._games.pop(chat_id, None)
             return [
-                {"type": "send_message", "text": f"+{game.prize}", "reply_to_message_id": _interaction_message_id(payload), "send_via": "userbot_reply"},
+                {
+                    "type": "payout",
+                    "chat_id": chat_id,
+                    "amount": game.prize,
+                    "text": f"+{game.prize}",
+                    "parse_mode": "plain",
+                    "reply_to_message_id": reply_to,
+                },
                 {
                     "type": "send_message",
                     "text": f"✅ {actor_name} 答对「{text}」，奖励 <b>+{game.prize}</b>\n🏆 接龙结束！以「{text[-1]}」开头的成语都用完了，共 {game.round_num} 轮",
@@ -1135,7 +1190,7 @@ class IdiomChainPlugin(Plugin):
                     "type": "result",
                     "success": True,
                     "result": {"winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "answer": text},
-                    "settlement": {"mode": "announce_only", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize"},
+                    "settlement": {"mode": "auto", "winner_user_id": actor_id, "winner_name": actor_name, "amount": game.prize, "amount_field": "prize", "status": "payout_requested"},
                 },
                 {"type": "end_session"},
             ]
@@ -1172,7 +1227,8 @@ class IdiomChainPlugin(Plugin):
 
         prize = self._parse_prize(args)
         if prize <= 0:
-            await event.reply(f"请指定奖励金额，例如：,{self._command} 100", parse_mode="html")
+            prefix = current_command_prefix(fallback=",")
+            await event.reply(f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
             return
 
         # 开始新游戏
