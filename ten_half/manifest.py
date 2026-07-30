@@ -97,12 +97,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.4.17",
+    version="0.4.18",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="经典十点半纸牌游戏：支持多人对战、加倍、五小等规则",
-    permissions=["send_message", "edit_message", "delete_message", "read_chat"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="session_game",

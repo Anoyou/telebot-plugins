@@ -152,7 +152,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
             self.assertNotIn("send_via", start_actions[0])
             self.assertNotIn("send_via_options", start_actions[0])
             self.assertEqual(start_actions[0]["save_message_id_key"], "round:-100123")
-            self.assertIn("九宫格竞猜v1.1.29 开始", start_actions[0]["caption"])
+            self.assertIn("九宫格竞猜v1.1.30 开始", start_actions[0]["caption"])
             self.assertEqual(start_actions[1]["type"], "update_session")
             state = dict(start_actions[1]["data"])
 
@@ -297,7 +297,7 @@ class DiceGridHuntInteractionTests(unittest.TestCase):
 
         text = plugin._render_round_text(rd, include_guide=True)
 
-        self.assertIn("<b>九宫格竞猜v1.1.29 开始</b>", text)
+        self.assertIn("<b>九宫格竞猜v1.1.30 开始</b>", text)
         self.assertIn("竞猜目标：找出点数和为 21", text)
 
 

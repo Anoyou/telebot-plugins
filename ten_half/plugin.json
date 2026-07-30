@@ -3,14 +3,16 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.4.17",
+  "version": "0.4.18",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
     "edit_message",
     "delete_message",
-    "read_chat"
+    "read_chat",
+    "payout"
   ],
+  "strict_trace": true,
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
   "tags": [

@@ -3,15 +3,17 @@
   "display_name": "成语接龙",
   "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
   "author": "Anoyou",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
     "edit_message",
-    "read_chat"
+    "read_chat",
+    "payout"
   ],
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
+  "strict_trace": true,
   "commands": [
     "cy",
     "成语",

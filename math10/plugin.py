@@ -15,7 +15,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 MATH10_GAME_PREFIX = "game:"
 MATH10_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.0.10"
+PLUGIN_VERSION = "1.0.11"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30

@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover - old TelePilot compatibility
         return fallback
 
 
-PLUGIN_VERSION = "1.4.5"
+PLUGIN_VERSION = "1.4.6"
 LEGACY_DATA_PATH = Path(__file__).with_name("quickqa_data.json")
 # 测试和显式嵌入场景可以覆盖；生产实例会在 on_startup 绑定 ctx.data_dir。
 DATA_PATH = LEGACY_DATA_PATH

@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "reply_anchor_test"
-PLUGIN_VERSION = "0.2.2"
+PLUGIN_VERSION = "0.2.3"
 ENTRY_KEY = "reply_to_recent_message"
 NAME_ENTRY_KEY = "resolve_public_name"
 DEFAULT_COMMAND = "send"
@@ -192,7 +192,8 @@ MANIFEST = Manifest(
     description="测试近期发言回复和 TelePilot 安全公开姓名解析。",
     usage=USAGE,
     category="utility",
-    permissions=["send_message", "read_chat"],
+    permissions=["send_message", "read_chat", "payout"],
+    strict_trace=True,
     config_schema=CONFIG_SCHEMA,
     interaction_entries=INTERACTION_ENTRIES,
     event_subscriptions=EVENT_SUBSCRIPTIONS,

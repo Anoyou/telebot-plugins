@@ -30,7 +30,7 @@ MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "game:"
 INTERACTION_GAME_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.1.11"
+PLUGIN_VERSION = "1.1.12"
 
 
 # ─────────────────────────────────────────────────────

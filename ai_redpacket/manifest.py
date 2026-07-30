@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-PLUGIN_VERSION = "0.1.39"
+PLUGIN_VERSION = "0.1.40"
 QUESTION_PROMPT_PLACEHOLDER = """你是 TelePilot AI 红包插件的题库生成器。
 只依据网页正文生成三选一选择题，并按每行一道题的 JSONL 输出，不要 Markdown。
 每题必须恰好三个互不重复的选项，只有一个正确答案，answer 只能是 0、1、2。
@@ -555,7 +555,7 @@ MANIFEST = Manifest(
     description="从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
     usage=USAGE,
     category="interactive",
-    permissions=["send_message", "edit_message", "delete_message", "read_chat", "external_http", "ai_text"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat", "external_http", "ai_text", "payout"],
     allowed_hosts=ALLOWED_HOSTS,
     config_schema=CONFIG_SCHEMA,
     event_subscriptions=EVENT_SUBSCRIPTIONS,

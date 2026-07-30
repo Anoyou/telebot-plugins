@@ -71,7 +71,11 @@ def test_pt_promote_cookie_is_sensitive_in_both_manifests() -> None:
     raw = _json_manifest("pt_promote")
     manifest = _load_python_manifest("pt_promote")
 
+    assert manifest.config_schema == raw["config_schema"]
     for schema in (raw["config_schema"], manifest.config_schema):
         cookie = schema["properties"]["cookie"]
         assert cookie["x-sensitive"] is True
         assert cookie["format"] == "password"
+        site_url = schema["properties"]["site_url"]
+        assert site_url["enum"] == ["https://www.qingwapt.com"]
+        assert site_url["readOnly"] is True

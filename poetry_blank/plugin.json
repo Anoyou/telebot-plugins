@@ -3,13 +3,15 @@
   "display_name": "诗词填空",
   "description": "古诗词填空抢答，答对获奖",
   "author": "Anoyou",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
     "edit_message",
-    "read_chat"
+    "read_chat",
+    "payout"
   ],
+  "strict_trace": true,
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
   "commands": [

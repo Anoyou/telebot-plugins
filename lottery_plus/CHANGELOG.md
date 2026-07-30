@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.14 (2026-07-30)
+- 显式声明 `payout` 高风险权限并开启资金动作严格 Trace，兼容最新 TelePilot 插件开发指南与运行时权限校验。
+
 ## 1.0.13 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 主路径改用标准事件信封 `event_from_interaction_payload`（读取事件类型、chat_id、message_id、付款金额与付款人），旧平铺 payload 字段保留为 fallback。
 - 元数据同步：`plugin.json` 与 `manifest.py` 版本递增并保持一致。

@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.4.5",
+  "version": "1.4.6",
   "entry": "plugin.py",
   "min_telepilot_version": "0.59.1",
   "category": "interactive",
@@ -23,8 +23,10 @@
     "delete_message",
     "read_chat",
     "external_http",
-    "ai_text"
+    "ai_text",
+    "payout"
   ],
+  "strict_trace": true,
   "allowed_hosts": [
     "**.com",
     "**.net",

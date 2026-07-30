@@ -60,12 +60,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.14",
+    version="1.0.15",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内成语接龙，第一个答对的获奖，支持禁词规则",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "read_chat", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="session_game",

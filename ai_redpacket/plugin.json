@@ -3,7 +3,7 @@
   "display_name": "AI 答题红包",
   "description": "从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
   "author": "Anoyou",
-  "version": "0.1.39",
+  "version": "0.1.40",
   "entry": "plugin.py",
   "category": "interactive",
   "min_telepilot_version": "0.73.0-beta.15",
@@ -14,7 +14,8 @@
     "delete_message",
     "read_chat",
     "external_http",
-    "ai_text"
+    "ai_text",
+    "payout"
   ],
   "allowed_hosts": [
     "**.com",

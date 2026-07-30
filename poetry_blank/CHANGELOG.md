@@ -1,4 +1,7 @@
 # 更新日志
+## 1.0.15 (2026-07-30)
+- 显式声明 `payout` 高风险权限并开启资金动作严格 Trace，兼容最新 TelePilot 插件开发指南与运行时权限校验。
+
 ## 1.0.14 (2026-07-10)
 - 按最新插件开发指南对齐：`on_interaction` 改用 `event_from_interaction_payload(payload)` 标准事件信封作为读取主路径（`event.type`、`event.message.text/chat_id/message_id`、`event.actor`、`event.payment.amount`），旧平铺 payload helper 保留为 fallback。
 - 修复上一轮部分改动遗留：`_interaction_answer` 现接收 `event` 参数并以标准事件为主路径，回复锚点消息 id 统一走 `event` 优先、旧 helper 兜底。

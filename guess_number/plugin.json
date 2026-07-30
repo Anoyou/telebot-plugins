@@ -3,15 +3,17 @@
   "display_name": "猜数字",
   "description": "群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
   "author": "Anoyou",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
     "edit_message",
-    "read_chat"
+    "read_chat",
+    "payout"
   ],
   "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
+  "strict_trace": true,
   "commands": [
     "guess",
     "猜数字"

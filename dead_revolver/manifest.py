@@ -25,7 +25,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dead_revolver",
     display_name="死亡左轮",
-    version="1.0.12",
+    version="1.0.13",
     min_telepilot_version="0.33.0",
     author="builtin",
     description="群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
@@ -66,7 +66,8 @@ MANIFEST = Manifest(
   'session_policy': {'ttl_seconds': 600,
                      'duplicate_start': 'reject',
                      'close_on': ['started', 'cancelled', 'game_over', 'session_close']}}],
-    permissions=["send_message", "edit_message", "read_chat", "delete_message"],
+    permissions=["send_message", "edit_message", "read_chat", "delete_message", "payout"],
+    strict_trace=True,
     config_schema={
         "type": "object",
         "x-ui-mode": "single",

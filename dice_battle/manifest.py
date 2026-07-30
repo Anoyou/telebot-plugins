@@ -50,12 +50,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dice_battle",
     display_name="骰子比大小",
-    version="1.0.13",
+    version="1.0.14",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内骰子对战，两人各掷骰子比点数，支持下注",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "read_chat", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="challenge_game",

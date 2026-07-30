@@ -1,4 +1,7 @@
 # 更新日志
+## 1.1.30 (2026-07-30)
+- 显式声明 `payout` 高风险权限并开启资金动作严格 Trace，兼容最新 TelePilot 插件开发指南与运行时权限校验。
+
 ## 1.1.29 (2026-07-14)
 - 移除题图发送与 caption 编辑动作中硬编码的 `send_via` / `send_via_options`，普通会话消息现由 TelePilot 按 `session.channel` 自动路由，保持 `payout` 固定走 userbot。
 

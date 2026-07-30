@@ -50,12 +50,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="poetry_blank",
     display_name="诗词填空",
-    version="1.0.14",
+    version="1.0.15",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="古诗词填空抢答，答对获奖",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "read_chat", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="session_game",

@@ -57,7 +57,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.23",
+    version="1.0.24",
     min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
@@ -126,8 +126,10 @@ MANIFEST = Manifest(
             "site_url": {
                 "type": "string",
                 "title": "PT 站点地址",
-                "description": "站点根 URL，默认 https://www.qingwapt.com",
+                "description": "插件固定访问 TelePilot 外部 HTTP 白名单中的青娃 PT 站点。",
                 "default": "https://www.qingwapt.com",
+                "enum": ["https://www.qingwapt.com"],
+                "readOnly": True,
                 "level": "global",
             },
             "cookie": {

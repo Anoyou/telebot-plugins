@@ -74,4 +74,7 @@ TelePilot 远程插件仓库。
 - `plugin.py` — 入口文件
 - `__init__.py` — 导出 `PLUGIN_CLASS` 和 `MANIFEST`（必填）
 
-参考 [TelePilot 0.33 插件开发文档](https://github.com/Anoyou/Telebot/tree/codex/0.33-interaction-framework/docs)
+开发前请以 Beta 分支的最新文档为准：
+
+- [插件开发指南](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-DEV-GUIDE.md)
+- [插件 API 完整参考](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-API-REFERENCE.md)

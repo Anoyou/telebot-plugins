@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.4.5"
+PLUGIN_VERSION = "1.4.6"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -474,7 +474,8 @@ MANIFEST = Manifest(
     description="支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
     usage=USAGE,
     category="interactive",
-    permissions=["send_message", "edit_message", "delete_message", "read_chat", "external_http", "ai_text"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat", "external_http", "ai_text", "payout"],
+    strict_trace=True,
     allowed_hosts=[
         "**.com",
         "**.net",

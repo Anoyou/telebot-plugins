@@ -50,12 +50,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="guess_number",
     display_name="猜数字",
-    version="1.0.15",
+    version="1.0.16",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "read_chat", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="session_game",

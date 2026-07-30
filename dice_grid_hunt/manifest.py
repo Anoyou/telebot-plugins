@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 TEMPLATE_SAMPLE_VARS = {
-    "version": "1.1.29",
+    "version": "1.1.30",
     "prefix": "{prefix}",
     "command": "dicegrid",
     "force_stop_command": "stop",
@@ -267,12 +267,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.29",
+    version="1.1.30",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
-    permissions=["send_message", "edit_message", "read_chat", "send_file"],
+    permissions=["send_message", "edit_message", "read_chat", "send_file", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="session_game",

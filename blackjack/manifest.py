@@ -50,12 +50,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.26",
+    version="1.0.27",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
     description="经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
-    permissions=["send_message", "edit_message", "read_chat", "delete_message"],
+    permissions=["send_message", "edit_message", "read_chat", "delete_message", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="session_game",
