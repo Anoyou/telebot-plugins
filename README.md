@@ -24,6 +24,7 @@ TelePilot 远程插件仓库。
 | [codex_image](./codex_image/) | 插件配置 | 插件库维护 Codex 图片生成 |
 | [AI-Chat](./ai-chat/) | `{prefix}ask` | AI-Chat 聊天与消息解释助手，调用 TelePilot 已配置的 AI Provider |
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
+| [private_chat_assistant](./private_chat_assistant/) | 无 | 监听账号收到的私聊，通过插件专用 Bot 向指定账号发送 60 秒聚合提醒 |
 | [sum](./sum/) | `{prefix}sum [数量]` | AI 群消息总结，支持快捷总结与定时任务 |
 | [dead_revolver](./dead_revolver/) | `dr 金额` | 死亡左轮，群聊俄罗斯轮盘赌局 |
 | [quick_qa](./quick_qa/) | `{prefix}quickqa` | 快问快答积分淘汰赛，支持 URL + AI 生成题库 |
