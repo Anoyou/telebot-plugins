@@ -10,11 +10,11 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 PENDING_PREFIX = "pending:"
 MAX_PENDING_MESSAGES = 50
 MAX_MESSAGE_LENGTH = 1200
-MAX_NOTIFICATION_LENGTH = 4000
+MAX_NOTIFICATION_LENGTH = 3500
 MAX_SEND_RETRIES = 3
 
 MEDIA_LABELS = {
@@ -99,45 +99,66 @@ def _message_content(payload: dict[str, Any]) -> str:
     return "[非文本消息]"
 
 
-def _monitored_account_name(ctx: PluginContext, payload: dict[str, Any]) -> str:
-    account = payload.get("account") if isinstance(payload.get("account"), dict) else {}
-    config = ctx.config or {}
-    value = (
-        account.get("display_name")
-        or account.get("name")
-        or config.get("monitored_account_name")
-        or (ctx.account_config or {}).get("monitored_account_name")
-    )
-    return str(value or f"账号 {getattr(ctx, 'account_id', '')}").strip()
+def _entity_identity(entity: Any, fallback_id: int) -> tuple[str, str]:
+    first_name = str(getattr(entity, "first_name", "") or "").strip()
+    last_name = str(getattr(entity, "last_name", "") or "").strip()
+    display_name = " ".join(part for part in (first_name, last_name) if part)
+    username = str(getattr(entity, "username", "") or "").strip().lstrip("@")
+    if not display_name:
+        display_name = f"@{username}" if username else str(fallback_id)
+    return display_name, username
+
+
+def _identity_label(display_name: str, username: str) -> str:
+    label = str(display_name or "").strip()
+    clean_username = str(username or "").strip().lstrip("@")
+    if clean_username and f"@{clean_username}" not in label:
+        label = f"{label}（@{clean_username}）"
+    return label
+
+
+def _escape_html_limited(text: str, limit: int) -> str:
+    raw = str(text or "")
+    escaped = html_escape(raw, quote=False)
+    if len(escaped) <= limit:
+        return escaped
+    marker = "\n[内容已截断]"
+    marker_escaped = html_escape(marker, quote=False)
+    target = max(0, limit - len(marker_escaped))
+    low, high = 0, len(raw)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(html_escape(raw[:middle], quote=False)) <= target:
+            low = middle
+        else:
+            high = middle - 1
+    return html_escape(raw[:low].rstrip(), quote=False) + marker_escaped
 
 
 def _format_notification(state: dict[str, Any]) -> str:
-    monitored_name = html_escape(
-        str(state.get("monitored_account_name") or "当前").strip(), quote=False
-    )
+    monitored_name = html_escape(str(state.get("monitored_account_name") or "当前账号").strip(), quote=False)
     sender_name = str(state.get("display_name") or state.get("sender_id") or "未知联系人")
     username = str(state.get("username") or "").strip().lstrip("@")
-    if username and f"@{username}" not in sender_name:
-        sender_name = f"{sender_name}（@{username}）"
-    sender_name = html_escape(sender_name, quote=False)
+    sender_name = html_escape(_identity_label(sender_name, username), quote=False)
 
     raw_messages = state.get("messages") if isinstance(state.get("messages"), list) else []
-    messages = [html_escape(str(item).strip(), quote=False) for item in raw_messages if str(item).strip()]
+    messages = [str(item).strip() for item in raw_messages if str(item).strip()]
     if not messages:
         messages = ["[非文本消息]"]
     if len(messages) == 1:
-        body = messages[0]
+        raw_body = messages[0]
     else:
-        body = "\n".join(f"{index}. {text}" for index, text in enumerate(messages, start=1))
+        raw_body = "\n".join(f"{index}. {text}" for index, text in enumerate(messages, start=1))
 
     prefix = (
-        f"<b>您的 {monitored_name}账号 收到来自 {sender_name} 发的消息</b>\n"
-        "<b>消息内容：</b>\n"
+        "🔔 <b>私聊消息提醒</b>\n\n"
+        f"您的 <b>{monitored_name}</b> 账号\n"
+        f"收到来自 <b>{sender_name}</b> 发的消息\n\n"
+        "💬 <b>消息内容</b>\n<blockquote>"
     )
-    suffix = "\n<b>请及时查看。</b>"
+    suffix = "</blockquote>\n\n⏰ <i>请及时查看。</i>"
     available = max(0, MAX_NOTIFICATION_LENGTH - len(prefix) - len(suffix))
-    if len(body) > available:
-        body = body[: max(0, available - 8)].rstrip() + "\n[内容已截断]"
+    body = _escape_html_limited(raw_body, available)
     return f"{prefix}{body}{suffix}"
 
 
@@ -164,11 +185,15 @@ class PrivateChatAssistantPlugin(Plugin):
         super().__init__()
         self._memory_pending: dict[int, dict[str, Any]] = {}
         self._sender_locks: dict[int, asyncio.Lock] = {}
+        self._monitored_account_id = 0
+        self._monitored_account_name = ""
+        self._sender_identity_cache: dict[int, tuple[str, str]] = {}
 
     def _sender_lock(self, sender_id: int) -> asyncio.Lock:
         return self._sender_locks.setdefault(sender_id, asyncio.Lock())
 
     async def on_startup(self, ctx: PluginContext) -> None:
+        await self._resolve_monitored_account(ctx)
         if ctx.log is not None:
             missing = []
             if not str((ctx.config or {}).get("bot_token") or "").strip():
@@ -189,8 +214,20 @@ class PrivateChatAssistantPlugin(Plugin):
             sender_id = _positive_int(state.get("sender_id") or key[len(PENDING_PREFIX) :])
             if not sender_id:
                 continue
-            self._memory_pending[sender_id] = dict(state)
-            self._schedule_sender(ctx, sender_id, str(state.get("fire_at") or ""))
+            if sender_id == self._monitored_account_id:
+                await ctx.storage.delete(key)
+                continue
+            restored = dict(state)
+            restored["monitored_account_name"] = self._monitored_account_name or restored.get(
+                "monitored_account_name"
+            )
+            _, display_name, username = await self._resolve_sender_info(
+                ctx, {"sender": {"user_id": sender_id}}
+            )
+            restored["display_name"] = display_name or restored.get("display_name")
+            restored["username"] = username or restored.get("username")
+            self._memory_pending[sender_id] = restored
+            self._schedule_sender(ctx, sender_id, str(restored.get("fire_at") or ""))
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         if ctx.scheduler is not None:
@@ -212,9 +249,15 @@ class PrivateChatAssistantPlugin(Plugin):
         recipient_chat_id = _positive_int(config.get("recipient_chat_id"))
         if not bot_token or not recipient_chat_id:
             return None
+        if not self._monitored_account_id:
+            await self._resolve_monitored_account(ctx)
 
-        sender_id, display_name, username = _sender_info(payload)
-        if not sender_id or sender_id == _bot_id_from_token(bot_token):
+        sender_id, display_name, username = await self._resolve_sender_info(ctx, payload)
+        if (
+            not sender_id
+            or sender_id == _bot_id_from_token(bot_token)
+            or sender_id == self._monitored_account_id
+        ):
             return None
 
         immediate_flush = ctx.scheduler is None
@@ -225,7 +268,8 @@ class PrivateChatAssistantPlugin(Plugin):
                 fire_at = now + timedelta(seconds=_aggregation_seconds(config))
                 state = {
                     "sender_id": sender_id,
-                    "monitored_account_name": _monitored_account_name(ctx, payload),
+                    "monitored_account_name": self._monitored_account_name
+                    or f"ID {getattr(ctx, 'account_id', '')}",
                     "display_name": display_name,
                     "username": username,
                     "messages": [],
@@ -234,6 +278,9 @@ class PrivateChatAssistantPlugin(Plugin):
                     "retry_count": 0,
                 }
             else:
+                state["monitored_account_name"] = self._monitored_account_name or state.get(
+                    "monitored_account_name"
+                )
                 state["display_name"] = display_name or state.get("display_name")
                 state["username"] = username or state.get("username")
 
@@ -246,6 +293,42 @@ class PrivateChatAssistantPlugin(Plugin):
         if immediate_flush:
             await self._flush_sender(ctx, sender_id)
         return None
+
+    async def _resolve_monitored_account(self, ctx: PluginContext) -> None:
+        configured_name = str((ctx.config or {}).get("monitored_account_name") or "").strip()
+        client = getattr(ctx, "client", None)
+        get_me = getattr(client, "get_me", None) if client is not None else None
+        if callable(get_me):
+            try:
+                me = await get_me()
+                self._monitored_account_id = _positive_int(getattr(me, "id", None))
+                display_name, username = _entity_identity(me, self._monitored_account_id)
+                self._monitored_account_name = configured_name or _identity_label(display_name, username)
+                return
+            except Exception:
+                pass
+        self._monitored_account_name = configured_name or f"ID {getattr(ctx, 'account_id', '')}"
+
+    async def _resolve_sender_info(
+        self, ctx: PluginContext, payload: dict[str, Any]
+    ) -> tuple[int, str, str]:
+        sender_id, display_name, username = _sender_info(payload)
+        if not sender_id:
+            return sender_id, display_name, username
+        cached = self._sender_identity_cache.get(sender_id)
+        if cached is not None:
+            return sender_id, cached[0], cached[1]
+        client = getattr(ctx, "client", None)
+        get_entity = getattr(client, "get_entity", None) if client is not None else None
+        if callable(get_entity):
+            try:
+                entity = await get_entity(sender_id)
+                display_name, username = _entity_identity(entity, sender_id)
+            except Exception:
+                pass
+        if display_name != str(sender_id) or username:
+            self._sender_identity_cache[sender_id] = (display_name, username)
+        return sender_id, display_name, username
 
     def _schedule_sender(self, ctx: PluginContext, sender_id: int, fire_at: str) -> None:
         if ctx.scheduler is None:
