@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.1.5 (2026-08-15)
+- 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
+
+
 ## 1.1.4 (2026-07-10)
 - 按最新插件开发指南对齐元数据：`plugin.json` 与 `manifest.py` 补充 `min_telepilot_version="0.33.0"` 并同步版本号。
 - SSE 解析中的旧命名局部变量重命名为 `sse_event`，以通过安装校验门的废弃 token 扫描；纯局部改名，不改变解析逻辑与图片生成行为。

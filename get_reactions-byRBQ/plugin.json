@@ -3,7 +3,7 @@
   "display_name": "get_reactions-byRBQ",
   "description": "表情获取辅助命令，用于测试环境是否支持自定义表情反应",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -62,5 +62,6 @@
       "description": "账号主人或授权管理员通过 UserBot 命令触发。"
     }
   ],
+  "requires_platform_capabilities": [],
   "capabilities": {}
 }

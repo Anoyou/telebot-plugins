@@ -121,7 +121,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.4.9",
+    version="1.4.10",
     min_telepilot_version="0.59.1",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -130,6 +130,7 @@ MANIFEST = Manifest(
     strict_trace=True,
     category="interactive",
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['ledger'],
 )
 
 MANIFEST.usage = USAGE

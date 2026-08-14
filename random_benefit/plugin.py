@@ -16,7 +16,7 @@ from app.worker.plugins.base import Plugin, PluginContext, register
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.2"
+PLUGIN_VERSION = "1.5.3"
 
 DEFAULT_START_COMMAND = "福利开启"
 DEFAULT_STOP_COMMAND = "福利暂停"

@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.4.18",
+  "version": "0.4.19",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -278,5 +278,6 @@
       "description": "账号本人在群内发送“10d模式”可切换转账/无感扣款入局；等待大厅中发送“入局”可作为免转账入局证据。"
     }
   ],
+  "requires_platform_capabilities": ["interaction_bot", "ledger"],
   "capabilities": {}
 }

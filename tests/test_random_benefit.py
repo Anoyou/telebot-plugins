@@ -162,7 +162,7 @@ class RandomBenefitPluginTest(unittest.TestCase):
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.5.2")
+        self.assertEqual(manifest["version"], "1.5.3")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertEqual(properties["start_command"]["default"], "福利开启")

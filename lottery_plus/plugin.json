@@ -3,7 +3,7 @@
   "display_name": "彩票系统 Plus",
   "description": "群内彩票玩法：下注、开奖、奖池滚存、历史与统计，支持高可配置模板与预览",
   "author": "Anoyou",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -364,5 +364,6 @@
       "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
     }
   ],
+  "requires_platform_capabilities": ["interaction_bot", "ledger"],
   "capabilities": {}
 }

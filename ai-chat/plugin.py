@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.10"
+PLUGIN_VERSION = "0.1.11"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60

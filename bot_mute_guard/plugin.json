@@ -3,7 +3,7 @@
   "display_name": "Bot 防广告守卫",
   "description": "针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
   "author": "Anoyou",
-  "version": "1.1.8",
+  "version": "1.1.9",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -139,5 +139,6 @@
       "description": "监听 userbot 收到的群消息，按白名单和演练模式处理非白名单 Bot、inline Bot 与 Bot 发言。"
     }
   ],
+  "requires_platform_capabilities": [],
   "capabilities": {}
 }

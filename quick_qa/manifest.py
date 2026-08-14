@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.4.6"
+PLUGIN_VERSION = "1.4.7"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -502,6 +502,7 @@ MANIFEST = Manifest(
         "**.tw",
     ],
     event_subscriptions=EVENT_SUBSCRIPTIONS,
+    requires_platform_capabilities=['ai', 'interaction_bot', 'ledger'],
     capabilities={},
     interaction_profile="session_game",
     config_actions=CONFIG_ACTIONS,

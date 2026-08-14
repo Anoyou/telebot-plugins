@@ -36,7 +36,7 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.30"
+PLUGIN_VERSION = "1.1.31"
 
 try:
     from app.worker.plugins.base import public_entity_display_name

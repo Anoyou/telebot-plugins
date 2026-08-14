@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.4.6",
+  "version": "1.4.7",
   "entry": "plugin.py",
   "min_telepilot_version": "0.59.1",
   "category": "interactive",
@@ -145,6 +145,7 @@
       "description": "账号主人或授权管理员通过 UserBot 命令管理大厅；题库主路径在 Web 配置页维护。"
     }
   ],
+  "requires_platform_capabilities": ["ai", "interaction_bot", "ledger"],
   "capabilities": {},
   "interaction_profile": "session_game",
   "interaction_entries": [

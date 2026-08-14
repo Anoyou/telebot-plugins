@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.0.9 (2026-08-15)
+- 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
+
+
 ## 1.0.8 (2026-07-10)
 - 按最新插件开发指南对齐：帮助/状态文案里写死的命令前缀 `,` 改为运行时 `current_command_prefix()` 取值，命令名沿用可配置的 `{command}`。
 - 同步 `plugin.json` 与 `manifest.py` 版本号，元数据一致性校验通过。

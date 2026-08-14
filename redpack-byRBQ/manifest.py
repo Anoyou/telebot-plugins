@@ -144,7 +144,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.25",
+    version="1.1.26",
     min_telepilot_version="0.59.1",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
@@ -190,6 +190,7 @@ MANIFEST = Manifest(
   'money_channel': 'userbot_reply',
   'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['interaction_bot', 'ledger'],
 )
 
 # Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.

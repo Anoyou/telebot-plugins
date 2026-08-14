@@ -170,7 +170,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.33",
+    version="1.1.34",
     min_telepilot_version="0.59.1",
     author="Anoyou",
     description="调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
@@ -178,6 +178,7 @@ MANIFEST = Manifest(
     category="utility",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['ai'],
 )
 
 

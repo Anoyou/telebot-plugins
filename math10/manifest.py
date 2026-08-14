@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="math10",
     display_name="随机算数题",
-    version="1.0.11",
+    version="1.0.12",
     min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="由交互 Bot 开启一局 10 以内算数题，群内第一个答对者获得奖金",
@@ -27,6 +27,7 @@ MANIFEST = Manifest(
             "entry_key": "start_math_game",
         },
     ],
+    requires_platform_capabilities=['interaction_bot', 'ledger'],
     capabilities={},
     interaction_profile="session_game",
     interaction_entries=[

@@ -3,7 +3,7 @@
   "display_name": "luckydraw-byRBQ",
   "description": "# 自动抽奖插件 (LuckyDraw) 在指定群组中自动识别红包/抽奖活动并发送口令参与，支持机...",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -61,5 +61,6 @@
       "description": "账号主人或授权管理员通过 UserBot 命令触发。"
     }
   ],
+  "requires_platform_capabilities": [],
   "capabilities": {}
 }

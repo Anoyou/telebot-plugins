@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.5.3 (2026-08-15)
+- 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
+
+
 ## 1.5.2 (2026-07-14)
 - 修复 Event Bus 标准消息信封未携带 `is_bot` 时仍会随机回复群内 Bot 的问题。
 - Bot 识别会按发送者 ID 查询 Telethon 实体并缓存结果；实体查询不可用时使用 Telegram Bot 用户名规则兜底。

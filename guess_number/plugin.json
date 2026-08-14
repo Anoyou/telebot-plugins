@@ -3,7 +3,7 @@
   "display_name": "猜数字",
   "description": "群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
   "author": "Anoyou",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -194,5 +194,6 @@
       "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
     }
   ],
+  "requires_platform_capabilities": ["interaction_bot", "ledger"],
   "capabilities": {}
 }

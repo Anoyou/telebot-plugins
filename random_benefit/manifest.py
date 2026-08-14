@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.2"
+PLUGIN_VERSION = "1.5.3"
 
 REPLY_TEMPLATE_DEFAULT = "+1-6666"
 TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
@@ -157,6 +157,7 @@ MANIFEST = Manifest(
     category="interactive",
     permissions=["send_message", "read_chat"],
     event_subscriptions=EVENT_SUBSCRIPTIONS,
+    requires_platform_capabilities=[],
     capabilities=CAPABILITIES,
     config_schema=CONFIG_SCHEMA,
 )

@@ -113,7 +113,7 @@ class ReplyAnchorTestPluginTest(unittest.TestCase):
         self.assertEqual(raw["config_schema"], manifest_module.CONFIG_SCHEMA)
         self.assertEqual(raw["event_subscriptions"], manifest_module.EVENT_SUBSCRIPTIONS)
         self.assertEqual(raw["interaction_entries"], manifest_module.INTERACTION_ENTRIES)
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.2.3")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.2.4")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.71.3")
         self.assertTrue(all(entry["session_scope"] == "none" for entry in raw["interaction_entries"]))
         self.assertTrue(

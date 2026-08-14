@@ -231,8 +231,8 @@ class InteractionPayoutContractTests(unittest.TestCase):
             with patch.object(game24_module, "generate_24_puzzle", return_value=[1, 2, 3, 4]):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
-            self.assertIn("v1.0.11", math_actions[0]["text"])
-            self.assertIn("v1.1.12", game_actions[0]["text"])
+            self.assertIn("v1.0.12", math_actions[0]["text"])
+            self.assertIn("v1.1.13", game_actions[0]["text"])
 
         asyncio.run(scenario())
 

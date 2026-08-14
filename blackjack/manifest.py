@@ -50,7 +50,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.27",
+    version="1.0.28",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -93,6 +93,7 @@ MANIFEST = Manifest(
   'money_channel': 'userbot_reply',
   'participant_policy': 'solo_owner'}],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['interaction_bot', 'ledger'],
 )
 
 

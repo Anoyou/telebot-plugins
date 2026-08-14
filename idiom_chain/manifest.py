@@ -60,7 +60,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.15",
+    version="1.0.16",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -102,6 +102,7 @@ MANIFEST = Manifest(
   'money_channel': 'userbot_reply',
   'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['interaction_bot', 'ledger'],
 )
 
 

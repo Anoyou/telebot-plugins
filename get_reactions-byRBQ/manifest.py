@@ -35,7 +35,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="get_reactions-byRBQ",
     display_name="get_reactions-byRBQ",
-    version="1.0.6",
+    version="1.0.7",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
@@ -45,6 +45,7 @@ MANIFEST = Manifest(
     category="utility",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=[],
 )
 
 # Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.

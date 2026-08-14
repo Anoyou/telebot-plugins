@@ -97,7 +97,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.4.18",
+    version="0.4.19",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -174,6 +174,7 @@ MANIFEST = Manifest(
   'money_channel': 'userbot_reply',
   'participant_policy': 'paid_pool'}],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['interaction_bot', 'ledger'],
 )
 
 

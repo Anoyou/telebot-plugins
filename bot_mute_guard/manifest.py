@@ -113,7 +113,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.8",
+    version="1.1.9",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
@@ -121,6 +121,7 @@ MANIFEST = Manifest(
     category="automation",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=[],
 )
 
 

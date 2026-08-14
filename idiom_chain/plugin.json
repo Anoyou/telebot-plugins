@@ -3,7 +3,7 @@
   "display_name": "成语接龙",
   "description": "群内成语接龙，第一个答对的获奖，支持禁词规则",
   "author": "Anoyou",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -187,5 +187,6 @@
       "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
     }
   ],
+  "requires_platform_capabilities": ["interaction_bot", "ledger"],
   "capabilities": {}
 }

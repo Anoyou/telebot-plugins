@@ -40,7 +40,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="chatter_challenge",
     display_name="话痨挑战",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -50,6 +50,7 @@ MANIFEST = Manifest(
     category="automation",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=[],
 )
 
 

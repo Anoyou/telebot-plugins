@@ -57,7 +57,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.24",
+    version="1.0.25",
     min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
@@ -247,6 +247,7 @@ MANIFEST = Manifest(
         },
         "required": ["command", "cookie", "torrent_cooldown_seconds"],
     },
+    requires_platform_capabilities=['interaction_bot'],
 )
 
 # Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.

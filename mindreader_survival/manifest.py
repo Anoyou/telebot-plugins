@@ -182,7 +182,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.1.10",
+    version="1.1.11",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",
@@ -228,6 +228,7 @@ MANIFEST = Manifest(
   'money_channel': 'userbot_reply',
   'participant_policy': 'paid_pool'}],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['interaction_bot'],
 )
 
 

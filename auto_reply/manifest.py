@@ -16,7 +16,7 @@ FEATURE_AUTO_REPLY = "auto_reply"
 MANIFEST = Manifest(
     key=FEATURE_AUTO_REPLY,
     display_name="自动回复",
-    version="1.0.1",
+    version="1.0.2",
     min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="按规则匹配关键词或正则后自动回复目标会话",
@@ -31,6 +31,7 @@ MANIFEST = Manifest(
             "entry_key": "rules",
         }
     ],
+    requires_platform_capabilities=[],
     capabilities={},
     # 该插件目前无 config_schema，账号级配置通过 rules 表管理
 )

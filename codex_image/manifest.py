@@ -17,7 +17,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="codex_image",
     display_name="Codex 图片生成",
-    version="1.1.4",
+    version="1.1.5",
     min_telepilot_version="0.33.0",
     author="TeleBoxOrg",
     description="通过 Codex API 调用 GPT 图片生成模型，支持纯文生图和参考图生成",
@@ -26,6 +26,7 @@ MANIFEST = Manifest(
     experimental=True,
     permissions=["send_message", "edit_message", "delete_message", "read_chat", "send_file"],
     event_subscriptions=[],
+    requires_platform_capabilities=['ai'],
     capabilities={},
     config_schema={
         "type": "object",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "reply_anchor_test"
-PLUGIN_VERSION = "0.2.3"
+PLUGIN_VERSION = "0.2.4"
 ENTRY_KEY = "reply_to_recent_message"
 NAME_ENTRY_KEY = "resolve_public_name"
 DEFAULT_COMMAND = "send"
@@ -198,6 +198,7 @@ MANIFEST = Manifest(
     interaction_entries=INTERACTION_ENTRIES,
     event_subscriptions=EVENT_SUBSCRIPTIONS,
     interaction_profile="utility_trigger",
+    requires_platform_capabilities=['ledger'],
     capabilities={},
 )
 

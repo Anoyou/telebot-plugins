@@ -3,7 +3,7 @@
   "display_name": "AI 答题红包",
   "description": "从网页生成 AI 三选一题库，并通过交互 Bot 答题、UserBot payout 发放整数红包。",
   "author": "Anoyou",
-  "version": "0.1.40",
+  "version": "0.1.41",
   "entry": "plugin.py",
   "category": "interactive",
   "min_telepilot_version": "0.73.0-beta.15",
@@ -55,6 +55,7 @@
   ],
   "usage": "配置页填写 URL、Provider 和模型后点击“生成/补齐题库”。命令：{prefix}{command} 按默认配置发红包；{prefix}{command} create 总金额 [题目数] [题库ID] 自定义创建；{prefix}{command} bank list 查看题库；{prefix}{command} list 查看红包；{prefix}{command} close 红包ID 关闭；{prefix}{command} reset [用户ID] 重置当前群进行中的红包轮次限制；{prefix}{command} reset all 重置当前群进行中的所有红包轮次限制；{prefix}{command}-7 查询本周排行榜；{prefix}{command} help 查看帮助。红包领完或到期后自动结算，每周日 10:00 默认发布上一完整周期周榜。管理员创建、重置或关闭红包成功后会自动删除原命令消息，失败时保留。重置结果由交互 Bot 发送并在 3 秒后删除；题目按预约时间计时，超时提示 5 秒后删除且不消耗次数。匿名管理员不能参与答题红包；非匿名管理员和普通成员可正常参与。未收到奖励时先以个人账号在群里发言，再点击“申请补发奖励”，平台会校验状态并避免重复发放。{prefix}{command} list 仅显示进行中红包的题目/金额领取进度和开题消息链接，并提供历史未到账奖励补发入口；原命令自动删除，列表回执保留。开题消息 ID 会写入本地数据库，list 与小时播报可稳定跳转；可选择 UserBot 或交互 Bot 置顶，手动结束或自动结算后取消置顶。普通群员可发送 /airp list 自助查询同一列表，其他斜杠子命令不会开放。答错后的新答案按钮有 2 秒服务端冷却，冷却期内连点不会消耗答题机会。红包最晚于创建日次日 08:30 到期；如前一日红包未领完，每日 08:00 会按群发送一次提醒。",
   "strict_trace": true,
+  "requires_platform_capabilities": ["ai", "interaction_bot", "ledger"],
   "capabilities": {},
   "interaction_profile": "session_game",
   "config_schema": {

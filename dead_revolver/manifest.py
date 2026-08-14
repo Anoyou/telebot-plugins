@@ -25,7 +25,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dead_revolver",
     display_name="死亡左轮",
-    version="1.0.13",
+    version="1.0.14",
     min_telepilot_version="0.33.0",
     author="builtin",
     description="群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
@@ -85,6 +85,7 @@ MANIFEST = Manifest(
             }
         },
     },
+    requires_platform_capabilities=['interaction_bot', 'ledger'],
 )
 
 # Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.

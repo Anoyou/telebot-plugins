@@ -12,7 +12,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="game24",
     display_name="24点游戏",
-    version="1.1.12",
+    version="1.1.13",
     min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="随机生成 24 点题目，群内竞速答题，第一名获得奖金",
@@ -38,6 +38,7 @@ MANIFEST = Manifest(
             "entry_key": "start_paid_game",
         },
     ],
+    requires_platform_capabilities=['interaction_bot', 'ledger'],
     capabilities={},
     interaction_profile="session_game",
     interaction_entries=[

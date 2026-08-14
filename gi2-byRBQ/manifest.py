@@ -36,7 +36,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="gi2-byRBQ",
     display_name="gi2-byRBQ",
-    version="1.0.7",
+    version="1.0.8",
     min_telepilot_version="0.59.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
@@ -46,6 +46,7 @@ MANIFEST = Manifest(
     category="utility",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
+    requires_platform_capabilities=['ai'],
 )
 
 # Expose 0.41 metadata without requiring older Manifest dataclasses to accept new kwargs.
