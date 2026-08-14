@@ -27,6 +27,13 @@ def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
     raise AssertionError(f"missing function {name}")
 
 
+def _async_function(tree: ast.Module, name: str) -> ast.AsyncFunctionDef:
+    for node in tree.body:
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"missing async function {name}")
+
+
 def _assigned_names(tree: ast.Module) -> set[str]:
     names: set[str] = set()
     for node in tree.body:
@@ -79,3 +86,35 @@ def test_byrbq_data_migrations_are_atomic_and_non_destructive() -> None:
             assert target.read_bytes() == b'{"source":"current"}', relative_path
             assert source.exists(), relative_path
             assert not list(target.parent.glob(f".{target.name}.*.tmp")), relative_path
+
+
+def test_redpack_payout_is_audited_before_claim_state_is_committed() -> None:
+    path = ROOT / "redpack-byRBQ/legacy_main.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    listener = _async_function(tree, "redpack_claim_listener")
+
+    payout_calls = [
+        node
+        for node in ast.walk(listener)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "payout"
+    ]
+    commit_calls = [
+        node
+        for node in ast.walk(listener)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "mark_claim"
+    ]
+    assert len(payout_calls) == 1
+    assert len(commit_calls) == 1
+    assert payout_calls[0].lineno < commit_calls[0].lineno
+
+    confirm_listener = _async_function(tree, "redpack_transfer_confirm_listener")
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "click"
+        for node in ast.walk(confirm_listener)
+    )

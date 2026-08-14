@@ -3,7 +3,7 @@ from app.worker.plugins.manifest import Manifest
 CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
-    "x-usage-guide": '管理员发送 {prefix}{command} 口令 总额 个数 创建文字或图片口令红包；群友直接发送正确口令领取，插件自动回复 +金额 并在领完后发送结算榜单。',
+    "x-usage-guide": '管理员发送 {prefix}{command} 口令 总额 个数 创建文字或图片口令红包；群友发送正确口令后由平台 payout/ledger 审计派奖，成功后写入领取记录并在领完后发送结算榜单。',
     "additionalProperties": False,
     "properties": {
         "usage_preview": {
@@ -91,9 +91,9 @@ CONFIG_SCHEMA = {
         },
         "auto_confirm_enabled": {
             "type": "boolean",
-            "title": "自动确认高额转账",
+            "title": "旧自动确认开关（已停用）",
             "default": True,
-            "description": "检测到高额转账确认按钮时自动点击确认。"
+            "description": "仅保留旧配置兼容；TelePilot 0.97.0 起资金动作由平台 payout/ledger 审计，不再点击第三方确认按钮。"
         },
         "auto_confirm_ttl": {
             "type": "integer",
@@ -101,7 +101,7 @@ CONFIG_SCHEMA = {
             "default": 180,
             "minimum": 1,
             "maximum": 86400,
-            "description": "只在领取提示发出后的这段时间内尝试自动确认。"
+            "description": "仅保留旧配置兼容，当前不再用于自动确认。"
         },
         "auto_confirm_click_delay": {
             "type": "number",
@@ -109,7 +109,7 @@ CONFIG_SCHEMA = {
             "default": 0.8,
             "minimum": 0,
             "maximum": 60,
-            "description": "点击确认按钮前等待的秒数。"
+            "description": "仅保留旧配置兼容，当前不再用于自动确认。"
         },
         "help_aliases": {"type": "string", "title": "help 别名", "default": "help 帮助"},
         "send_aliases": {"type": "string", "title": "send 别名", "default": "send"},
@@ -126,29 +126,26 @@ CONFIG_SCHEMA = {
 }
 
 # TelePilot 0.41 Event Bus metadata.
-USAGE = '管理员发送 {prefix}{command} 口令 总额 个数创建文字或图片口令红包；群友直接发送正确口令领取，插件按原兼容实现处理发放和结算榜单。普通回复继承 TelePilot 当前会话通道；资金类动作必须由 payout/受控 userbot 链路执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot。'
+USAGE = '管理员发送 {prefix}{command} 口令 总额 个数创建文字或图片口令红包；群友直接发送正确口令领取。普通消息统一走 MessageOps，派奖必须先由平台 payout/ledger 成功审计才写入领取记录；UserBot 消息入口保留用于历史口令监听与实体读取。'
 EVENT_SUBSCRIPTIONS = [{'events': ['command'],
   'source': ['userbot'],
   'scope': 'owner_only',
   'description': '账号主人或授权管理员通过 UserBot 命令触发。'},
  {'events': ['message', 'session_close'],
-  'source': ['interaction_bot'],
+  'source': ['interaction_bot', 'userbot'],
   'scope': 'rule_bound',
-  'description': '交互规则命中后由交互 Bot 投递会话事件。'},
- {'events': ['payment_confirmed'],
-  'source': ['external_payment_notice', 'userbot'],
-  'scope': 'rule_bound',
-  'description': '付款确认由外部到账证据和 UserBot 上下文共同确认。'}]
+  'description': '交互规则或历史 UserBot 口令监听投递群消息。'}]
 CAPABILITIES = {}
 
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.26",
+    version="1.1.28",
     min_telepilot_version="0.59.1",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
-    description="口令红包插件，支持文字红包与图片数学题红包，并提供自动领取结算和高额转账确认",
-    permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message"],
+    description="口令红包插件，支持文字红包与图片数学题红包，并通过平台 payout 完成可审计派奖与结算",
+    permissions=["send_message", "edit_message", "read_chat", "send_file", "delete_message", "payout"],
+    strict_trace=True,
 
     category="interactive",
     interaction_profile="reward_pool",
@@ -158,7 +155,7 @@ MANIFEST = Manifest(
   'interaction_profile': 'reward_pool',
   'launch_mode': 'hybrid',
   'session_scope': 'chat',
-  'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
+  'events': ['keyword', 'message', 'session_close'],
   'preserve_command_trigger': True,
   'command_fallback': {'enabled': True, 'command': 'redpack', 'mode': 'hint_only'},
   'session_policy': {'ttl_seconds': 3600,
@@ -168,6 +165,7 @@ MANIFEST = Manifest(
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message',
                                   'send_file',
+                                  'payout',
                                   'end_session',
                                   'result',
                                   'settlement'],},
@@ -187,7 +185,7 @@ MANIFEST = Manifest(
                  'amount_field': 'total_amount'},
   'dispatch_modes': ['admin_command', 'public_keyword'],
   'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
-  'money_channel': 'userbot_reply',
+  'money_channel': 'platform_payout',
   'participant_policy': 'open_race'}],
     config_schema=CONFIG_SCHEMA,
     requires_platform_capabilities=['interaction_bot', 'ledger'],

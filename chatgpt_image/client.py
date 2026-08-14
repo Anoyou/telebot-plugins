@@ -50,6 +50,34 @@ class UpstreamHTTPError(ChatGPTImageError):
         super().__init__(f"{context} failed: HTTP {status_code}: {_short_body(body)}")
 
 
+class _PlatformHTTPClient:
+    """把 TelePilot ctx.http 适配为本模块需要的最小客户端接口。"""
+
+    def __init__(self, http: Any, headers: dict[str, str]) -> None:
+        self.http = http
+        self.headers = headers
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def _kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(self.headers)
+        merged.update(kwargs.pop("headers", {}) or {})
+        return {**kwargs, "headers": merged}
+
+    async def get(self, url: str, **kwargs: Any):
+        return await self.http.get(url, **self._kwargs(kwargs))
+
+    async def post(self, url: str, **kwargs: Any):
+        return await self.http.post(url, **self._kwargs(kwargs))
+
+    async def put(self, url: str, **kwargs: Any):
+        raise ChatGPTImageError("TelePilot 0.97.0 的受控 HTTP facade 不支持 PUT，暂不支持上传参考图。")
+
+
 @dataclass(frozen=True)
 class ImageRequest:
     prompt: str
@@ -409,12 +437,16 @@ class ChatGPTWebImageClient:
         self,
         access_token: str,
         *,
+        http: Any,
         proxy_url: str = "",
         timeout: int = 300,
         poll_timeout: int = 180,
         poll_interval: int = 10,
     ) -> None:
         self.base_url = CHATGPT_BASE_URL
+        if http is None:
+            raise ChatGPTImageError("TelePilot 未注入 ctx.http，拒绝直连 ChatGPT。")
+        self.http = http
         self.access_token = access_token
         self.proxy_url = str(proxy_url or "").strip()
         self.timeout = max(30, int(timeout or 300))
@@ -431,7 +463,7 @@ class ChatGPTWebImageClient:
         self.pow_script_sources: list[str] = [DEFAULT_POW_SCRIPT]
         self.pow_data_build = ""
 
-    def _client(self, *, timeout: int | float | None = None) -> httpx.AsyncClient:
+    def _client(self, *, timeout: int | float | None = None) -> _PlatformHTTPClient:
         headers = {
             "User-Agent": self.user_agent,
             "Origin": self.base_url,
@@ -450,15 +482,7 @@ class ChatGPTWebImageClient:
         }
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
-        timeout_config = httpx.Timeout(timeout=float(timeout or self.timeout))
-        if self.proxy_url:
-            return httpx.AsyncClient(
-                headers=headers,
-                timeout=timeout_config,
-                follow_redirects=True,
-                proxy=self.proxy_url,
-            )
-        return httpx.AsyncClient(headers=headers, timeout=timeout_config, follow_redirects=True)
+        return _PlatformHTTPClient(self.http, headers)
 
     def _headers(self, path: str, extra: dict[str, str] | None = None) -> dict[str, str]:
         headers = {
@@ -597,13 +621,13 @@ class ChatGPTWebImageClient:
             "status": "正常" if unknown and plan_type.lower() != "free" else ("限流" if quota == 0 else "正常"),
         }
 
-    async def _json_get(self, client: httpx.AsyncClient, path: str, *, route: str | None = None) -> dict[str, Any]:
+    async def _json_get(self, client: _PlatformHTTPClient, path: str, *, route: str | None = None) -> dict[str, Any]:
         response = await client.get(self.base_url + path, headers=self._headers(route or path, {"Accept": "application/json"}))
         await self._ensure_ok(response, path)
         data = response.json()
         return data if isinstance(data, dict) else {}
 
-    async def _json_post(self, client: httpx.AsyncClient, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _json_post(self, client: _PlatformHTTPClient, path: str, payload: dict[str, Any]) -> dict[str, Any]:
         response = await client.post(
             self.base_url + path,
             headers=self._headers(path, {"Content-Type": "application/json", "Accept": "application/json"}),
@@ -700,7 +724,7 @@ class ChatGPTWebImageClient:
             data = response.json()
         return str(data.get("conduit_token") or "")
 
-    async def _upload_image(self, client: httpx.AsyncClient, info: ImageInfo, file_name: str) -> dict[str, Any]:
+    async def _upload_image(self, client: _PlatformHTTPClient, info: ImageInfo, file_name: str) -> dict[str, Any]:
         path = "/backend-api/files"
         response = await client.post(
             self.base_url + path,

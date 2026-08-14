@@ -114,7 +114,7 @@ class _CompatRuntime:
 
     async def run_hooks(self, startup: bool) -> None:
         hooks = self.startup_hooks if startup else self.shutdown_hooks
-        bot = _CompatClient(self.client)
+        bot = _CompatClient(self)
         for h in hooks:
             try:
                 out = h()
@@ -129,8 +129,8 @@ class _CompatRuntime:
         if not self.ctx:
             return False
         text = (getattr(event, "raw_text", None) or getattr(event, "text", None) or "").strip()
-        msg = _CompatMessage(event, text, args)
-        bot = _CompatClient(self.client)
+        msg = _CompatMessage(self, event, text, args)
+        bot = _CompatClient(self)
         handled = False
         is_out = self._is_outgoing(event)
         for spec in self.listeners:
@@ -151,8 +151,8 @@ class _CompatRuntime:
             return
         text = (getattr(event, "raw_text", None) or getattr(event, "text", None) or "").strip()
         cmd, args = _parse_command(text)
-        msg = _CompatMessage(event, text, args)
-        bot = _CompatClient(self.client)
+        msg = _CompatMessage(self, event, text, args)
+        bot = _CompatClient(self)
         is_out = self._is_outgoing(event)
 
         for spec in self.listeners:
@@ -178,8 +178,24 @@ def _parse_command(text: str) -> tuple[str | None, list[str]]:
 
 
 class _CompatClient:
-    def __init__(self, raw_client: Any) -> None:
-        self._c = raw_client
+    def __init__(self, runtime: _CompatRuntime) -> None:
+        self._runtime = runtime
+        self._c = runtime.client
+
+    async def _message_op(self, name: str, **kwargs: Any) -> Any:
+        messages = getattr(self._runtime.ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝直接发送或编辑消息")
+        method = getattr(messages, name, None)
+        if callable(method):
+            return await method(**kwargs)
+        from app.worker.plugins.message_ops import BufferedMessageOps
+        action = await getattr(BufferedMessageOps(), name)(**kwargs)
+        apply = getattr(messages, "apply", None)
+        if not callable(apply):
+            raise RuntimeError(f"TelePilot MessageOps 不支持 {name}")
+        await apply([action])
+        return action
 
     async def get_me(self):
         if hasattr(self._c, "get_me"):
@@ -187,21 +203,21 @@ class _CompatClient:
         return types.SimpleNamespace(id=0)
 
     async def send_message(self, chat_id: int, text: str, **kwargs):
-        return await self._c.send_message(chat_id, text, **kwargs)
+        return await self._message_op("send", chat_id=int(chat_id), text=text, parse_mode=kwargs.get("parse_mode") or "plain")
 
     async def send_photo(self, chat_id: int, photo: Any, **kwargs):
-        if hasattr(self._c, "send_photo"):
-            return await self._c.send_photo(chat_id, photo, **kwargs)
-        return await self._c.send_file(chat_id, photo, **kwargs)
+        return await self._message_op("send_photo",
+            chat_id=int(chat_id), photo=photo, caption=kwargs.get("caption"),
+            parse_mode=kwargs.get("parse_mode") or "plain",
+        )
 
     async def send_document(self, chat_id: int, document: Any, **kwargs):
-        if hasattr(self._c, "send_document"):
-            return await self._c.send_document(chat_id, document, **kwargs)
-        return await self._c.send_file(chat_id, document, **kwargs)
+        return await self._message_op("send_file",
+            chat_id=int(chat_id), file=document, caption=kwargs.get("caption"),
+            parse_mode=kwargs.get("parse_mode") or "plain",
+        )
 
     async def send_media_group(self, chat_id: int, media: list[Any], **kwargs):
-        if hasattr(self._c, "send_media_group"):
-            return await self._c.send_media_group(chat_id, media, **kwargs)
         out = []
         for m in media:
             cap = getattr(m, "caption", None)
@@ -213,26 +229,27 @@ class _CompatClient:
         return await self._c.get_messages(chat_id, message_ids)
 
     async def edit_message_caption(self, chat_id: int, message_id: int, caption: str, **kwargs):
-        if hasattr(self._c, "edit_message_caption"):
-            return await self._c.edit_message_caption(chat_id, message_id, caption, **kwargs)
-        return await self._c.edit_message(chat_id, message_id, caption, **kwargs)
+        return await self._message_op("edit_caption",
+            chat_id=int(chat_id), message_id=int(message_id), caption=caption,
+            parse_mode=kwargs.get("parse_mode") or "plain",
+        )
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, **kwargs):
-        if hasattr(self._c, "edit_message_text"):
-            return await self._c.edit_message_text(chat_id, message_id, text, **kwargs)
-        return await self._c.edit_message(chat_id, message_id, text, **kwargs)
+        return await self._message_op("edit",
+            chat_id=int(chat_id), message_id=int(message_id), text=text,
+            parse_mode=kwargs.get("parse_mode") or "plain",
+        )
 
     async def send_reaction(self, chat_id: int, message_id: int, emoji: Any):
-        if hasattr(self._c, "send_reaction"):
-            return await self._c.send_reaction(chat_id, message_id, emoji)
-        return None
+        raise RuntimeError("TelePilot 0.97.0 MessageOps 暂不支持发送表情反应，已拒绝直连客户端")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._c, name)
 
 
 class _CompatMessage:
-    def __init__(self, event: Any, text: str, args: list[str]) -> None:
+    def __init__(self, runtime: _CompatRuntime, event: Any, text: str, args: list[str]) -> None:
+        self._runtime = runtime
         self._e = event
         self.text = text
         self.caption = getattr(event, "caption", None)
@@ -278,33 +295,27 @@ class _CompatMessage:
         return getattr(self._e, "reactions", None)
 
     async def edit(self, text: str, **kwargs):
-        if hasattr(self._e, "edit"):
-            return await self._e.edit(text, **kwargs)
-        if hasattr(self._e, "reply"):
-            return await self._e.reply(text, **kwargs)
-        return None
+        return await self._runtime.ctx.messages.edit(
+            chat_id=int(getattr(self._e, "chat_id", 0) or 0), message_id=int(self.id or 0),
+            text=text, parse_mode=kwargs.get("parse_mode") or "plain",
+        )
 
     async def delete(self):
-        if hasattr(self._e, "delete"):
-            return await self._e.delete()
-        return None
+        return await self._runtime.ctx.messages.delete(
+            chat_id=int(getattr(self._e, "chat_id", 0) or 0), message_id=int(self.id or 0),
+        )
 
     async def reply(self, text: str, **kwargs):
-        if hasattr(self._e, "reply"):
-            return await self._e.reply(text, **kwargs)
-        return await self.edit(text, **kwargs)
+        return await self._runtime.ctx.messages.send(
+            chat_id=int(getattr(self._e, "chat_id", 0) or 0), text=text,
+            parse_mode=kwargs.get("parse_mode") or "plain", reply_to_message_id=int(self.id or 0) or None,
+        )
 
     async def reply_sticker(self, sticker: Any, **kwargs):
-        if hasattr(self._e, "reply_sticker"):
-            return await self._e.reply_sticker(sticker, **kwargs)
-        if hasattr(self._e, "reply"):
-            return await self._e.reply(f"[sticker] {sticker}", **kwargs)
-        return None
+        raise RuntimeError("TelePilot 0.97.0 MessageOps 不支持 sticker 发送，已拒绝直连客户端")
 
     async def click(self, row: int, col: int):
-        if hasattr(self._e, "click"):
-            return await self._e.click(row, col)
-        return None
+        raise RuntimeError("未声明第三方 Bot 按钮契约，已拒绝直连客户端点击")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._e, name)
@@ -325,6 +336,7 @@ class JpmaiByRBQPlugin(Plugin):
 
     async def on_startup(self, ctx: PluginContext) -> None:
         legacy_main.configure_data_dir(ctx.data_dir, ctx.account_id)
+        legacy_main.configure_http(ctx.http)
         RUNTIME.ctx = ctx
         RUNTIME.client = ctx.client
         cmds = {spec.command for spec in RUNTIME.listeners if spec.command}

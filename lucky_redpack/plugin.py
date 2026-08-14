@@ -24,6 +24,10 @@ from pathlib import Path
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+try:
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover - isolated unit-test stubs
+    event_from_interaction_payload = None  # type: ignore[assignment]
 
 try:
     import fcntl
@@ -68,7 +72,7 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.10"
+PLUGIN_VERSION = "1.4.11"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
 DEFAULT_AMOUNT = 88888
@@ -1445,23 +1449,32 @@ class LuckyRedpackPlugin(Plugin):
 
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
         """Event Bus 主入口，0.33+ 运行态优先从这里处理命令和领取。"""
-        event_type = _payload_event_type(payload)
+        event = event_from_interaction_payload(payload) if event_from_interaction_payload is not None else None
+        # 部分隔离单测会安装精简 events 桩；生产解析器始终提供完整标准对象。
+        if event is not None and not all(hasattr(event, name) for name in ("message", "sender", "actor")):
+            event = None
+        event_type = event.type if event is not None else _payload_event_type(payload)
         if _is_command_event_type(event_type):
             return await self._handle_command_event(ctx, payload)
         if event_type != "message":
             return []
-        text = _payload_message_text(payload)
+        text = event.message.text.strip() if event is not None else _payload_message_text(payload)
         if not text or text.startswith((",", "/", "，")):
             return []
-        chat_id = _payload_chat_id(payload)
+        chat_id = (event.message.chat_id or 0) if event is not None else _payload_chat_id(payload)
         if not chat_id:
             return []
         if not self._chat_allowed(chat_id):
             return []
         if not self._is_chat_active(chat_id):
             return []
-        sender_id = _payload_sender_id(payload)
-        sender_name = _payload_sender_name(payload, sender_id)
+        sender_id = (event.actor.user_id or event.sender.user_id or 0) if event is not None else _payload_sender_id(payload)
+        sender_name = (
+            event.actor.display_name or event.sender.display_name or str(sender_id)
+            if event is not None
+            else _payload_sender_name(payload, sender_id)
+        )
+        claim_message_id = event.message.message_id if event is not None else _payload_message_id(payload)
         actions, claimed_pack, finished = await self._claim_password(
             ctx,
             text=text,
@@ -1469,7 +1482,7 @@ class LuckyRedpackPlugin(Plugin):
             sender_id=sender_id,
             sender_name=sender_name,
             sender_is_bot=_payload_actor_is_bot(payload),
-            claim_message_id=_payload_message_id(payload),
+            claim_message_id=claim_message_id,
         )
         if actions and claimed_pack is not None:
             self._track_task(
@@ -1479,7 +1492,7 @@ class LuckyRedpackPlugin(Plugin):
                         claimed_pack,
                         finished=finished,
                         sender_id=sender_id,
-                        claim_message_id=_payload_message_id(payload),
+                        claim_message_id=claim_message_id,
                         fallback_name=sender_name,
                         payload=payload,
                     )
@@ -1590,8 +1603,8 @@ class LuckyRedpackPlugin(Plugin):
         validation_error = self._validate_amount_count(amount, count)
         if validation_error:
             return reply_action(validation_error)
-        if ctx.client is None:
-            return reply_action("UserBot 客户端不可用，无法发送红包。")
+        if getattr(ctx, "messages", None) is None:
+            return reply_action("TelePilot MessageOps 不可用，无法发送红包。")
 
         creator_id = _payload_sender_id(payload)
         now = time.time()
@@ -1635,7 +1648,7 @@ class LuckyRedpackPlugin(Plugin):
                 await ctx.log("error", f"[lucky_redpack] 图片财富密码生成失败：{exc}")
             return reply_action(f"图片财富密码生成失败：{exc}")
 
-        sent_message_id = _message_id_from_event(sent) or command_message_id
+        sent_message_id = _message_id_from_event(sent)
         pack.message_id = sent_message_id
         await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
@@ -1655,16 +1668,16 @@ class LuckyRedpackPlugin(Plugin):
         if not chat_id:
             return
         if not self._chat_allowed(chat_id):
-            await self._reply(event, self._chat_not_allowed_text())
+            await self._reply(ctx, event, self._chat_not_allowed_text())
             return
 
         tokens = _split_args(args)
         action = tokens[0].casefold() if tokens else ""
         if action in {"help", "帮助"}:
-            await self._reply(event, self._help_text())
+            await self._reply(ctx, event, self._help_text())
             return
         if action in {"active", "状态"}:
-            await self._reply(event, await self._active_text(ctx, chat_id), parse_mode="html")
+            await self._reply(ctx, event, await self._active_text(ctx, chat_id), parse_mode="html")
             return
         if action in {"list", "列表"}:
             text = await self._active_text(ctx, chat_id)
@@ -1675,7 +1688,7 @@ class LuckyRedpackPlugin(Plugin):
                 text=text,
                 delete_after=LIST_DELETE_DELAY_SECONDS,
             ):
-                await self._reply(event, text, parse_mode="html")
+                await self._reply(ctx, event, text, parse_mode="html")
             return
         if action in {"off", "关闭"}:
             pack_code = tokens[1] if len(tokens) >= 2 else ""
@@ -1688,7 +1701,7 @@ class LuckyRedpackPlugin(Plugin):
                     text=text,
                     delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
                 ):
-                    await self._reply(event, text)
+                    await self._reply(ctx, event, text)
                 return
             async with self._get_lock(chat_id):
                 with self._state_file_lock(ctx.account_id, chat_id):
@@ -1703,7 +1716,7 @@ class LuckyRedpackPlugin(Plugin):
                             text=text,
                             delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
                         ):
-                            await self._reply(event, text, parse_mode="html")
+                            await self._reply(ctx, event, text, parse_mode="html")
                         return
                     packs = [item for item in packs if item is not pack]
                     await self._save_active_packs(ctx, chat_id, packs)
@@ -1717,7 +1730,7 @@ class LuckyRedpackPlugin(Plugin):
                 text=text,
                 delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
             ):
-                await self._reply(event, text, parse_mode="html")
+                await self._reply(ctx, event, text, parse_mode="html")
             return
         if action in {"clear", "清空"}:
             async with self._get_lock(chat_id):
@@ -1735,7 +1748,7 @@ class LuckyRedpackPlugin(Plugin):
                 text=text,
                 delete_after=COMMAND_RESULT_DELETE_DELAY_SECONDS,
             ):
-                await self._reply(event, text)
+                await self._reply(ctx, event, text)
             return
 
         image_mode = self._image_password_enabled
@@ -1749,14 +1762,14 @@ class LuckyRedpackPlugin(Plugin):
 
         keyword, amount, count, error = parse_create_args(create_args, self._default_amount, self._default_count)
         if error:
-            await self._reply(event, f"{error}\n{self._usage_example()}")
+            await self._reply(ctx, event, f"{error}\n{self._usage_example()}")
             return
 
         amount = _clamp_int(amount, self._default_amount, 1, MAX_AMOUNT)
         count = _clamp_int(count, self._default_count, 1, MAX_COUNT)
         validation_error = self._validate_amount_count(amount, count)
         if validation_error:
-            await self._reply(event, validation_error)
+            await self._reply(ctx, event, validation_error)
             return
 
         creator_id = _sender_id_from_event(event)
@@ -1800,9 +1813,9 @@ class LuckyRedpackPlugin(Plugin):
             await self._remove_pack_by_code(ctx, chat_id, pack.pack_code)
             if ctx.log:
                 await ctx.log("error", f"[lucky_redpack] 图片财富密码生成失败：{exc}")
-            await self._reply(event, f"图片财富密码生成失败：{exc}")
+            await self._reply(ctx, event, f"图片财富密码生成失败：{exc}")
             return
-        sent_message_id = _message_id_from_event(sent) or command_message_id
+        sent_message_id = _message_id_from_event(sent)
         pack.message_id = sent_message_id
         await self._persist_created_message_id(ctx, chat_id, pack.pack_code, sent_message_id)
         self._track_task(asyncio.create_task(self._auto_expire(chat_id, ctx, pack.created_at)))
@@ -1810,7 +1823,7 @@ class LuckyRedpackPlugin(Plugin):
             await self._delete_event(ctx, event)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
-        if ctx.client is None:
+        if getattr(ctx, "messages", None) is None:
             return
         text = _event_text(event)
         if not text or text.startswith((",", "/", "，")):
@@ -2009,22 +2022,25 @@ class LuckyRedpackPlugin(Plugin):
         )
 
     async def _apply_legacy_actions(self, ctx: PluginContext, chat_id: int, actions: list[dict[str, Any]]) -> None:
-        if ctx.client is None:
-            return
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台执行红包动作")
         for action in actions:
             action_type = action.get("type")
             if action_type == "send_message":
-                kwargs: dict[str, Any] = {}
-                if action.get("reply_to_message_id"):
-                    kwargs["reply_to"] = action["reply_to_message_id"]
-                if action.get("parse_mode"):
-                    kwargs["parse_mode"] = action["parse_mode"]
-                await ctx.client.send_message(chat_id, str(action.get("text") or ""), **kwargs)
+                await messages.send(
+                    chat_id=chat_id,
+                    text=str(action.get("text") or ""),
+                    parse_mode=str(action.get("parse_mode") or "plain"),
+                    reply_to_message_id=action.get("reply_to_message_id"),
+                )
             elif action_type == "payout":
-                kwargs: dict[str, Any] = {}
-                if action.get("reply_to_message_id"):
-                    kwargs["reply_to"] = action["reply_to_message_id"]
-                await ctx.client.send_message(chat_id, str(action.get("text") or f"+{action.get('amount')}"), **kwargs)
+                await messages.payout(
+                    chat_id=chat_id,
+                    amount=int(action.get("amount") or 0),
+                    text=str(action.get("text") or f"+{action.get('amount')}"),
+                    reply_to_message_id=action.get("reply_to_message_id"),
+                )
             elif action_type == "delete_message" and action.get("message_id"):
                 await self._delete_message(ctx, chat_id, int(action["message_id"]))
 
@@ -2062,14 +2078,14 @@ class LuckyRedpackPlugin(Plugin):
         lines.append(f"关闭红包：{prefix}{_html(self._command)} off &lt;红包代码&gt;")
         return "\n".join(lines)
 
-    async def _reply(self, event: Any, text: str, **kwargs: Any) -> Any:
-        reply = getattr(event, "reply", None)
-        if callable(reply):
-            return await reply(text, **kwargs)
-        respond = getattr(event, "respond", None)
-        if callable(respond):
-            return await respond(text, **kwargs)
-        return None
+    async def _reply(self, ctx: PluginContext, event: Any, text: str, **kwargs: Any) -> Any:
+        parse_mode = str(kwargs.get("parse_mode") or "plain")
+        return await ctx.messages.send(
+            chat_id=_chat_id_from_event(event),
+            text=text,
+            parse_mode=parse_mode,
+            reply_to_message_id=_message_id_from_event(event),
+        )
 
     async def _sender(self, event: Any) -> Any:
         getter = getattr(event, "get_sender", None)
@@ -2112,7 +2128,7 @@ class LuckyRedpackPlugin(Plugin):
             return None
 
     async def _resend_pack_message(self, ctx: PluginContext, pack: LuckyRedpack) -> None:
-        if ctx.client is None:
+        if getattr(ctx, "messages", None) is None:
             return
         if pack.message_id is not None:
             await self._delete_message(ctx, pack.chat_id, pack.message_id)
@@ -2131,28 +2147,41 @@ class LuckyRedpackPlugin(Plugin):
         reply_to: int | None = None,
         edit_message_id: int | None = None,
     ) -> Any:
-        if ctx.client is None:
-            return None
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台发送红包消息")
         caption = render_redpack_message(pack)
+        save_key = f"lucky_redpack:{ctx.account_id}:{pack.chat_id}:{pack.pack_code}"
         if not pack.image_mode:
             if edit_message_id:
-                edit_message = getattr(ctx.client, "edit_message", None)
-                if callable(edit_message):
-                    result = await _maybe_await(edit_message(pack.chat_id, edit_message_id, caption, parse_mode="html"))
-                    return result
-            return await ctx.client.send_message(pack.chat_id, caption, parse_mode="html", reply_to=reply_to)
+                return await messages.edit(
+                    chat_id=pack.chat_id,
+                    message_id=edit_message_id,
+                    text=caption,
+                    parse_mode="html",
+                )
+            return await messages.send(
+                chat_id=pack.chat_id,
+                text=caption,
+                parse_mode="html",
+                reply_to_message_id=reply_to,
+                save_message_id_key=save_key,
+                replace_saved_message_id_key=save_key,
+            )
 
         image_path = build_password_image(pack.current_password)
         if image_path is None:
             raise RuntimeError(get_image_error())
         try:
-            send_file = getattr(ctx.client, "send_file", None)
-            if callable(send_file):
-                return await send_file(pack.chat_id, str(image_path), caption=caption, parse_mode="html", reply_to=reply_to, force_document=False)
-            send_photo = getattr(ctx.client, "send_photo", None)
-            if callable(send_photo):
-                return await send_photo(pack.chat_id, str(image_path), caption=caption, parse_mode="html", reply_to=reply_to)
-            raise RuntimeError("当前客户端没有 send_file/send_photo 能力")
+            return await messages.send_photo(
+                chat_id=pack.chat_id,
+                photo=image_path.read_bytes(),
+                filename=image_path.name,
+                caption=caption,
+                parse_mode="html",
+                reply_to_message_id=reply_to,
+                save_message_id_key=save_key,
+            )
         finally:
             try:
                 image_path.unlink(missing_ok=True)
@@ -2161,11 +2190,13 @@ class LuckyRedpackPlugin(Plugin):
                 pass
 
     async def _send_temporary_settlement(self, ctx: PluginContext, pack: LuckyRedpack, *, expired: bool = False) -> None:
-        if ctx.client is None:
-            return
         sent_message_id: int | None = None
         try:
-            sent = await ctx.client.send_message(pack.chat_id, render_settlement(pack, expired=expired), parse_mode="html")
+            sent = await ctx.messages.send(
+                chat_id=pack.chat_id,
+                text=render_settlement(pack, expired=expired),
+                parse_mode="html",
+            )
             sent_message_id = _message_id_from_event(sent)
         except Exception as exc:
             if ctx.log:
@@ -2183,13 +2214,10 @@ class LuckyRedpackPlugin(Plugin):
         text: str,
         delete_after: int,
     ) -> bool:
-        if ctx.client is None or not message_id:
-            return False
-        edit_message = getattr(ctx.client, "edit_message", None)
-        if not callable(edit_message):
+        if getattr(ctx, "messages", None) is None or not message_id:
             return False
         try:
-            await _maybe_await(edit_message(chat_id, message_id, text, parse_mode="html"))
+            await ctx.messages.edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode="html")
         except Exception as exc:
             if ctx.log:
                 await ctx.log("warn", f"[lucky_redpack] 编辑命令结果失败：{type(exc).__name__}: {exc}")
@@ -2218,47 +2246,23 @@ class LuckyRedpackPlugin(Plugin):
         unique_ids = sorted({int(item) for item in message_ids if item})
         if not unique_ids:
             return
-        if ctx.client is None:
-            return
-        delete_messages = getattr(ctx.client, "delete_messages", None)
-        if not callable(delete_messages):
-            return
         try:
-            await _maybe_await(delete_messages(chat_id, unique_ids))
+            for message_id in unique_ids:
+                await ctx.messages.delete(chat_id=chat_id, message_id=message_id)
         except Exception as exc:
             if ctx.log:
                 await ctx.log("warn", f"[lucky_redpack] 自动删除消息失败：{type(exc).__name__}: {exc}")
 
     async def _delete_event(self, ctx: PluginContext, event: Any) -> None:
-        delete = getattr(event, "delete", None) or getattr(getattr(event, "message", None), "delete", None)
-        if callable(delete):
-            try:
-                await delete()
-                return
-            except Exception as exc:
-                if ctx.log:
-                    await ctx.log("warn", f"[lucky_redpack] event.delete 失败：{type(exc).__name__}: {exc}")
-
         chat_id = _chat_id_from_event(event)
         message_id = _message_id_from_event(event)
-        if not chat_id or not message_id or ctx.client is None:
+        if not chat_id or not message_id:
             return
-
-        delete_messages = getattr(ctx.client, "delete_messages", None)
-        if callable(delete_messages):
-            try:
-                await _maybe_await(delete_messages(chat_id, [int(message_id)]))
-            except Exception:
-                pass
+        await self._delete_message(ctx, chat_id, int(message_id))
 
     async def _delete_message(self, ctx: PluginContext, chat_id: int, message_id: int) -> None:
-        if ctx.client is None:
-            return
-        delete_messages = getattr(ctx.client, "delete_messages", None)
-        if not callable(delete_messages):
-            return
         try:
-            await _maybe_await(delete_messages(chat_id, [int(message_id)]))
+            await ctx.messages.delete(chat_id=chat_id, message_id=int(message_id))
         except Exception as exc:
             if ctx.log:
                 await ctx.log("warn", f"[lucky_redpack] 删除旧红包消息失败：{type(exc).__name__}: {exc}")
@@ -2273,7 +2277,7 @@ class LuckyRedpackPlugin(Plugin):
                     return
                 packs = [item for item in packs if item.pack_code != pack.pack_code]
                 await self._save_active_packs(ctx, chat_id, packs)
-        if ctx.client is not None:
+        if getattr(ctx, "messages", None) is not None:
             await self._send_temporary_settlement(ctx, pack, expired=True)
 
 

@@ -336,6 +336,10 @@ class FakeMessages:
     async def apply(self, actions, *, entry_key=None):
         self.applied.append({"entry_key": entry_key, "actions": list(actions)})
 
+    async def send(self, **kwargs):
+        self.applied.append({"entry_key": None, "actions": [{"type": "send_message", **kwargs}]})
+        return kwargs
+
     async def read_saved_message_id(self, key: str) -> int | None:
         return self.saved.get(key)
 
@@ -495,13 +499,15 @@ class TenHalfInteractionTest(unittest.TestCase):
         async def scenario() -> None:
             plugin = plugin_module.TenHalfPlugin()
             event = FakeCommandEvent()
+            messages = FakeMessages()
 
-            await plugin._cmd(FakeCommandClient(), event, [], 1, PluginContext())
+            await plugin._cmd(FakeCommandClient(), event, [], 1, PluginContext(messages=messages))
 
-            self.assertEqual(len(event.replies), 1)
-            self.assertIn("只通过交互 Bot 关键词/规则开局", event.replies[0]["text"])
-            self.assertIn("发送「入局」可直接加入", event.replies[0]["text"])
-            self.assertIn("普通消息由交互 Bot 通道处理", event.replies[0]["text"])
+            self.assertEqual(len(messages.applied), 1)
+            text = messages.applied[0]["actions"][0]["text"]
+            self.assertIn("只通过交互 Bot 关键词/规则开局", text)
+            self.assertIn("发送「入局」可直接加入", text)
+            self.assertIn("普通消息由交互 Bot 通道处理", text)
             self.assertEqual(plugin._games, {})
 
         asyncio.run(scenario())

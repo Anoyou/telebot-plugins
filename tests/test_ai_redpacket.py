@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.41")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.41")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.42")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.42")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.73.0-beta.15")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)

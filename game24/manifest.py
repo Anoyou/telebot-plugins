@@ -12,7 +12,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="game24",
     display_name="24点游戏",
-    version="1.1.13",
+    version="1.1.14",
     min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="随机生成 24 点题目，群内竞速答题，第一名获得奖金",

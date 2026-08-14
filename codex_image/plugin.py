@@ -134,12 +134,71 @@ def _is_template_truthy(value: Any) -> bool:
     return bool(value)
 
 
-async def _edit_html(event: Any, text: str) -> None:
+class _PluginHTTPResponseAdapter:
+    """把平台缓冲响应适配为本插件原有的 SSE 读取接口。"""
+
+    def __init__(self, response: Any) -> None:
+        self._response = response
+        self.status_code = response.status_code
+        self.headers = response.headers
+        self.text = response.text
+
+    async def aread(self) -> bytes:
+        return bytes(self._response.content)
+
+    async def aiter_text(self):
+        yield self.text
+
+    def json(self) -> Any:
+        return self._response.json()
+
+
+class _PluginHTTPStreamContext:
+    def __init__(self, facade: Any, method: str, url: str, kwargs: dict[str, Any]) -> None:
+        self._facade = facade
+        self._method = method
+        self._url = url
+        self._kwargs = kwargs
+
+    async def __aenter__(self) -> _PluginHTTPResponseAdapter:
+        request = self._facade.post if self._method.upper() == "POST" else self._facade.get
+        return _PluginHTTPResponseAdapter(await request(self._url, **self._kwargs))
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        return None
+
+
+class _PluginHTTPClientAdapter:
+    def __init__(self, facade: Any) -> None:
+        if facade is None:
+            raise RuntimeError("平台 ctx.http 不可用，已拒绝外部请求")
+        self._facade = facade
+
+    async def __aenter__(self) -> _PluginHTTPClientAdapter:
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        return None
+
+    def stream(self, method: str, url: str, **kwargs: Any) -> _PluginHTTPStreamContext:
+        return _PluginHTTPStreamContext(self._facade, method, url, dict(kwargs))
+
+    async def get(self, url: str, **kwargs: Any) -> _PluginHTTPResponseAdapter:
+        return _PluginHTTPResponseAdapter(await self._facade.get(url, **kwargs))
+
+
+async def _edit_html(ctx: PluginContext, event: Any, text: str) -> None:
     """编辑消息并按 HTML 解析；模板写坏时退回纯文本。"""
+    messages = getattr(ctx, "messages", None)
+    edit = getattr(messages, "edit", None)
+    if not callable(edit):
+        raise RuntimeError("平台 MessageOps 不可用，已拒绝编辑消息")
+    chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+    message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
     try:
-        await event.edit(text, parse_mode="html")
+        await edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode="html")
     except Exception:
-        await event.edit(_strip_html_tags(text))
+        await edit(chat_id=chat_id, message_id=message_id, text=_strip_html_tags(text), parse_mode="plain")
 
 
 def _safe_error_text(text: str, max_len: int = 500) -> str:
@@ -506,13 +565,13 @@ def _normalize_image_format(value: Any) -> str:
 
 
 def _parse_generation_args(
-    args: list[str], 
-    ctx: PluginContext, 
+    args: list[str],
+    ctx: PluginContext,
     reference_size: str | None = None,
     reference_ratio: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """解析命令级覆盖项，返回清理后的 prompt 和图片选项。
-    
+
     Args:
         args: 命令参数列表
         ctx: 插件上下文
@@ -703,6 +762,7 @@ async def _call_codex_image(
     image_format: str = DEFAULT_IMAGE_FORMAT,
     poll_interval: int = DEFAULT_STATUS_INTERVAL,
     debug_log: Any | None = None,
+    http: Any | None = None,
 ) -> dict[str, str | None]:
     """调用 Codex 图片生成 API。
 
@@ -773,7 +833,7 @@ async def _call_codex_image(
     for stream_attempt in range(2):
         remaining_timeout = max(1.0, deadline - time.monotonic())
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=remaining_timeout)) as client:
+            async with _PluginHTTPClientAdapter(http) as client:
                 async with client.stream("POST", CODEX_URL, json=payload, headers=headers) as resp:
                     if resp.status_code != 200:
                         body = await resp.aread()
@@ -903,7 +963,7 @@ async def _call_codex_image(
         if update_status:
             await update_status(f"⏳ 正在等待 Codex 返回结果...（第 {attempt} 次检查）")
 
-        polled = await _poll_codex_response(client_ref=None, token=token, response_id=result["response_id"], deadline=deadline)
+        polled = await _poll_codex_response(client_ref=http, token=token, response_id=result["response_id"], deadline=deadline)
         if polled is None:
             # HTTP 请求本身就失败了，展示给用户
             if update_status:
@@ -966,7 +1026,7 @@ async def _poll_codex_response(
         "Accept": "application/json",
     }
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout=remaining_timeout)) as client:
+        async with _PluginHTTPClientAdapter(client_ref) as client:
             resp = await client.get(f"{CODEX_URL}/{response_id}", headers=headers)
 
             # HTTP 错误 → 返回 error 字段而不是静默吞掉
@@ -1083,7 +1143,7 @@ class CodexImagePlugin(Plugin):
             await self._dispatch(ctx, args, event)
         except Exception as exc:
             try:
-                await _edit_html(event, f"❌ 操作失败: {_html_escape(_safe_error_text(str(exc)))}")
+                await _edit_html(ctx, event, f"❌ 操作失败: {_html_escape(_safe_error_text(str(exc)))}")
             except Exception:
                 pass
 
@@ -1130,7 +1190,7 @@ class CodexImagePlugin(Plugin):
                     else:
                         reference_ratio = f"{w}:{h}"  # 使用原始比例
             except Exception as exc:
-                await _edit_html(event, f"❌ 参考图下载失败：{_html_escape(_safe_error_text(str(exc)))}")
+                await _edit_html(ctx, event, f"❌ 参考图下载失败：{_html_escape(_safe_error_text(str(exc)))}")
                 return
 
         prompt, image_opts = _parse_generation_args(args, ctx, reference_size, reference_ratio)
@@ -1138,7 +1198,7 @@ class CodexImagePlugin(Plugin):
         usage_cmd = f"{_html_escape(current_command_prefix())}{_html_escape(cmd)}"
         if not prompt:
             await _edit_html(
-                event,
+                ctx, event,
                 f"❌ 请输入提示词，例如：<code>{usage_cmd} 一只戴墨镜的柴犬坐在跑车里</code>\n"
                 f"• 指定比例：<code>{usage_cmd} --比例 4:3 云海里的城市</code>\n"
                 f"• 指定尺寸/格式：<code>{usage_cmd} --size 1536x1024 --format jpeg 海边日落</code>\n"
@@ -1162,14 +1222,14 @@ class CodexImagePlugin(Plugin):
 
         if not token_value:
             await _edit_html(
-                event,
+                ctx, event,
                 f"🔐 当前 Token：{_mask_token(current_token)}\n"
                 f"• 设置方式：<code>{usage_cmd} token 你的codex access token（通常在 .codex/auth.json）</code>"
             )
             return
 
         await _update_account_config(ctx, "access_token", token_value)
-        await event.edit("✅ Codex Access Token 已在本次运行时生效。请到插件配置页同步保存，重载后才会长期保留。")
+        await _edit_html(ctx, event, "✅ Codex Access Token 已在本次运行时生效。请到插件配置页同步保存，重载后才会长期保留。")
 
     # ── 图片生成 ──────────────────────────────────────
 
@@ -1188,7 +1248,7 @@ class CodexImagePlugin(Plugin):
         usage_cmd = f"{_html_escape(current_command_prefix())}{_html_escape(cmd)}"
         if not token:
             await _edit_html(
-                event,
+                ctx, event,
                 f"❌ 缺少鉴权，请先使用 <code>{usage_cmd} token 你的codex access token（通常在 .codex/auth.json）</code> 保存 Token"
             )
             return
@@ -1204,12 +1264,12 @@ class CodexImagePlugin(Plugin):
         reasoning_effort = str(_get_config_value(ctx, "reasoning_effort", DEFAULT_REASONING_EFFORT) or DEFAULT_REASONING_EFFORT)
         message_template = str(_get_config_value(ctx, "message_template", DEFAULT_MESSAGE_TEMPLATE) or DEFAULT_MESSAGE_TEMPLATE)
         image_opts = image_opts or {}
-        
+
         # 获取参考图尺寸信息（如果有的话）
         ref_size: str | None = None
         if reference_image and reference_image.get("width") and reference_image.get("height"):
             ref_size = f"{reference_image['width']}x{reference_image['height']}"
-        
+
         image_size = _normalize_size(image_opts.get("image_size") or _get_config_value(ctx, "image_size", DEFAULT_IMAGE_SIZE), ref_size)
         aspect_ratio = _normalize_aspect_ratio(image_opts.get("aspect_ratio") or _get_config_value(ctx, "aspect_ratio", DEFAULT_ASPECT_RATIO), None)
         image_format = _normalize_image_format(image_opts.get("image_format") or _get_config_value(ctx, "image_format", DEFAULT_IMAGE_FORMAT))
@@ -1247,7 +1307,7 @@ class CodexImagePlugin(Plugin):
                 limit=limit,
             )
 
-        await _edit_html(event, render_status(current_phase, "0秒"))
+        await _edit_html(ctx, event, render_status(current_phase, "0秒"))
 
         async def update_status(phase: str) -> None:
             nonlocal last_status_at, current_phase
@@ -1258,7 +1318,7 @@ class CodexImagePlugin(Plugin):
             last_status_at = now
             elapsed = _format_duration((now - started_at) * 1000)
             try:
-                await _edit_html(event, render_status(phase, elapsed))
+                await _edit_html(ctx, event, render_status(phase, elapsed))
             except Exception:
                 pass
 
@@ -1309,6 +1369,7 @@ class CodexImagePlugin(Plugin):
                 image_format=image_format,
                 poll_interval=status_interval,
                 debug_log=ctx.log,
+                http=ctx.http,
             )
         except CodexApiError as exc:
             heartbeat_stop = True
@@ -1322,7 +1383,7 @@ class CodexImagePlugin(Plugin):
                     elapsed=elapsed,
                 )
             await _edit_html(
-                event,
+                ctx, event,
                 f"{_html_escape(_with_error_prefix(_humanize_codex_error(exc.status_code, exc.detail, content_type=exc.content_type)))}\n⏱️ 耗时：{elapsed}"
             )
             return
@@ -1332,7 +1393,7 @@ class CodexImagePlugin(Plugin):
             elapsed = _format_duration((time.monotonic() - started_at) * 1000)
             if ctx.log:
                 await ctx.log("warn", "[codex_image] timeout", elapsed=elapsed)
-            await _edit_html(event, f"{_html_escape(_with_error_prefix(_safe_error_text(str(exc))))}\n⏱️ 耗时：{elapsed}")
+            await _edit_html(ctx, event, f"{_html_escape(_with_error_prefix(_safe_error_text(str(exc))))}\n⏱️ 耗时：{elapsed}")
             return
         except Exception as exc:
             heartbeat_stop = True
@@ -1347,7 +1408,7 @@ class CodexImagePlugin(Plugin):
                     detail=safe_error,
                     elapsed=elapsed,
                 )
-            await _edit_html(event, f"{_html_escape(_with_error_prefix(_humanize_codex_exception(exc)))}\n⏱️ 耗时：{elapsed}")
+            await _edit_html(ctx, event, f"{_html_escape(_with_error_prefix(_humanize_codex_exception(exc)))}\n⏱️ 耗时：{elapsed}")
             return
 
         heartbeat_stop = True
@@ -1371,7 +1432,7 @@ class CodexImagePlugin(Plugin):
                     extracted_prompt=returned_prompt or "",
                     fallback_prompt=fallback_prompt,
                 )
-            await _edit_html(event, render_status("Codex 返回了文本提示词，正在用兼容模型重试...", elapsed))
+            await _edit_html(ctx, event, render_status("Codex 返回了文本提示词，正在用兼容模型重试...", elapsed))
             try:
                 result = await _call_codex_image(
                     prompt=_effective_prompt(
@@ -1393,6 +1454,7 @@ class CodexImagePlugin(Plugin):
                     image_format=image_format,
                     poll_interval=status_interval,
                     debug_log=ctx.log,
+                    http=ctx.http,
                 )
                 elapsed = _format_duration((time.monotonic() - started_at) * 1000)
             except Exception as exc:
@@ -1418,7 +1480,7 @@ class CodexImagePlugin(Plugin):
                     text_sample=str(result.get("debug_text_sample") or ""),
                     elapsed=elapsed,
                 )
-            await _edit_html(event, f"❌ 未收到生成图片{status_text}\n⏱️ 耗时：{elapsed}")
+            await _edit_html(ctx, event, f"❌ 未收到生成图片{status_text}\n⏱️ 耗时：{elapsed}")
             return
 
         # 发送图片
@@ -1432,24 +1494,22 @@ class CodexImagePlugin(Plugin):
                 limit=1024,
             )
 
-            client = ctx.client
-            if not client:
-                await _edit_html(event, "❌ 客户端未初始化")
+            messages = getattr(ctx, "messages", None)
+            if messages is None:
+                await _edit_html(ctx, event, "❌ 平台 MessageOps 未初始化")
                 return
             ext = _image_ext_from_bytes(image_bytes, image_format)
             file_name = f"codex_image_{int(time.time())}{ext}"
             send_reply_to = reply_to_id or getattr(event, "id", None)
 
             try:
-                image_file = io.BytesIO(image_bytes)
-                image_file.name = file_name
-                await client.send_file(
-                    event.chat_id,
-                    image_file,
+                await messages.send_photo(
+                    chat_id=int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id),
+                    photo=image_bytes,
+                    filename=file_name,
                     caption=caption,
                     parse_mode="html",
-                    reply_to=send_reply_to,
-                    force_document=False,
+                    reply_to_message_id=send_reply_to,
                 )
             except Exception as send_exc:
                 if ctx.log:
@@ -1459,24 +1519,26 @@ class CodexImagePlugin(Plugin):
                         error=type(send_exc).__name__,
                         detail=_safe_error_text(str(send_exc))[:300],
                     )
-                image_file = io.BytesIO(image_bytes)
-                image_file.name = file_name
-                await client.send_file(
-                    event.chat_id,
-                    image_file,
+                await messages.send_photo(
+                    chat_id=int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id),
+                    photo=image_bytes,
+                    filename=file_name,
                     caption=_strip_html_tags(caption)[:1024],
-                    reply_to=send_reply_to,
-                    force_document=False,
+                    parse_mode="plain",
+                    reply_to_message_id=send_reply_to,
                 )
 
             # 删除原命令消息
             if delete_command_message:
                 try:
-                    await event.delete()
+                    await messages.delete(
+                        chat_id=int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id),
+                        message_id=int(getattr(event, "id", 0) or 0),
+                    )
                 except Exception:
-                    await event.edit("✅ 图片生成完成")
+                    await _edit_html(ctx, event, "✅ 图片生成完成")
             else:
-                await event.edit("✅ 图片生成完成")
+                await _edit_html(ctx, event, "✅ 图片生成完成")
             if ctx.log:
                 await ctx.log(
                     "info",
@@ -1496,7 +1558,7 @@ class CodexImagePlugin(Plugin):
                     detail=error_msg[:500],
                     elapsed=elapsed,
                 )
-            await _edit_html(event, f"❌ 图片发送失败：{type(exc).__name__}: {_html_escape(error_msg)}")
+            await _edit_html(ctx, event, f"❌ 图片发送失败：{type(exc).__name__}: {_html_escape(error_msg)}")
 
     # ── 参考图下载 ────────────────────────────────────
 
@@ -1518,7 +1580,7 @@ class CodexImagePlugin(Plugin):
         mime_type = "image/png"
         width: int | None = None
         height: int | None = None
-        
+
         if hasattr(reply_msg, "media") and reply_msg.media:
             doc = getattr(reply_msg.media, "document", None)
             if doc:

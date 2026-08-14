@@ -9,6 +9,7 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from app.worker.command import current_command_prefix
@@ -256,6 +257,10 @@ class GuessNumberPlugin(Plugin):
             return [{"type": "end_session"}]
         return []
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        event = event_from_interaction_payload(payload)
+        return await self.on_interaction(ctx, str(event.trigger.get("entry_key") or "start_guess_number"), payload)
+
     async def _interaction_start(
         self,
         ctx: PluginContext,
@@ -406,6 +411,17 @@ class GuessNumberPlugin(Plugin):
             return [{"type": "send_message", "text": f"{hint} {limit_hint}", "reply_to_message_id": reply_to}]
 
     # ── 命令入口 ─────────────────────────────────────
+    async def _legacy_reply(self, ctx: PluginContext, event: Any, text: str, *, parse_mode: str = "html") -> Any:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id or 0)
+        save_key = f"guess_number:{ctx.account_id}:{chat_id}:{time.time_ns()}"
+        await messages.send(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_to_message_id=int(getattr(event, "id", 0) or 0) or None, save_message_id_key=save_key)
+        sent_id = await messages.read_saved_message_id(save_key)
+        await messages.delete_saved_message_id(save_key)
+        return SimpleNamespace(id=sent_id or 0)
+
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
     ) -> None:
@@ -426,7 +442,7 @@ class GuessNumberPlugin(Plugin):
         prize = self._parse_prize(args)
         if prize <= 0:
             prefix = current_command_prefix(fallback=",")
-            await event.reply(f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
+            await self._legacy_reply(ctx, event, f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
             return
 
         # 解析范围：默认 1-100，可用“指令 奖励 1 1000”自定义。
@@ -463,7 +479,7 @@ class GuessNumberPlugin(Plugin):
 
         limit_hint = f"（最多 {max_attempts} 次）" if max_attempts else ""
         prefix = current_command_prefix(fallback=",")
-        msg = await event.reply(
+        msg = await self._legacy_reply(ctx, event,
             f"<b>🔢 猜数字</b>\n\n"
             f"奖励：<b>+{prize}</b>\n"
             f"范围：{low} ~ {high}{limit_hint}\n"
@@ -527,7 +543,7 @@ class GuessNumberPlugin(Plugin):
         if gs.max_attempts and gs.attempts >= gs.max_attempts:
             gs.finished = True
             history_text = "\n".join(gs.history[-10:]) if gs.history else ""
-            await event.reply(
+            await self._legacy_reply(ctx, event,
                 f"<b>💀 次数用完了！</b>\n\n"
                 f"答案是 <b>{gs.target}</b>\n"
                 f"📊 用了 {gs.attempts} 次都没猜到\n\n"
@@ -539,7 +555,7 @@ class GuessNumberPlugin(Plugin):
 
         # 接着猜
         limit_hint = f"（{gs.attempts}/{gs.max_attempts}）" if gs.max_attempts else f"（第 {gs.attempts} 次）"
-        await event.reply(
+        await self._legacy_reply(ctx, event,
             f"{hint} {limit_hint}",
             parse_mode="html",
         )
@@ -554,30 +570,19 @@ class GuessNumberPlugin(Plugin):
             return 0
 
     async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
-        text = f"+{prize}"
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
+        await ctx.messages.payout(
+            chat_id=chat_id, amount=prize, text=f"+{prize}", reply_to_message_id=message_id
+        )
 
     async def _edit_game_message(self, ctx: PluginContext, chat_id: int, gs: GuessGame, suffix: str) -> None:
-        if not ctx.client or not gs.message_id:
+        if not gs.message_id:
             return
         limit_hint = f"（最多 {gs.max_attempts} 次）" if gs.max_attempts else ""
         try:
-            await ctx.client.edit_message(
-                chat_id,
-                gs.message_id,
-                f"<b>🔢 猜数字</b>\n\n奖励：<b>+{gs.prize}</b>\n范围：{gs.low} ~ {gs.high}{limit_hint}\n{suffix}",
+            await ctx.messages.edit(
+                chat_id=chat_id,
+                message_id=gs.message_id,
+                text=f"<b>🔢 猜数字</b>\n\n奖励：<b>+{gs.prize}</b>\n范围：{gs.low} ~ {gs.high}{limit_hint}\n{suffix}",
                 parse_mode="html",
             )
         except Exception as exc:

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 0.1.12 (2026-08-15)
+- 聊天回复与命令状态编辑统一改走 TelePilot MessageOps；保留 UserBot 消息入口用于群聊提及、回复实体和原消息存在性读取。
+
 ## 0.1.11 (2026-08-15)
 - 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
 

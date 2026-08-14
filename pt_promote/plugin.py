@@ -591,18 +591,24 @@ class _InteractionReplyEvent:
         self.outputs: list[tuple[str, dict[str, Any]]] = []
         self.success: bool = False
 
-    async def edit(self, text: str, **kwargs: Any) -> None:
+    async def capture(self, text: str, **kwargs: Any) -> None:
         self.outputs.append((str(text or ""), dict(kwargs or {})))
-
-    async def respond(self, text: str, **kwargs: Any) -> None:
-        await self.edit(text, **kwargs)
-
-    async def reply(self, text: str, **kwargs: Any) -> None:
-        await self.edit(text, **kwargs)
 
     @property
     def final_text(self) -> str:
         return self.outputs[-1][0] if self.outputs else ""
+
+
+async def _edit_result(ctx: PluginContext, event: Any, text: str, **kwargs: Any) -> None:
+    if isinstance(event, _InteractionReplyEvent):
+        await event.capture(text, **kwargs)
+        return
+    messages = getattr(ctx, "messages", None)
+    if messages is None:
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝编辑消息")
+    chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+    message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
+    await messages.edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode=kwargs.get("parse_mode", "html"))
 
 
 @register
@@ -627,6 +633,10 @@ class PTPromotePlugin(Plugin):
             "促销": self._handle_promote,
             "ptinfo": self._handle_info,
         }
+
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        return await self.on_interaction(ctx, str(trigger.get("entry_key") or "promote_torrent"), payload)
 
     async def on_interaction(
         self,
@@ -685,7 +695,7 @@ class PTPromotePlugin(Plugin):
         prefix = _command_prefix()
         command = str((ctx.config or {}).get("command") or "pt").strip() or "pt"
         if not args:
-            await event.edit(
+            await _edit_result(ctx, event,
                 _cfg_template(
                     ctx,
                     "promote_usage_template",
@@ -700,23 +710,23 @@ class PTPromotePlugin(Plugin):
         cookie = ctx.config.get("cookie", "")
 
         if not cookie:
-            await event.edit(_status_template(ctx, "❌", "请先配置 Cookie"))
+            await _edit_result(ctx, event, _status_template(ctx, "❌", "请先配置 Cookie"))
             return
 
         if ctx.http is None:
-            await event.edit(_status_template(ctx, "❌", "缺少 external_http 权限"))
+            await _edit_result(ctx, event, _status_template(ctx, "❌", "缺少 external_http 权限"))
             return
 
         guard = await self._claim_torrent_guard(ctx, torrent_id)
         if not guard["allowed"]:
-            await event.edit(str(guard["message"]))
+            await _edit_result(ctx, event, str(guard["message"]))
             return
 
         # 解析参数
         params = _parse_args(args[1:])
         params_desc = _format_params(params)
 
-        await event.edit(
+        await _edit_result(ctx, event,
             _status_template(
                 ctx,
                 "⏳",
@@ -729,7 +739,7 @@ class PTPromotePlugin(Plugin):
             # Step 1: 获取促销信息
             info_result = await self._get_promotion_info(ctx, site_url, cookie, torrent_id)
             if not info_result["success"]:
-                await event.edit(
+                await _edit_result(ctx, event,
                     _status_template(
                         ctx,
                         "❌",
@@ -746,7 +756,7 @@ class PTPromotePlugin(Plugin):
                 torrent_meta = {**fetched_meta, **{key: value for key, value in torrent_meta.items() if value}}
             if str(is_exists) == "1":
                 await self._mark_torrent_promoted(ctx, torrent_id)
-                await event.edit(
+                await _edit_result(ctx, event,
                     _status_template(
                         ctx,
                         "ℹ️",
@@ -757,7 +767,7 @@ class PTPromotePlugin(Plugin):
                 return
 
             # Step 2: 预计算消耗
-            await event.edit(
+            await _edit_result(ctx, event,
                 _cfg_template(
                     ctx,
                     "promote_ready_template",
@@ -767,7 +777,7 @@ class PTPromotePlugin(Plugin):
             )
             calc_result = await self._calculate_cost(ctx, site_url, cookie, torrent_id, params, is_exists)
             if not calc_result["success"]:
-                await event.edit(
+                await _edit_result(ctx, event,
                     _status_template(
                         ctx,
                         "❌",
@@ -781,7 +791,7 @@ class PTPromotePlugin(Plugin):
             expression = calc_result["expression"]
 
             # Step 3: 确认促销
-            await event.edit(
+            await _edit_result(ctx, event,
                 _cfg_template(
                     ctx,
                     "promote_confirming_template",
@@ -800,7 +810,7 @@ class PTPromotePlugin(Plugin):
                 await self._mark_torrent_promoted(ctx, torrent_id)
                 if isinstance(event, _InteractionReplyEvent):
                     event.success = True
-                await event.edit(
+                await _edit_result(ctx, event,
                     _cfg_template(
                         ctx,
                         "promote_success_template",
@@ -820,7 +830,7 @@ class PTPromotePlugin(Plugin):
                     parse_mode="html",
                 )
             else:
-                await event.edit(
+                await _edit_result(ctx, event,
                     _status_template(
                         ctx,
                         "❌",
@@ -830,7 +840,7 @@ class PTPromotePlugin(Plugin):
                 )
 
         except Exception as e:
-            await event.edit(
+            await _edit_result(ctx, event,
                 _status_template(
                     ctx,
                     "❌",
@@ -851,7 +861,7 @@ class PTPromotePlugin(Plugin):
     ) -> None:
         """查询种子促销历史。"""
         if not args:
-            await event.edit(
+            await _edit_result(ctx, event,
                 _cfg_template(
                     ctx,
                     "info_usage_template",
@@ -866,14 +876,14 @@ class PTPromotePlugin(Plugin):
         cookie = ctx.config.get("cookie", "")
 
         if not cookie:
-            await event.edit(_status_template(ctx, "❌", "请先配置 Cookie"))
+            await _edit_result(ctx, event, _status_template(ctx, "❌", "请先配置 Cookie"))
             return
 
         if ctx.http is None:
-            await event.edit(_status_template(ctx, "❌", "缺少 external_http 权限"))
+            await _edit_result(ctx, event, _status_template(ctx, "❌", "缺少 external_http 权限"))
             return
 
-        await event.edit(
+        await _edit_result(ctx, event,
             _status_template(
                 ctx,
                 "⏳",
@@ -892,7 +902,7 @@ class PTPromotePlugin(Plugin):
             response = await ctx.http.get(url, headers=headers)
 
             if response.status_code == 200:
-                await event.edit(
+                await _edit_result(ctx, event,
                     _cfg_template(
                         ctx,
                         "info_ok_template",
@@ -904,7 +914,7 @@ class PTPromotePlugin(Plugin):
                     )
                 )
             else:
-                await event.edit(
+                await _edit_result(ctx, event,
                     _status_template(
                         ctx,
                         "❌",
@@ -914,7 +924,7 @@ class PTPromotePlugin(Plugin):
                 )
 
         except Exception as e:
-            await event.edit(
+            await _edit_result(ctx, event,
                 _status_template(
                     ctx,
                     "❌",

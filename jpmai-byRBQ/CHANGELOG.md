@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.9 (2026-08-15)
+- 保留 Pagermaid 命令兼容入口，将消息、媒体、编辑和删除动作改为 MessageOps；AI 请求改为 ctx.http 并限制外部模型域名，无标准 reaction/sticker 动作时拒绝直连。
+
 ## 1.0.8 (2026-08-15)
 - 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
 

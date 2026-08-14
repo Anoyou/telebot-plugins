@@ -13,15 +13,18 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
-import aiohttp
+from .http_bridge import Session as TelePilotHTTPSession
 
 from pagermaid.listener import listener
 from pagermaid.enums import Client, Message
 from pagermaid.utils import logs
-from pyrogram.types import InputMediaPhoto
+class InputMediaPhoto:
+    def __init__(self, media: Any, caption: str | None = None):
+        self.media = media
+        self.caption = caption
 
 # 尝试导入 MCP 客户端（可选依赖）
 try:
@@ -37,6 +40,10 @@ LEGACY_DATA_DIR = Path("ai_query")
 LEGACY_DATA_FILE = LEGACY_DATA_DIR / "config.json"
 DATA_DIR: Path | None = None
 DATA_FILE: Path | None = None
+HTTP_FACADE: object | None = None
+def configure_http(http: object) -> None:
+    global HTTP_FACADE
+    HTTP_FACADE = http
 PENDING_SELECTION = {}  # 待选择的模型列表消息
 DEFAULT_SEARCH_CONFIG = {
     "enabled": True,
@@ -739,8 +746,9 @@ async def duckduckgo_search(query: str, max_results: int) -> list[dict]:
     }
 
     try:
-        timeout = aiohttp.ClientTimeout(total=SEARCH_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        timeout = SEARCH_TIMEOUT
+        if HTTP_FACADE is None: raise RuntimeError("TelePilot ctx.http 未注入，拒绝直连网络")
+        async with TelePilotHTTPSession(HTTP_FACADE) as session:
             async with session.get(
                 "https://html.duckduckgo.com/html/",
                 headers=headers,
@@ -918,10 +926,11 @@ async def fetch_page_image_candidates(page_url: str) -> list[str]:
         "User-Agent": SEARCH_USER_AGENT,
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
-    timeout = aiohttp.ClientTimeout(total=IMAGE_FETCH_TIMEOUT)
+    timeout = IMAGE_FETCH_TIMEOUT
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        if HTTP_FACADE is None: raise RuntimeError("TelePilot ctx.http 未注入，拒绝直连网络")
+        async with TelePilotHTTPSession(HTTP_FACADE) as session:
             async with session.get(page_url, headers=headers, allow_redirects=True) as response:
                 if response.status != 200:
                     return []
@@ -1000,7 +1009,7 @@ def build_preview_caption(previews: list[dict]) -> str:
 
 
 async def download_preview_image(
-    session: aiohttp.ClientSession,
+    session: Any,
     image_url: str,
     target_dir: Path,
     index: int,
@@ -1043,10 +1052,11 @@ async def send_preview_images(
     chat_id = message.chat.id
     reply_to_message_id = message.id
     caption = build_preview_caption(previews)
-    timeout = aiohttp.ClientTimeout(total=IMAGE_FETCH_TIMEOUT)
+    timeout = IMAGE_FETCH_TIMEOUT
 
     with tempfile.TemporaryDirectory(prefix="ais_preview_") as tmp_dir:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        if HTTP_FACADE is None: raise RuntimeError("TelePilot ctx.http 未注入，拒绝直连网络")
+        async with TelePilotHTTPSession(HTTP_FACADE) as session:
             downloaded_paths = []
             for index, item in enumerate(previews, start=1):
                 path = await download_preview_image(
@@ -1427,7 +1437,8 @@ async def call_ai_api(
 
         data = build_request_data()
 
-        async with aiohttp.ClientSession() as session:
+        if HTTP_FACADE is None: raise RuntimeError("TelePilot ctx.http 未注入，拒绝直连网络")
+        async with TelePilotHTTPSession(HTTP_FACADE) as session:
             async with session.post(
                 request_url, headers=headers, json=data, timeout=timeout
             ) as response:

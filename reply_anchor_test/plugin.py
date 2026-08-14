@@ -319,6 +319,10 @@ class ReplyAnchorTestPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", f"[reply_anchor_test] 已启动，默认命令：{DEFAULT_COMMAND}，配置命令：{self._command}")
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        return await self.on_interaction(ctx, str(trigger.get("entry_key") or ENTRY_KEY), payload)
+
     async def on_interaction(
         self,
         ctx: PluginContext,

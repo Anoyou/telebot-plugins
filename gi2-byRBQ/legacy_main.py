@@ -20,8 +20,11 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-import aiohttp
-from pyrogram.types import InputMediaPhoto
+from .http_bridge import Session as TelePilotHTTPSession
+class InputMediaPhoto:
+    def __init__(self, media: Any, caption: str | None = None):
+        self.media = media
+        self.caption = caption
 
 from pagermaid.enums import Client, Message
 from pagermaid.listener import listener
@@ -35,7 +38,11 @@ DEFAULT_MODEL = "gpt-image-2"
 DEFAULT_API_BASE = "https://api.openai.com/v1"
 LEGACY_CONFIG_FILE = Path(__file__).parent / "gi2_config.json"
 CONFIG_FILE: Path | None = None
-REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=300)
+HTTP_FACADE: object | None = None
+def configure_http(http: object) -> None:
+    global HTTP_FACADE
+    HTTP_FACADE = http
+REQUEST_TIMEOUT = 300
 RESULT_IMAGE_NAME = "gi2_result.png"
 SUPPORTED_OUTPUT_FORMAT = "png"
 GI2_RUNTIME_VERSION = "1.0.3-probe-input"
@@ -540,7 +547,7 @@ def supports_responses_image_edit_fallback(model: str) -> bool:
     return normalized_model != "gpt-image-2"
 
 
-async def download_image_from_url(session: aiohttp.ClientSession, image_url: str) -> bytes:
+async def download_image_from_url(session: Any, image_url: str) -> bytes:
     """下载兼容接口返回的外链图片。"""
     async with session.get(image_url) as response:
         if response.status >= 400:
@@ -580,7 +587,7 @@ def decode_image_result_sync(payload: Any) -> bytes:
     raise RuntimeError("接口返回了未知图片格式")
 
 
-async def decode_image_result(session: aiohttp.ClientSession, payload: Any) -> bytes:
+async def decode_image_result(session: Any, payload: Any) -> bytes:
     """从接口响应中提取最终图片字节。"""
     image_result = prepare_image_result(payload)
     kind = image_result.get("kind")
@@ -596,7 +603,7 @@ async def decode_image_result(session: aiohttp.ClientSession, payload: Any) -> b
 
 
 async def request_generation(
-    session: aiohttp.ClientSession,
+    session: Any,
     config: dict[str, Any],
     prompt: str,
 ) -> bytes:
@@ -620,7 +627,7 @@ async def request_generation(
 
 
 async def request_edit_with_aiohttp(
-    session: aiohttp.ClientSession,
+    session: Any,
     config: dict[str, Any],
     prompt: str,
     image_path: Path,
@@ -629,110 +636,37 @@ async def request_edit_with_aiohttp(
     """使用 aiohttp 调用改图接口。"""
     url = build_api_url(config["api_base"], "edit")
     spec = build_edit_form_spec(config["model"], prompt, image_path, mime_type)
-    form = aiohttp.FormData()
+    fields: dict[str, str] = {}
+    files: dict[str, tuple[str, bytes, str]] = {}
     for field_name, field_value in spec["fields"].items():
-        form.add_field(field_name, str(field_value))
+        fields[field_name] = str(field_value)
     for file_item in spec["files"]:
-        form.add_field(
-            file_item["field_name"],
-            Path(file_item["path"]).read_bytes(),
-            filename=file_item["filename"],
-            content_type=file_item["mime_type"],
-        )
+        files[file_item["field_name"]] = (file_item["filename"], Path(file_item["path"]).read_bytes(), file_item["mime_type"])
 
     headers = {
         "Authorization": f"Bearer {config['api_key']}",
     }
 
-    async with session.post(url, headers=headers, data=form) as response:
+    async with session.post(url, headers=headers, data=fields, files=files) as response:
         result = await parse_response_payload(response)
         if response.status >= 400:
             raise RuntimeError(extract_error_message(result) or f"改图失败：HTTP {response.status}")
         return await decode_image_result(session, result)
 
 
-def request_edit_with_curl_sync(
-    config: dict[str, Any],
-    prompt: str,
-    image_path: Path,
-    mime_type: str,
-) -> bytes:
-    """使用 curl 调用改图接口，绕过部分 aiohttp+代理的 chunked 断流问题。"""
-    import subprocess
-
-    url = build_api_url(config["api_base"], "edit")
-    spec = build_edit_form_spec(config["model"], prompt, image_path, mime_type)
-    with tempfile.TemporaryDirectory(prefix="gi2_curl_") as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        body_path = tmp_path / "response.json"
-        header_path = tmp_path / "headers.txt"
-        command = [
-            "curl",
-            "--http1.1",
-            "-sS",
-            "-L",
-            "--max-time",
-            str(int(REQUEST_TIMEOUT.total or 300)),
-            "-D",
-            str(header_path),
-            "-o",
-            str(body_path),
-            "-H",
-            f"Authorization: Bearer {config['api_key']}",
-        ]
-        for field_name, field_value in spec["fields"].items():
-            command.extend(["-F", f"{field_name}={field_value}"])
-        for file_item in spec["files"]:
-            command.extend(
-                [
-                    "-F",
-                    (
-                        f"{file_item['field_name']}=@{file_item['path']};"
-                        f"filename={file_item['filename']};type={file_item['mime_type']}"
-                    ),
-                ]
-            )
-        command.append(url)
-
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=int(REQUEST_TIMEOUT.total or 300) + 10)
-        if completed.returncode != 0:
-            stderr = (completed.stderr or completed.stdout or f"curl 退出码 {completed.returncode}").strip()
-            if "stream disconnected before completion" in stderr.lower():
-                raise RuntimeError("上游接口在处理这张原图时主动断开，通常是图片内容/尺寸触发了上游风控或处理失败；请换图、裁剪/压缩后再试。")
-            raise RuntimeError(stderr)
-
-        raw_body = body_path.read_bytes() if body_path.exists() else b""
-        header_text = header_path.read_text(encoding="utf-8", errors="replace") if header_path.exists() else ""
-        status_codes = []
-        for line in header_text.splitlines():
-            if line.startswith("HTTP/"):
-                parts = line.split()
-                if len(parts) >= 2 and parts[1].isdigit():
-                    status_codes.append(int(parts[1]))
-        status_code = status_codes[-1] if status_codes else 0
-        try:
-            payload = json.loads(raw_body.decode("utf-8"))
-        except Exception:
-            payload = {"message": raw_body.decode("utf-8", errors="replace").strip() or f"HTTP {status_code or 'unknown'}"}
-        if status_code >= 400:
-            raise RuntimeError(extract_error_message(payload) or f"改图失败：HTTP {status_code}")
-        return decode_image_result_sync(payload)
-
-
 async def request_edit(
-    session: aiohttp.ClientSession,
+    session: Any,
     config: dict[str, Any],
     prompt: str,
     image_path: Path,
     mime_type: str,
 ) -> bytes:
-    """改图请求。优先使用 curl，避免 aiohttp 在部分代理上接收大响应时断流。"""
-    logs.warning("[GI2] 使用 curl 改图路径：version=%s", GI2_RUNTIME_VERSION)
-    return await asyncio.to_thread(request_edit_with_curl_sync, config, prompt, image_path, mime_type)
+    """通过 TelePilot 安全 HTTP facade 发送改图请求。"""
+    return await request_edit_with_aiohttp(session, config, prompt, image_path, mime_type)
 
 
 async def request_edit_via_responses(
-    session: aiohttp.ClientSession,
+    session: Any,
     config: dict[str, Any],
     prompt: str,
     image_path: Path,
@@ -760,7 +694,8 @@ async def generate_or_edit_image(
     source_mime_type: str = "",
 ) -> bytes:
     """按上下文自动走文生图或改图。"""
-    async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
+    if HTTP_FACADE is None: raise RuntimeError("TelePilot ctx.http 未注入，拒绝直连网络")
+    async with TelePilotHTTPSession(HTTP_FACADE) as session:
         if source_image_path is None:
             return await request_generation(session, config, prompt)
         try:

@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="math10",
     display_name="随机算数题",
-    version="1.0.12",
+    version="1.0.13",
     min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="由交互 Bot 开启一局 10 以内算数题，群内第一个答对者获得奖金",

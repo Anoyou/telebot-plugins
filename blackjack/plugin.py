@@ -10,6 +10,7 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
@@ -323,6 +324,11 @@ class BlackjackPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[blackjack] 已停止")
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Event Bus 主入口；loader 已附加标准 TelePilot 事件信封。"""
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        return await self.on_interaction(ctx, str(trigger.get("entry_key") or "start_blackjack"), payload)
+
     async def on_interaction(
         self,
         ctx: PluginContext,
@@ -414,10 +420,10 @@ class BlackjackPlugin(Plugin):
 
         # Delete the callback source message so old messages don't linger
         msg_id = _interaction_message_id(payload)
-        client = getattr(ctx, "client", None)
-        if msg_id and client:
+        messages = getattr(ctx, "messages", None)
+        if msg_id and messages:
             try:
-                await client.delete_message(chat_id, msg_id)
+                await messages.delete(chat_id=chat_id, message_id=msg_id)
             except Exception:
                 pass
 
@@ -511,10 +517,10 @@ class BlackjackPlugin(Plugin):
 
         # Delete the button message so old buttons don't linger
         msg_id = _interaction_message_id(payload)
-        client = getattr(ctx, "client", None)
-        if msg_id and client:
+        messages = getattr(ctx, "messages", None)
+        if msg_id and messages:
             try:
-                await client.delete_message(chat_id, msg_id)
+                await messages.delete(chat_id=chat_id, message_id=msg_id)
             except Exception:
                 pass
 
@@ -636,6 +642,24 @@ class BlackjackPlugin(Plugin):
         return actions
 
     # ── 命令入口 ─────────────────────────────────────
+    async def _legacy_reply(self, ctx: PluginContext, event: Any, text: str, *, parse_mode: str = "html") -> Any:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台发送消息")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+        message_id = int(getattr(event, "id", 0) or 0)
+        save_key = f"blackjack:{ctx.account_id}:{chat_id}:{time.time_ns()}"
+        await messages.send(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_to_message_id=message_id or None,
+            save_message_id_key=save_key,
+        )
+        sent_id = await messages.read_saved_message_id(save_key)
+        await messages.delete_saved_message_id(save_key)
+        return SimpleNamespace(id=sent_id or 0)
+
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
     ) -> None:
@@ -665,10 +689,10 @@ class BlackjackPlugin(Plugin):
                 # Delete previous bot reply so old messages don't linger
                 if gs.message_id:
                     try:
-                        await event.client.delete_message(chat_id, gs.message_id)
+                        await ctx.messages.delete(chat_id=chat_id, message_id=gs.message_id)
                     except Exception:
                         pass
-                msg = await event.reply(
+                msg = await self._legacy_reply(ctx, event,
                     f"🃏 你已有一局进行中的牌局！\n"
                     f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n"
                     f"庄家：{_format_hand(gs.dealer_cards, hide_first=True)}\n\n"
@@ -707,13 +731,13 @@ class BlackjackPlugin(Plugin):
                 gs.finished = True
                 result = "blackjack"
                 reply = _format_result(player_cards, dealer_cards, result, bet, player_name)
-                msg = await event.reply(reply, parse_mode="html")
+                msg = await self._legacy_reply(ctx, event, reply, parse_mode="html")
                 gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                 return
 
             self._games[game_key] = gs
             p_val, _ = _hand_value(player_cards)
-            msg = await event.reply(
+            msg = await self._legacy_reply(ctx, event,
                 f"<b>🃏 21点</b> · 下注 {bet} 蝌蚪\n\n"
                 f"庄家：{_format_hand(dealer_cards, hide_first=True)}\n"
                 f"{player_name}的牌：{_format_hand(player_cards)}（{p_val}点）\n\n"
@@ -735,13 +759,13 @@ class BlackjackPlugin(Plugin):
         async with lock:
             gs = self._games.get(game_key)
             if not gs or gs.finished:
-                msg = await event.reply("没有进行中的牌局。输入指令开一局~", parse_mode="html")
+                msg = await self._legacy_reply(ctx, event, "没有进行中的牌局。输入指令开一局~", parse_mode="html")
                 return
 
             # Delete previous bot reply so old messages don't linger
             if gs.message_id:
                 try:
-                    await event.client.delete_message(chat_id, gs.message_id)
+                    await ctx.messages.delete(chat_id=chat_id, message_id=gs.message_id)
                 except Exception:
                     pass
 
@@ -752,7 +776,7 @@ class BlackjackPlugin(Plugin):
                     # 爆了
                     gs.finished = True
                     reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet, gs.player_name)
-                    msg = await event.reply(reply, parse_mode="html")
+                    msg = await self._legacy_reply(ctx, event, reply, parse_mode="html")
                     gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                     self._games.pop(game_key, None)
                     return
@@ -760,7 +784,7 @@ class BlackjackPlugin(Plugin):
                     # 自动停牌
                     return await self._dealer_turn(chat_id, player_id, event, ctx)
                 else:
-                    msg = await event.reply(
+                    msg = await self._legacy_reply(ctx, event,
                         f"{gs.player_name}的牌：{_format_hand(gs.player_cards)}（{p_val}点）\n\n"
                         f"继续：,{self._command} 要牌 / ,{self._command} 停牌",
                         parse_mode="html",
@@ -772,7 +796,7 @@ class BlackjackPlugin(Plugin):
 
             elif action == "double":
                 if len(gs.player_cards) != 2:
-                    msg = await event.reply("只能在前两张牌时加倍~", parse_mode="html")
+                    msg = await self._legacy_reply(ctx, event, "只能在前两张牌时加倍~", parse_mode="html")
                     gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                     return
                 gs.bet *= 2
@@ -782,7 +806,7 @@ class BlackjackPlugin(Plugin):
                 if p_val > 21:
                     self._dealer_finish(gs)
                     reply = _format_result(gs.player_cards, gs.dealer_cards, "bust", gs.bet, gs.player_name)
-                    msg = await event.reply(reply, parse_mode="html")
+                    msg = await self._legacy_reply(ctx, event, reply, parse_mode="html")
                     gs.message_id = int(getattr(msg, "id", 0) or 0) or None
                     self._games.pop(game_key, None)
                     return
@@ -822,7 +846,7 @@ class BlackjackPlugin(Plugin):
 
         gs.finished = True
         reply = _format_result(gs.player_cards, gs.dealer_cards, result, gs.bet, gs.player_name)
-        msg = await event.reply(reply, parse_mode="html")
+        msg = await self._legacy_reply(ctx, event, reply, parse_mode="html")
         gs.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._games.pop(game_key, None)
 

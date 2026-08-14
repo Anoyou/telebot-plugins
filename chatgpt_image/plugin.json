@@ -4,7 +4,7 @@
   "description": "实验性：按 chatgpt2api 的核心思路在 Telegram 内完成 ChatGPT 图片生成、编辑与 token 池管理。",
   "usage": "安装并配置 Token 池后，由账号主人或授权管理员使用命令触发：文生图命令生成图片，图片编辑命令在回复图片或最近图片上下文中编辑，管理命令查看模型、token 池和额度。该插件不自动订阅群内普通消息。",
   "author": "TelePilot Official",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "entry": "plugin.py",
   "min_telepilot_version": "0.33.0",
   "category": "utility",
@@ -13,10 +13,12 @@
     "send_message",
     "edit_message",
     "read_chat",
-    "send_file"
+    "send_file",
+    "external_http"
   ],
+  "allowed_hosts": ["chatgpt.com", "**.openai.com", "**.oaistatic.com", "**.blob.core.windows.net"],
   "event_subscriptions": [],
-  "requires_platform_capabilities": ["ai"],
+  "requires_platform_capabilities": [],
   "capabilities": {},
   "tags": [
     "official",

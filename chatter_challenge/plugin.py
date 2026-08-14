@@ -112,6 +112,15 @@ class ChallengeState:
 # ─────────────────────────────────────────────────────
 @register
 class ChatterChallengePlugin(Plugin):
+    @staticmethod
+    async def _reply(ctx: PluginContext, event: Any, text: str, *, parse_mode: str = "html") -> None:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+        message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
+        await messages.send(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_to_message_id=message_id or None)
+
     key = "chatter_challenge"
     display_name = "话痨挑战"
     message_channels = {"incoming", "outgoing"}
@@ -152,15 +161,15 @@ class ChatterChallengePlugin(Plugin):
 
         # 结束挑战
         if arg_str in ("结束", "end", "stop", "结算"):
-            return await self._end_challenge(chat_id, sender_id, event)
+            return await self._end_challenge(ctx, chat_id, sender_id, event)
 
         # 查看当前规则
         if arg_str in ("规则", "rules", "状态", "status"):
-            return await self._show_status(chat_id, event)
+            return await self._show_status(ctx, chat_id, event)
 
         # 查看排行榜
         if arg_str in ("排行", "ranking", "board", "分数"):
-            return await self._show_ranking(chat_id, event)
+            return await self._show_ranking(ctx, chat_id, event)
 
         # 添加规则
         ch = self._challenges.get(chat_id)
@@ -175,11 +184,11 @@ class ChatterChallengePlugin(Plugin):
             # 检查是否已存在同类规则
             for existing in ch.rules:
                 if existing["type"] == rule["type"] and existing.get("value") == rule.get("value"):
-                    await event.reply(f"⚠️ 这条规则已经存在了~", parse_mode="html")
+                    await self._reply(ctx, event, f"⚠️ 这条规则已经存在了~", parse_mode="html")
                     return
             ch.rules.append(rule)
             desc = self._describe_rule(rule)
-            await event.reply(
+            await self._reply(ctx, event,
                 f"✅ 已添加规则：{desc}\n\n"
                 f"当前共 {len(ch.rules)} 条规则。输入 {prefix}{self._command} 规则 查看全部\n"
                 f"输入 {prefix}{self._command} 结束 结束挑战并结算",
@@ -188,7 +197,7 @@ class ChatterChallengePlugin(Plugin):
             return
 
         # 没匹配到规则，显示帮助
-        await event.reply(
+        await self._reply(ctx, event,
             f"<b>🗣 话痨挑战</b>\n\n"
             f"<b>添加规则：</b>\n"
             f"  {prefix}{self._command} 5字 — 每条消息最多5字\n"
@@ -235,16 +244,16 @@ class ChatterChallengePlugin(Plugin):
         return rule.get("label", str(rule))
 
     # ── 结束挑战 ─────────────────────────────────────
-    async def _end_challenge(self, chat_id: int, sender_id: int, event: Any) -> None:
+    async def _end_challenge(self, ctx: PluginContext, chat_id: int, sender_id: int, event: Any) -> None:
         ch = self._challenges.get(chat_id)
         if not ch or not ch.active:
-            await event.reply("没有进行中的话痨挑战~", parse_mode="html")
+            await self._reply(ctx, event, "没有进行中的话痨挑战~", parse_mode="html")
             return
 
         ch.active = False
 
         if not ch.scores:
-            await event.reply(
+            await self._reply(ctx, event,
                 f"<b>🗣 话痨挑战结束！</b>\n\n"
                 f"没人违规，大家都很棒！🎉\n"
                 f"共 {len(ch.rules)} 条规则",
@@ -264,33 +273,33 @@ class ChatterChallengePlugin(Plugin):
             lines.append(f"{medal} {info['name']}：{info['score']} 分（{v_count} 次违规）")
 
         lines.append(f"\n共 {len(ch.rules)} 条规则，{len(ranked)} 人参与")
-        await event.reply("\n".join(lines), parse_mode="html")
+        await self._reply(ctx, event, "\n".join(lines), parse_mode="html")
         self._challenges.pop(chat_id, None)
 
     # ── 查看状态 ─────────────────────────────────────
-    async def _show_status(self, chat_id: int, event: Any) -> None:
+    async def _show_status(self, ctx: PluginContext, chat_id: int, event: Any) -> None:
         prefix = current_command_prefix(fallback=",")
         ch = self._challenges.get(chat_id)
         if not ch or not ch.active:
-            await event.reply(f"没有进行中的话痨挑战。输入 {prefix}{self._command} 开始~", parse_mode="html")
+            await self._reply(ctx, event, f"没有进行中的话痨挑战。输入 {prefix}{self._command} 开始~", parse_mode="html")
             return
 
         rules_text = "\n".join(f"  • {self._describe_rule(r)}" for r in ch.rules)
-        await event.reply(
+        await self._reply(ctx, event,
             f"<b>🗣 当前挑战规则：</b>\n{rules_text}\n\n"
             f"输入 {prefix}{self._command} 结束 结束并结算",
             parse_mode="html",
         )
 
     # ── 排行榜 ───────────────────────────────────────
-    async def _show_ranking(self, chat_id: int, event: Any) -> None:
+    async def _show_ranking(self, ctx: PluginContext, chat_id: int, event: Any) -> None:
         ch = self._challenges.get(chat_id)
         if not ch:
-            await event.reply("没有进行中的话痨挑战~", parse_mode="html")
+            await self._reply(ctx, event, "没有进行中的话痨挑战~", parse_mode="html")
             return
 
         if not ch.scores:
-            await event.reply("暂时还没有人违规~", parse_mode="html")
+            await self._reply(ctx, event, "暂时还没有人违规~", parse_mode="html")
             return
 
         ranked = sorted(ch.scores.items(), key=lambda x: x[1]["score"], reverse=True)
@@ -298,7 +307,7 @@ class ChatterChallengePlugin(Plugin):
         for i, (uid, info) in enumerate(ranked):
             v_count = len(info["violations"])
             lines.append(f"  {i + 1}. {info['name']}：{info['score']} 分（{v_count} 次违规）")
-        await event.reply("\n".join(lines), parse_mode="html")
+        await self._reply(ctx, event, "\n".join(lines), parse_mode="html")
 
     # ── 被动监听 ─────────────────────────────────────
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
@@ -339,7 +348,7 @@ class ChatterChallengePlugin(Plugin):
         score = ch.scores[sender_id]["score"]
         v_count = len(ch.scores[sender_id]["violations"])
 
-        await event.reply(
+        await self._reply(ctx, event,
             f"🚨 {sender_name} {desc}！\n"
             f"当前分数：{score}（第 {v_count} 次违规）",
             parse_mode="html",

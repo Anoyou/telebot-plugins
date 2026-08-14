@@ -8,9 +8,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-
-
 @dataclass(frozen=True)
 class Sub2APIConfig:
     base_url: str = ""
@@ -50,17 +47,34 @@ def extract_auth_session_access_token(value: Any) -> str:
     return ""
 
 
+class _ImportHTTPAdapter:
+    def __init__(self, http: Any) -> None:
+        self.http = http
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def get(self, url: str, **kwargs: Any):
+        return await self.http.get(url, **kwargs)
+
+    async def post(self, url: str, **kwargs: Any):
+        return await self.http.post(url, **kwargs)
+
+
 class ImportClient:
-    def __init__(self, *, proxy_url: str = "", timeout: int = 60) -> None:
+    def __init__(self, *, http: Any, proxy_url: str = "", timeout: int = 60) -> None:
+        if http is None:
+            raise RuntimeError("TelePilot 未注入 ctx.http，拒绝直连导入服务。")
+        self.http = http
         self.proxy_url = str(proxy_url or "").strip()
         self.timeout = max(15, int(timeout or 60))
         self._sub2api_token_cache: tuple[str, float] | None = None
 
-    def _client(self) -> httpx.AsyncClient:
-        timeout_config = httpx.Timeout(timeout=float(self.timeout))
-        if self.proxy_url:
-            return httpx.AsyncClient(timeout=timeout_config, follow_redirects=True, proxy=self.proxy_url)
-        return httpx.AsyncClient(timeout=timeout_config, follow_redirects=True)
+    def _client(self):
+        return _ImportHTTPAdapter(self.http)
 
     async def list_sub2api_accounts(self, cfg: Sub2APIConfig) -> list[dict[str, Any]]:
         if not cfg.base_url:

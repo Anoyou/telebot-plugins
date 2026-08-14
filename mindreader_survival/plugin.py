@@ -513,6 +513,10 @@ class MindreaderSurvivalPlugin(Plugin):
     #  开发指南：交互入口是新增触发面，不是替代品
     # ══════════════════════════════════════════════════════════
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        return await self.on_interaction(ctx, str(trigger.get("entry_key") or "start_mindreader"), payload)
+
     async def on_interaction(
         self, ctx: PluginContext, entry_key: str, payload: dict[str, Any],
     ) -> list[dict[str, Any]] | None:
@@ -623,9 +627,14 @@ class MindreaderSurvivalPlugin(Plugin):
         if text == cmd_prefix or text == self._command:
             session = self._sessions.get(chat_id)
             if session and session.phase == "playing":
-                await event.reply(self._r(IN_PROGRESS_MESSAGE_TEMPLATE, {
-                    "prefix": prefix or "/", "command": self._command,
-                }), parse_mode="html")
+                await ctx.messages.send(
+                    chat_id=chat_id,
+                    text=self._r(IN_PROGRESS_MESSAGE_TEMPLATE, {
+                        "prefix": prefix or "/", "command": self._command,
+                    }),
+                    parse_mode="html",
+                    reply_to_message_id=getattr(event, "id", None),
+                )
                 return
             actions = await self.biz_create_game(ctx, chat_id, uid=uid, name=name, mode="admin")
             for a in actions:
@@ -653,7 +662,12 @@ class MindreaderSurvivalPlugin(Plugin):
             if choice >= 1:
                 ok, msg = self.biz_record_choice(chat_id, uid, choice)
                 if ok:
-                    await event.reply(msg, parse_mode="html")
+                    await ctx.messages.send(
+                        chat_id=chat_id,
+                        text=msg,
+                        parse_mode="html",
+                        reply_to_message_id=getattr(event, "id", None),
+                    )
 
     # ══════════════════════════════════════════════════════════
     #  _cmd_handler — UserBot 命令（管理员直接使用）
@@ -689,11 +703,7 @@ class MindreaderSurvivalPlugin(Plugin):
     # ══════════════════════════════════════════════════════════
 
     async def _send_ctx(self, ctx: PluginContext, chat_id: int, text: str) -> None:
-        if ctx.client:
-            try:
-                await ctx.client.send_message(chat_id, text, parse_mode="html")
-            except Exception:
-                pass
+        await ctx.messages.send(chat_id=chat_id, text=text, parse_mode="html")
 
     async def _send_ctx_action(self, ctx: PluginContext, chat_id: int, action: dict[str, Any]) -> None:
         if action.get("type") == "send_message":
@@ -703,13 +713,12 @@ class MindreaderSurvivalPlugin(Plugin):
         if action.get("type") != "send_message":
             return
         text = action.get("text", "")
-        if ctx.client:
-            try:
-                await ctx.client.send_message(event.chat_id, text, parse_mode="html")
-                return
-            except Exception:
-                pass
-        await event.reply(text, parse_mode="html")
+        await ctx.messages.send(
+            chat_id=int(getattr(event.chat_id, "channel_id", None) or event.chat_id or 0),
+            text=text,
+            parse_mode="html",
+            reply_to_message_id=getattr(event, "id", None),
+        )
 
     @staticmethod
     def _tpe(p):

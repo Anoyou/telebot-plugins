@@ -41,13 +41,34 @@ from telethon import events
 # 插件库插件解压到 data/plugins/installed/{key}/ 后只能走绝对 import。
 from app.worker.command import (
     current_command_prefix,
-    dispatch_auto_command_text,
     should_allow_auto_command_text,
 )
+try:
+    from app.worker.command import dispatch_auto_command_text
+except ImportError:  # TelePilot 0.97.0 已移除旧自动命令注入入口
+    dispatch_auto_command_text = None
 from app.worker.plugins.base import Plugin, PluginContext, public_entity_display_name, register
 from app.worker.ratelimit.humanize import simulate_read, simulate_typing
 
 FEATURE_AUTO_REPLY = "auto_reply"
+
+
+async def _message_send(ctx: PluginContext, event: Any, text: str, *, reply: bool = True, parse_mode: str | None = None) -> Any:
+    messages = getattr(ctx, "messages", None)
+    if messages is None:
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+    chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+    message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
+    return await messages.send(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_to_message_id=message_id or None if reply else None)
+
+
+async def _message_edit(ctx: PluginContext, event: Any, text: str, *, parse_mode: str | None = None) -> Any:
+    messages = getattr(ctx, "messages", None)
+    if messages is None:
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝编辑消息")
+    chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+    message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
+    return await messages.edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode=parse_mode)
 
 
 @register
@@ -191,7 +212,11 @@ class AutoReplyPlugin(Plugin):
                     return
 
                 if command_key is not None:
-                    command_event = _AutoReplyCommandEvent(event, text_out)
+                    if dispatch_auto_command_text is None:
+                        if ctx.log is not None:
+                            await ctx.log("warning", "TelePilot 当前运行时未提供自动命令注入入口，已安全跳过")
+                        return
+                    command_event = _AutoReplyCommandEvent(ctx, event, text_out)
                     dispatched = await dispatch_auto_command_text(
                         ctx.client,
                         command_event,
@@ -229,9 +254,9 @@ class AutoReplyPlugin(Plugin):
                 reply_to_msg = bool(cfg.get("reply_to", True))
                 try:
                     if reply_to_msg:
-                        await event.reply(text_out)
+                        await _message_send(ctx, event, text_out, reply=True)
                     else:
-                        await event.respond(text_out)
+                        await _message_send(ctx, event, text_out, reply=False)
                     await _mark_usage(ctx, rule.id, chat_id, sender_id, cfg, usage)
                     if ctx.log is not None:
                         await ctx.log(
@@ -394,9 +419,9 @@ class AutoReplyPlugin(Plugin):
 
         try:
             if bool(cfg.get("reply_to", True)):
-                await event.reply(text_out)
+                await _message_send(ctx, event, text_out, reply=True)
             else:
-                await event.respond(text_out)
+                await _message_send(ctx, event, text_out, reply=False)
         except Exception as exc:  # noqa: BLE001
             await _handle_send_exception(ctx, action, event.chat_id, exc)
 
@@ -411,15 +436,15 @@ class AutoReplyPlugin(Plugin):
         del client, account_id
         target_id, rule_filter, error = await _parse_reset_command_target(event, args)
         if error:
-            await event.edit(error)
+            await _message_edit(ctx, event, error)
             return
         if target_id is None:
-            await event.edit(_reset_help_text())
+            await _message_edit(ctx, event, _reset_help_text())
             return
 
         reset_rules = _filter_reset_rules(ctx.rules, rule_filter)
         if not reset_rules:
-            await event.edit("未找到要重置的自动回复规则。")
+            await _message_edit(ctx, event, "未找到要重置的自动回复规则。")
             return
 
         chat_id = getattr(event, "chat_id", None)
@@ -432,7 +457,7 @@ class AutoReplyPlugin(Plugin):
             keys.append(f"pending:{rule.id}:user:{chat_id or 0}:{target_id or 0}")
         deleted = await _redis_delete_keys(ctx.redis, keys)
         scope = f"规则 {rule_filter}" if rule_filter else "当前会话全部自动回复规则"
-        await event.edit(
+        await _message_edit(ctx, event,
             f"已重置用户 {target_id} 在{scope}下的会话/用户冷却和今日次数。"
             f"清理键 {deleted}/{len(keys)} 个。"
         )
@@ -473,11 +498,12 @@ class _UsageStatus:
 class _AutoReplyCommandEvent:
     """把自动回复生成的命令文本伪装成可派发事件。
 
-    命令执行里的 ``event.edit(...)`` 对真实 incoming 消息不可用；这里把它转换成
-    对原会话的 respond/reply，让自动命令直接产出执行结果。
+    历史命令事件无法直接修改 incoming 消息；这里把它转换成
+    对原会话的标准 MessageOps 输出，让自动命令直接产出执行结果。
     """
 
-    def __init__(self, source: events.NewMessage.Event, raw_text: str) -> None:
+    def __init__(self, ctx: PluginContext, source: events.NewMessage.Event, raw_text: str) -> None:
+        self._ctx = ctx
         self._source = source
         self.raw_text = raw_text
         self.client = getattr(source, "client", None)
@@ -500,25 +526,19 @@ class _AutoReplyCommandEvent:
     async def edit(self, *args, **kwargs):
         self._remember_output(args, kwargs)
         if self._sent_message is not None:
-            editor = getattr(self._sent_message, "edit", None)
-            if callable(editor):
-                return await editor(*args, **kwargs)
+            return await self._edit_saved(args, kwargs)
         return await self._send_first(args, kwargs, prefer_reply=False)
 
     async def respond(self, *args, **kwargs):
         self._remember_output(args, kwargs)
         if self._sent_message is not None:
-            editor = getattr(self._sent_message, "edit", None)
-            if callable(editor):
-                return await editor(*args, **kwargs)
+            return await self._edit_saved(args, kwargs)
         return await self._send_first(args, kwargs, prefer_reply=False)
 
     async def reply(self, *args, **kwargs):
         self._remember_output(args, kwargs)
         if self._sent_message is not None:
-            editor = getattr(self._sent_message, "edit", None)
-            if callable(editor):
-                return await editor(*args, **kwargs)
+            return await self._edit_saved(args, kwargs)
         return await self._send_first(args, kwargs, prefer_reply=True)
 
     async def append_notice(self, text: str) -> None:
@@ -537,27 +557,28 @@ class _AutoReplyCommandEvent:
         *,
         prefer_reply: bool,
     ):
-        responder = (
-            getattr(self._source, "reply", None)
-            if prefer_reply
-            else getattr(self._source, "respond", None)
+        text = str(args[0] if args else kwargs.get("text") or kwargs.get("message") or "")
+        messages = getattr(self._ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+        key = f"auto_reply:{id(self)}"
+        chat_id = int(getattr(getattr(self._source, "chat_id", None), "channel_id", None) or getattr(self._source, "chat_id", 0) or 0)
+        source_id = int(getattr(self._source, "id", 0) or getattr(getattr(self._source, "message", None), "id", 0) or 0)
+        sent = await messages.send(
+            chat_id=chat_id, text=text, parse_mode=kwargs.get("parse_mode"),
+            reply_to_message_id=source_id or None if prefer_reply else None, save_message_id_key=key,
         )
-        fallback = (
-            getattr(self._source, "respond", None)
-            if prefer_reply
-            else getattr(self._source, "reply", None)
-        )
-        responder = responder or fallback
-        if responder is None:
-            client = self.client
-            if client is not None and self.chat_id is not None:
-                sent = await client.send_message(self.chat_id, *args, **kwargs)
-                self._remember_sent_message(sent)
-                return sent
-            return None
-        sent = await responder(*args, **kwargs)
-        self._remember_sent_message(sent)
+        self._sent_message = await messages.read_saved_message_id(key)
+        await messages.delete_saved_message_id(key)
         return sent
+
+    async def _edit_saved(self, args: tuple[Any, ...], kwargs: dict[str, Any]):
+        text = str(args[0] if args else kwargs.get("text") or kwargs.get("message") or "")
+        messages = getattr(self._ctx, "messages", None)
+        if messages is None or not self._sent_message:
+            raise RuntimeError("TelePilot MessageOps 未返回可编辑的消息 ID")
+        chat_id = int(getattr(getattr(self._source, "chat_id", None), "channel_id", None) or getattr(self._source, "chat_id", 0) or 0)
+        return await messages.edit(chat_id=chat_id, message_id=int(self._sent_message), text=text, parse_mode=kwargs.get("parse_mode"))
 
     def _remember_output(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
         if args:
@@ -571,7 +592,7 @@ class _AutoReplyCommandEvent:
             self._last_parse_mode = parse_mode
 
     def _remember_sent_message(self, sent: Any) -> None:
-        if sent is not None and hasattr(sent, "edit"):
+        if sent is not None:
             self._sent_message = sent
 
 

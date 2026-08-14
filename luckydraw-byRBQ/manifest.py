@@ -35,12 +35,12 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="luckydraw-byRBQ",
     display_name="luckydraw-byRBQ",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.59.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="# 自动抽奖插件 (LuckyDraw) 在指定群组中自动识别红包/抽奖活动并发送口令参与，支持机...",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat", "click_bot_button"],
 
     category="automation",
     interaction_entries=[],

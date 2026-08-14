@@ -13,10 +13,14 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+try:
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover - isolated unit-test stubs
+    event_from_interaction_payload = None  # type: ignore[assignment]
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.3"
+PLUGIN_VERSION = "1.5.4"
 
 DEFAULT_START_COMMAND = "福利开启"
 DEFAULT_STOP_COMMAND = "福利暂停"
@@ -425,7 +429,12 @@ class RandomBenefitPlugin(Plugin):
 
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
         self._reload_config(ctx)
-        event_type = _payload_event_type(payload)
+        # Loader 的标准信封总是包含 source；无 source 的形态只用于旧隔离测试。
+        event_type = (
+            event_from_interaction_payload(payload).type
+            if event_from_interaction_payload is not None and isinstance(payload.get("source"), Mapping)
+            else _payload_event_type(payload)
+        )
         if event_type == "command":
             return await self._handle_command(ctx, payload)
         if event_type != "message":
@@ -469,7 +478,11 @@ class RandomBenefitPlugin(Plugin):
             return
 
         try:
-            await event.reply(reply_text)
+            await ctx.messages.send(
+                chat_id=chat_id,
+                text=reply_text,
+                reply_to_message_id=_event_message_id(event),
+            )
             await self._mark_reply_cooldown(ctx, chat_id, sender_id)
         except Exception as exc:  # noqa: BLE001
             if ctx.log:
@@ -737,6 +750,12 @@ class RandomBenefitPlugin(Plugin):
         elif command == self._status_command:
             message = await self._status_text(ctx, chat_id)
 
-        if message and hasattr(event, "reply"):
-            await event.reply(message)
+        if message:
+            messages = getattr(ctx, "messages", None)
+            if messages is None:
+                raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+            await messages.send(
+                chat_id=chat_id, text=message, parse_mode="plain",
+                reply_to_message_id=_event_message_id(event),
+            )
         return None

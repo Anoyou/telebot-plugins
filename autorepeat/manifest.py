@@ -14,7 +14,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="autorepeat",
     display_name="自动复读",
-    version="1.0.3",
+    version="1.0.4",
     min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="当群组中多名用户在指定时间内发送相同内容时自动复读",

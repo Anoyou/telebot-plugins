@@ -369,15 +369,19 @@ class DeadRevolverPlugin(Plugin):
         for gs in list(self._games.values()):
             if gs.timeout_task and not gs.timeout_task.done():
                 gs.timeout_task.cancel()
-            if gs.game_message_id is not None and ctx.client:
-                try: await ctx.client.unpin_message(gs.chat_id, gs.game_message_id)
-                except Exception: pass
-                try: await ctx.client.delete_messages(gs.chat_id, gs.game_message_id)
-                except Exception: pass
+            if gs.game_message_id is not None:
+                try:
+                    await ctx.messages.delete(chat_id=gs.chat_id, message_id=gs.game_message_id)
+                except Exception:
+                    pass
         self._games.clear(); self._locks.clear()
         await self._log("info", "死亡左轮插件已停止。")
 
     # ── 交互 Bot 入口 ──────────────────────────
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        return await self.on_interaction(ctx, str(trigger.get("entry_key") or "join_paid_game"), payload)
+
     async def on_interaction(self, ctx: PluginContext, entry_key: str, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
         if entry_key != "join_paid_game": return None
         # 主路径：标准事件信封。旧平铺 payload helper 作为字段兜底保留。
@@ -525,25 +529,39 @@ class DeadRevolverPlugin(Plugin):
         await self._log("info", f"死亡左轮交互 Bot 会话已清理：聊天 {chat_id}。", chat_id=chat_id)
 
     # ── 命令 handler ────────────────────────────
+    async def _legacy_reply(self, ctx: PluginContext, event: Any, text: str, *, save_key: str | None = None, pin: bool = False) -> int | None:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台发送消息")
+        chat_id = _event_chat_id(event)
+        await messages.send(
+            chat_id=chat_id,
+            text=text,
+            reply_to_message_id=int(getattr(event, "id", 0) or 0) or None,
+            save_message_id_key=save_key,
+            pin=pin,
+        )
+        if save_key:
+            return await messages.read_saved_message_id(save_key)
+        return None
+
     async def _cmd_create(self, client: Any, event: events.NewMessage.Event, args: list[str],
                           account_id: int, ctx: PluginContext) -> None:
         fee = self._parse_fee(args)
-        if fee <= 0: await event.reply("请指定门票金额，例如：dr 100"); return
+        if fee <= 0: await self._legacy_reply(ctx, event, "请指定门票金额，例如：dr 100"); return
         start_keyword = _configured_start_keyword(getattr(ctx, "config", None) or {}, {"start_keyword": self._start_keyword})
         chat_id = _event_chat_id(event)
         if chat_id is None: return
         async with self._lock_for(chat_id):
             existing = self._games.get(chat_id)
             if existing and existing.phase in ("joining", "playing"):
-                await event.reply("当前已有进行中的死亡左轮游戏。"); return
+                await self._legacy_reply(ctx, event, "当前已有进行中的死亡左轮游戏。"); return
             sender_id = _event_sender_id(event)
             if sender_id is None: return
             game = GameState(game_id=secrets.token_hex(4), chat_id=chat_id, host_user_id=sender_id,
                              entry_fee=fee, created_at=time.time(), start_keyword=start_keyword)
-            msg = await event.reply(self._render_lobby(game))
-            game.game_message_id = msg.id
-            try: await client.pin_message(chat_id, msg.id)
-            except Exception: pass
+            save_key = _interaction_msg_key(ctx.account_id, chat_id)
+            game.game_message_id = await self._legacy_reply(ctx, event, self._render_lobby(game), save_key=save_key, pin=True)
             self._games[chat_id] = game
             game.timeout_task = asyncio.create_task(self._join_timeout(ctx, game))
         await self._log("info", f"死亡左轮游戏已创建：{game.game_id} 门票 {fee}。",
@@ -555,11 +573,11 @@ class DeadRevolverPlugin(Plugin):
         if chat_id is None: return
         async with self._lock_for(chat_id):
             gs = self._games.get(chat_id)
-            if gs is None: await event.reply("当前没有进行中的死亡左轮游戏。"); return
+            if gs is None: await self._legacy_reply(ctx, event, "当前没有进行中的死亡左轮游戏。"); return
             sender_id = _event_sender_id(event)
             error = await self._start_existing_game(ctx, gs, sender_id)
             if error:
-                await event.reply(error)
+                await self._legacy_reply(ctx, event, error)
 
     # ── on_message ───────────────────────────────
     async def on_message(self, ctx: PluginContext, event: events.NewMessage.Event) -> None:
@@ -582,10 +600,7 @@ class DeadRevolverPlugin(Plugin):
                         start_gs = gs2
                         error = await self._start_existing_game(ctx, gs2, sender_id)
                 if error and start_gs is not None:
-                    msg_id = await self._send_bot_msg(ctx, start_gs, error)
-                    if msg_id is None:
-                        try: await ctx.client.send_message(chat_id, error)
-                        except Exception: pass
+                    await self._send_bot_msg(ctx, start_gs, error)
                 return
             handled = await self._userbot_transfer(ctx, event, gs, text, sender_id)
             if not handled:
@@ -601,8 +616,7 @@ class DeadRevolverPlugin(Plugin):
             if self._matches_start_keyword(gs2, text):
                 error = await self._start_existing_game(ctx, gs2, sender_id)
                 if error:
-                    try: await ctx.client.send_message(chat_id, error)
-                    except Exception: pass
+                    await self._send_bot_msg(ctx, gs2, error)
                 return
             if text.startswith("+"):
                 await self._userbot_join(ctx, event, gs2, sender_id, text)
@@ -622,14 +636,14 @@ class DeadRevolverPlugin(Plugin):
         lobby = self._render_lobby(gs)
         await self._update_lobby(ctx, gs, lobby)
         if gs.game_message_id is None:
-            try:
-                msg = await ctx.client.send_message(gs.chat_id, lobby)
-                gs.game_message_id = msg.id
-                try: await ctx.client.pin_message(gs.chat_id, msg.id)
-                except Exception: pass
-            except Exception: pass
-        try: await ctx.client.send_message(gs.chat_id, f"{html.escape(sender_name)} 已报名！当前 {len(gs.players)} 名玩家。")
-        except Exception: pass
+            await self._send_platform_message(
+                ctx,
+                gs,
+                lobby,
+                save_message_id_key=_interaction_msg_key(ctx.account_id, gs.chat_id),
+                pin=True,
+            )
+        await self._send_bot_msg(ctx, gs, f"{html.escape(sender_name)} 已报名！当前 {len(gs.players)} 名玩家。")
 
     async def _userbot_transfer(self, ctx: PluginContext, event: events.NewMessage.Event,
                                 gs: GameState, text: str, sender_id: int) -> bool:
@@ -849,34 +863,14 @@ class DeadRevolverPlugin(Plugin):
         prize = int(pool * 0.9 * _courage_multiplier(winner.courage)) if winner else 0
         result_text = self._render_result(gs, winner, pool, prize)
 
-        if gs.interaction_bot:
-            lobby_id = await self._resolve_lobby_id(ctx, gs)
-            if lobby_id:
-                await self._edit_bot_msg(ctx, gs, lobby_id, result_text)
-            if winner:
-                await self._send_bot_msg(ctx, gs, f"🏆 {html.escape(winner.display_name)} 获胜！勇气 {winner.courage}，奖金 +{prize}")
-            if winner and prize > 0:
-                await self._send_platform_payout(
-                    ctx,
-                    gs,
-                    prize,
-                    reply_to=winner.message_id,
-                )
-            await self._cleanup_messages(ctx, gs, lobby_id)
-        else:
-            if gs.game_message_id:
-                try: await ctx.client.edit_message(gs.chat_id, gs.game_message_id, result_text)
-                except Exception: pass
-            if winner and prize > 0:
-                try:
-                    if winner.message_id: await ctx.client.send_message(gs.chat_id, f"+{prize}", reply_to=winner.message_id)
-                    else: await ctx.client.send_message(gs.chat_id, f"+{prize}")
-                except Exception: pass
-            if gs.game_message_id:
-                try: await ctx.client.unpin_message(gs.chat_id, gs.game_message_id)
-                except Exception: pass
-                try: await ctx.client.delete_messages(gs.chat_id, gs.game_message_id)
-                except Exception: pass
+        lobby_id = await self._resolve_lobby_id(ctx, gs)
+        if lobby_id:
+            await self._edit_bot_msg(ctx, gs, lobby_id, result_text)
+        if winner:
+            await self._send_bot_msg(ctx, gs, f"🏆 {html.escape(winner.display_name)} 获胜！勇气 {winner.courage}，奖金 +{prize}")
+        if winner and prize > 0:
+            await self._send_platform_payout(ctx, gs, prize, reply_to=winner.message_id)
+        await self._cleanup_messages(ctx, gs, lobby_id)
 
         if gs.interaction_bot:
             await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
@@ -892,34 +886,15 @@ class DeadRevolverPlugin(Plugin):
         if refund_players:
             cancel_text += f"\n📋 正在自动退还 {refund_count} 名玩家的门票费用（共 {total_refund}）…"
 
-        if gs.interaction_bot:
-            lobby_id = await self._resolve_lobby_id(ctx, gs)
-            if lobby_id:
-                await self._edit_bot_msg(ctx, gs, lobby_id, cancel_text)
-            await self._send_bot_msg(ctx, gs, f"⚠️ {html.escape(reason)}")
-            for p in refund_players:
-                await self._send_platform_payout(
-                    ctx,
-                    gs,
-                    p.paid,
-                    reply_to=p.message_id,
-                )
-            if refund_players:
-                await self._send_bot_msg(ctx, gs, f"✅ 已自动退还 {refund_count} 名玩家的门票费用。")
-            await self._cleanup_messages(ctx, gs, lobby_id)
-        else:
-            if gs.game_message_id:
-                try: await ctx.client.edit_message(gs.chat_id, gs.game_message_id, cancel_text)
-                except Exception: pass
-                try: await ctx.client.unpin_message(gs.chat_id, gs.game_message_id)
-                except Exception: pass
-                try: await ctx.client.delete_messages(gs.chat_id, gs.game_message_id)
-                except Exception: pass
-            for p in refund_players:
-                try:
-                    if p.message_id: await ctx.client.send_message(gs.chat_id, f"+{p.paid}", reply_to=p.message_id)
-                    else: await ctx.client.send_message(gs.chat_id, f"+{p.paid}")
-                except Exception: pass
+        lobby_id = await self._resolve_lobby_id(ctx, gs)
+        if lobby_id:
+            await self._edit_bot_msg(ctx, gs, lobby_id, cancel_text)
+        await self._send_bot_msg(ctx, gs, f"⚠️ {html.escape(reason)}")
+        for p in refund_players:
+            await self._send_platform_payout(ctx, gs, p.paid, reply_to=p.message_id)
+        if refund_players:
+            await self._send_bot_msg(ctx, gs, f"✅ 已自动退还 {refund_count} 名玩家的门票费用。")
+        await self._cleanup_messages(ctx, gs, lobby_id)
 
         if gs.interaction_bot:
             await _delete_saved_message_id(ctx, _interaction_msg_key(ctx.account_id, gs.chat_id))
@@ -958,20 +933,7 @@ class DeadRevolverPlugin(Plugin):
                 kwargs["channel"] = send_via
             await messages.send(**kwargs)
             return None
-        if ctx.client is None:
-            return None
-        try:
-            if edit_message_id is not None:
-                await ctx.client.edit_message(gs.chat_id, edit_message_id, txt)
-                return edit_message_id
-            msg = await ctx.client.send_message(gs.chat_id, txt, reply_to=reply_to)
-            msg_id = getattr(msg, "id", None)
-            if pin and msg_id is not None:
-                try: await ctx.client.pin_message(gs.chat_id, msg_id)
-                except Exception: pass
-            return _int_payload(msg_id)
-        except Exception:
-            return None
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台消息动作")
 
     async def _send_platform_payout(
         self,
@@ -981,28 +943,17 @@ class DeadRevolverPlugin(Plugin):
         *,
         reply_to: int | None = None,
     ) -> None:
-        action = {
-            "type": "payout",
-            "chat_id": gs.chat_id,
-            "amount": amount,
-            "text": f"+{amount}",
-            "parse_mode": "plain",
-            "reply_to_message_id": reply_to,
-        }
         messages = getattr(ctx, "messages", None)
-        apply = getattr(messages, "apply", None)
-        if callable(apply):
-            await apply([action], entry_key="join_paid_game")
-            return
-        actions = getattr(messages, "actions", None)
-        if isinstance(actions, list):
-            actions.append(action)
-            return
-        if ctx.client is not None:
-            try:
-                await ctx.client.send_message(gs.chat_id, f"+{amount}", reply_to=reply_to)
-            except Exception:
-                pass
+        payout = getattr(messages, "payout", None)
+        if not callable(payout):
+            raise RuntimeError("TelePilot ledger payout 不可用，拒绝直接发放或退款")
+        await payout(
+            chat_id=gs.chat_id,
+            amount=amount,
+            text=f"+{amount}",
+            parse_mode="plain",
+            reply_to_message_id=reply_to,
+        )
 
     async def _delete_platform_message(self, ctx: PluginContext, gs: GameState, msg_id: int,
                                        *, send_via: str | None = None) -> None:
@@ -1013,10 +964,7 @@ class DeadRevolverPlugin(Plugin):
                 kwargs["channel"] = send_via
             await messages.delete(**kwargs)
             return
-        if ctx.client is None:
-            return
-        try: await ctx.client.delete_messages(gs.chat_id, msg_id)
-        except Exception: pass
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台删除消息")
 
     async def _apply_message_actions(self, ctx: PluginContext, gs: GameState,
                                      actions: list[dict[str, Any]]) -> None:
@@ -1105,11 +1053,7 @@ class DeadRevolverPlugin(Plugin):
             msg_key = _interaction_msg_key(ctx.account_id, gs.chat_id)
             msg_id = await _read_saved_message_id(ctx, msg_key)
         if msg_id is None: return
-        if gs.interaction_bot:
-            await self._edit_bot_msg(ctx, gs, msg_id, text)
-        else:
-            try: await ctx.client.edit_message(gs.chat_id, msg_id, text)
-            except Exception: pass
+        await self._edit_bot_msg(ctx, gs, msg_id, text)
 
     def _receiver_names_from_entity(self, entity: Any) -> set[str]:
         names: set[str] = set()

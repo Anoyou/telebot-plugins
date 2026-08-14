@@ -97,6 +97,10 @@ class LotteryPlusPlugin(Plugin):
         if ctx.log:
             await ctx.log("info", "[lottery_plus] 已停止")
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        return await self.on_interaction(ctx, str(trigger.get("entry_key") or "start_lottery_plus"), payload)
+
     async def on_interaction(
         self,
         ctx: PluginContext,
@@ -362,7 +366,7 @@ class LotteryPlusPlugin(Plugin):
             return
 
         if not args:
-            await event.reply(self._render_help(), parse_mode="html")
+            await self._reply(ctx, event, self._render_help(), parse_mode="html")
             return
 
         action = args[0].strip().lower()
@@ -372,7 +376,7 @@ class LotteryPlusPlugin(Plugin):
         sender_name = public_entity_display_name(sender, default="玩家")
 
         if self._alias_hit("help", action):
-            await event.reply(self._render_help(), parse_mode="html")
+            await self._reply(ctx, event, self._render_help(), parse_mode="html")
             return
 
         lock = self._get_lock(chat_id)
@@ -381,46 +385,61 @@ class LotteryPlusPlugin(Plugin):
             self._ensure_auto_draw(chat_id, ctx)
 
             if self._alias_hit("buy", action):
-                await self._act_buy(event, st, sender_id, sender_name, rest)
+                await self._act_buy(ctx, event, st, sender_id, sender_name, rest)
                 return
             if self._alias_hit("my", action):
-                await self._act_my(event, st, sender_id)
+                await self._act_my(ctx, event, st, sender_id)
                 return
             if self._alias_hit("pool", action):
-                await event.reply(f"💰 第 {st.round_id} 期当前奖池：<b>{int(st.jackpot)}</b>", parse_mode="html")
+                await self._reply(ctx, event, f"💰 第 {st.round_id} 期当前奖池：<b>{int(st.jackpot)}</b>", parse_mode="html")
                 return
             if self._alias_hit("history", action):
-                await self._act_history(event, st, rest)
+                await self._act_history(ctx, event, st, rest)
                 return
             if self._alias_hit("stats", action):
-                await self._act_stats(event, st)
+                await self._act_stats(ctx, event, st)
                 return
             if self._alias_hit("hot", action):
-                await self._act_hot(event, st)
+                await self._act_hot(ctx, event, st)
                 return
 
             if not self._is_admin(sender_id, account_id):
-                await event.reply("❌ 该操作仅管理员可用", parse_mode="html")
+                await self._reply(ctx, event, "❌ 该操作仅管理员可用", parse_mode="html")
                 return
 
             if self._alias_hit("draw", action):
-                await self._draw_once(chat_id, event, st)
+                await self._draw_once(chat_id, event, st, ctx)
                 return
             if self._alias_hit("reset", action):
                 st.bets.clear()
-                await event.reply(f"🧹 已清空第 {st.round_id} 期全部注单", parse_mode="html")
+                await self._reply(ctx, event, f"🧹 已清空第 {st.round_id} 期全部注单", parse_mode="html")
                 return
             if self._alias_hit("sponsor", action):
-                await self._act_sponsor(event, st, rest, positive=True)
+                await self._act_sponsor(ctx, event, st, rest, positive=True)
                 return
             if self._alias_hit("unsponsor", action):
-                await self._act_sponsor(event, st, rest, positive=False)
+                await self._act_sponsor(ctx, event, st, rest, positive=False)
                 return
             if self._alias_hit("refund", action):
-                await self._act_refund(event, st, rest)
+                await self._act_refund(ctx, event, st, rest)
                 return
 
-            await event.reply(self._render_help(), parse_mode="html")
+            await self._reply(ctx, event, self._render_help(), parse_mode="html")
+
+    @staticmethod
+    async def _reply(ctx: PluginContext, event: Any, text: str, *, parse_mode: str = "html") -> Any:
+        messages = getattr(ctx, "messages", None)
+        send = getattr(messages, "send", None)
+        if not callable(send):
+            raise RuntimeError("平台 MessageOps 不可用，已拒绝发送消息")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+        message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
+        return await send(
+            chat_id=chat_id,
+            text=text,
+            parse_mode=parse_mode,
+            reply_to_message_id=message_id or None,
+        )
 
     def _render_help(self) -> str:
         tmpl = str(self._cfg.get("help_template", "{command}"))
@@ -444,11 +463,11 @@ class LotteryPlusPlugin(Plugin):
         }
         return self._render_template(tmpl, sample)
 
-    async def _act_buy(self, event: Any, st: RoundState, user_id: int, user_name: str, rest: list[str]) -> None:
+    async def _act_buy(self, ctx: PluginContext, event: Any, st: RoundState, user_id: int, user_name: str, rest: list[str]) -> None:
         if len(rest) < 2:
-            await event.reply(f"❌ 用法：{self._command_prefix()}{self._command} 买 号码 注数", parse_mode="html")
+            await self._reply(ctx, event, f"❌ 用法：{self._command_prefix()}{self._command} 买 号码 注数", parse_mode="html")
             return
-        await event.reply(self._place_bet(st, user_id, user_name, rest[0], rest[1]), parse_mode="html")
+        await self._reply(ctx, event, self._place_bet(st, user_id, user_name, rest[0], rest[1]), parse_mode="html")
 
     def _place_bet(self, st: RoundState, user_id: int, user_name: str, number_raw: Any, count_raw: Any) -> str:
         if not self._is_market_open():
@@ -499,8 +518,8 @@ class LotteryPlusPlugin(Plugin):
         }
         return self._render_template(tmpl, payload)
 
-    async def _act_my(self, event: Any, st: RoundState, user_id: int) -> None:
-        await event.reply(self._render_my(st, user_id), parse_mode="html")
+    async def _act_my(self, ctx: PluginContext, event: Any, st: RoundState, user_id: int) -> None:
+        await self._reply(ctx, event, self._render_my(st, user_id), parse_mode="html")
 
     def _render_my(self, st: RoundState, user_id: int) -> str:
         mine = [b for b in st.bets if b.user_id == user_id]
@@ -514,8 +533,8 @@ class LotteryPlusPlugin(Plugin):
         lines.append(f"\n合计扣款：<b>{total}</b>")
         return "\n".join(lines)
 
-    async def _act_history(self, event: Any, st: RoundState, rest: list[str]) -> None:
-        await event.reply(self._render_history(st, rest), parse_mode="html")
+    async def _act_history(self, ctx: PluginContext, event: Any, st: RoundState, rest: list[str]) -> None:
+        await self._reply(ctx, event, self._render_history(st, rest), parse_mode="html")
 
     def _render_history(self, st: RoundState, rest: list[str]) -> str:
         limit = int(self._cfg.get("history_show_limit", 5))
@@ -535,8 +554,8 @@ class LotteryPlusPlugin(Plugin):
             )
         return "\n".join(lines)
 
-    async def _act_stats(self, event: Any, st: RoundState) -> None:
-        await event.reply(self._render_stats(st), parse_mode="html")
+    async def _act_stats(self, ctx: PluginContext, event: Any, st: RoundState) -> None:
+        await self._reply(ctx, event, self._render_stats(st), parse_mode="html")
 
     def _render_stats(self, st: RoundState) -> str:
         users = len({b.user_id for b in st.bets})
@@ -550,8 +569,8 @@ class LotteryPlusPlugin(Plugin):
             f"🌊 当前奖池：{int(st.jackpot)}"
         )
 
-    async def _act_hot(self, event: Any, st: RoundState) -> None:
-        await event.reply(self._render_hot(st), parse_mode="html")
+    async def _act_hot(self, ctx: PluginContext, event: Any, st: RoundState) -> None:
+        await self._reply(ctx, event, self._render_hot(st), parse_mode="html")
 
     def _render_hot(self, st: RoundState) -> str:
         if not st.bets:
@@ -564,38 +583,48 @@ class LotteryPlusPlugin(Plugin):
             lines.append(f"号码 {number}: {cnt} 注")
         return "\n".join(lines)
 
-    async def _act_sponsor(self, event: Any, st: RoundState, rest: list[str], positive: bool) -> None:
+    async def _act_sponsor(self, ctx: PluginContext, event: Any, st: RoundState, rest: list[str], positive: bool) -> None:
         if not rest:
-            await event.reply("❌ 用法：赞助/取消赞助 金额", parse_mode="html")
+            await self._reply(ctx, event, "❌ 用法：赞助/取消赞助 金额", parse_mode="html")
             return
         try:
             amount = int(rest[0])
         except ValueError:
             amount = 0
         if amount <= 0:
-            await event.reply("❌ 金额必须大于 0", parse_mode="html")
+            await self._reply(ctx, event, "❌ 金额必须大于 0", parse_mode="html")
             return
         if positive:
             st.jackpot += amount
-            await event.reply(f"🎁 赞助成功 +{amount}，当前奖池 {int(st.jackpot)}", parse_mode="html")
+            await self._reply(ctx, event, f"🎁 已手工增加奖池 +{amount}（不触发收款），当前奖池 {int(st.jackpot)}", parse_mode="html")
         else:
             st.jackpot = max(0, st.jackpot - amount)
-            await event.reply(f"💸 已扣减 {amount}，当前奖池 {int(st.jackpot)}", parse_mode="html")
+            await self._reply(ctx, event, f"💸 已手工扣减奖池 {amount}（不触发付款），当前奖池 {int(st.jackpot)}", parse_mode="html")
 
-    async def _act_refund(self, event: Any, st: RoundState, rest: list[str]) -> None:
+    async def _act_refund(self, ctx: PluginContext, event: Any, st: RoundState, rest: list[str]) -> None:
         if not rest:
-            await event.reply("❌ 用法：退款 注单序号（从 1 开始）", parse_mode="html")
+            await self._reply(ctx, event, "❌ 用法：退款 注单序号（从 1 开始）", parse_mode="html")
             return
         try:
             idx = int(rest[0]) - 1
         except ValueError:
             idx = -1
         if idx < 0 or idx >= len(st.bets):
-            await event.reply("❌ 注单序号不存在", parse_mode="html")
+            await self._reply(ctx, event, "❌ 注单序号不存在", parse_mode="html")
             return
-        bet = st.bets.pop(idx)
+        bet = st.bets[idx]
+        await ctx.messages.payout(
+            chat_id=int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id),
+            amount=bet.cost,
+            text=f"♻️ 退回 {bet.cost}",
+            parse_mode="plain",
+            reply_to_user_id=bet.user_id,
+            reply_to_display_name=bet.user_name,
+            reply_to_search_limit=50,
+        )
+        st.bets.pop(idx)
         st.jackpot = max(0, st.jackpot - bet.cost)
-        await event.reply(
+        await self._reply(ctx, event,
             f"♻️ 已退款：{bet.user_name} 号码 {bet.number} 注数 {bet.count}，退回 {bet.cost}，当前奖池 {int(st.jackpot)}",
             parse_mode="html",
         )
@@ -617,11 +646,10 @@ class LotteryPlusPlugin(Plugin):
                 st = self._get_state(chat_id)
                 if not st.bets:
                     st.round_id += 1
-                    if ctx.client:
-                        try:
-                            await ctx.client.send_message(chat_id, f"📢 第 {st.round_id - 1} 期无投注，自动进入第 {st.round_id} 期。")
-                        except Exception:
-                            pass
+                    await ctx.messages.send(
+                        chat_id=chat_id,
+                        text=f"📢 第 {st.round_id - 1} 期无投注，自动进入第 {st.round_id} 期。",
+                    )
                     continue
                 await self._draw_once(chat_id, None, st, ctx)
 
@@ -646,35 +674,26 @@ class LotteryPlusPlugin(Plugin):
 
             for uid, amount in user_paid.items():
                 amount = min(amount, max_payout)
-                paid += amount
                 messages = getattr(ctx, "messages", None) if ctx is not None else None
-                apply_actions = getattr(messages, "apply", None)
-                if callable(apply_actions):
-                    try:
-                        await apply_actions(
-                            [
-                                {
-                                    "type": "payout",
-                                    "chat_id": chat_id,
-                                    "amount": amount,
-                                    "text": f"+{amount}",
-                                    "parse_mode": "plain",
-                                    "reply_to_user_id": uid,
-                                    "reply_to_search_limit": 50,
-                                }
-                            ],
-                            entry_key="start_lottery_plus",
-                        )
-                        continue
-                    except Exception:
-                        pass
-                if event is not None:
-                    await event.reply(f"+{amount}")
-                elif ctx and ctx.client:
-                    try:
-                        await ctx.client.send_message(chat_id, f"+{amount}")
-                    except Exception:
-                        pass
+                payout = getattr(messages, "payout", None)
+                if not callable(payout):
+                    if ctx is not None and ctx.log:
+                        await ctx.log("error", f"[lottery_plus] 缺少平台 payout 能力，已拒绝发放 {amount}")
+                    continue
+                try:
+                    await payout(
+                        chat_id=chat_id,
+                        amount=amount,
+                        text=f"+{amount}",
+                        parse_mode="plain",
+                        reply_to_user_id=uid,
+                        reply_to_search_limit=50,
+                    )
+                except Exception as exc:
+                    if ctx is not None and ctx.log:
+                        await ctx.log("error", f"[lottery_plus] 平台 payout 提交失败，未扣减奖池：{type(exc).__name__}: {exc}")
+                    continue
+                paid += amount
 
         st.jackpot = max(0, st.jackpot - paid)
         result = {
@@ -706,13 +725,8 @@ class LotteryPlusPlugin(Plugin):
         }
         msg = self._render_template(tmpl, payload)
 
-        if event is not None:
-            await event.reply(msg, parse_mode="html")
-        elif ctx and ctx.client:
-            try:
-                await ctx.client.send_message(chat_id, msg, parse_mode="html")
-            except Exception:
-                pass
+        if ctx is not None:
+            await ctx.messages.send(chat_id=chat_id, text=msg, parse_mode="html")
 
         st.round_id += 1
         st.bets.clear()

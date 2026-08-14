@@ -3,7 +3,7 @@
   "display_name": "sfl-byRBQ",
   "description": "贴纸跟随插件，在特定群组中自动跟随发送特定贴纸",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -18,6 +18,8 @@
   "permissions": [
     "send_message",
     "edit_message",
+    "delete_message",
+    "send_file",
     "read_chat"
   ],
   "config_schema": {

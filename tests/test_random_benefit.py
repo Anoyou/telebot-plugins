@@ -24,12 +24,13 @@ def _load_plugin_module():
         pass
 
     class PluginContext:
-        def __init__(self, *, config=None, account_id: int = 1, redis=None, client=None) -> None:
+        def __init__(self, *, config=None, account_id: int = 1, redis=None, client=None, messages=None) -> None:
             self.account_id = account_id
             self.feature_key = "random_benefit"
             self.config = config or {}
             self.redis = redis
             self.client = client
+            self.messages = messages
             self.log = None
 
     def register(cls):
@@ -130,6 +131,15 @@ class FakeCommandEvent(FakeDirectEvent):
     pass
 
 
+class FakeMessages:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    async def send(self, **kwargs):
+        self.sent.append(kwargs)
+        return kwargs
+
+
 class FakeClient:
     def __init__(self, *, me_id: int, entities: dict[int, object] | None = None) -> None:
         self.me_id = me_id
@@ -145,7 +155,7 @@ class FakeClient:
 
 
 class RandomBenefitPluginTest(unittest.TestCase):
-    def _ctx(self, *, client=None, **overrides):
+    def _ctx(self, *, client=None, messages=None, **overrides):
         config = {
             "start_command": "福利开启",
             "stop_command": "福利暂停",
@@ -156,13 +166,13 @@ class RandomBenefitPluginTest(unittest.TestCase):
             "default_enabled": True,
         }
         config.update(overrides)
-        return PluginContext(config=config, client=client)
+        return PluginContext(config=config, client=client, messages=messages or FakeMessages())
 
     def test_config_schema_declares_allowed_peer_selector_and_preview(self) -> None:
         manifest = json.loads((ROOT / "random_benefit" / "plugin.json").read_text())
         properties = manifest["config_schema"]["properties"]
 
-        self.assertEqual(manifest["version"], "1.5.3")
+        self.assertEqual(manifest["version"], "1.5.4")
         self.assertEqual(properties["allowed_chat_ids"]["x-ui-widget"], "allowed-peer-multi-select")
         self.assertEqual(properties["allowed_chat_ids"]["items"]["type"], "integer")
         self.assertEqual(properties["start_command"]["default"], "福利开启")
@@ -377,7 +387,11 @@ class RandomBenefitPluginTest(unittest.TestCase):
             with patch.object(plugin_module.random, "random", return_value=0):
                 await plugin.on_direct_message(ctx, event)
 
-            self.assertEqual(event.replies, ["送给 小明: +1-6666"])
+            self.assertEqual(event.replies, [])
+            self.assertEqual(
+                ctx.messages.sent,
+                [{"chat_id": -1001, "text": "送给 小明: +1-6666", "reply_to_message_id": 66}],
+            )
 
         asyncio.run(run_case())
 
@@ -419,7 +433,7 @@ class RandomBenefitPluginTest(unittest.TestCase):
 
             await plugin._legacy_command(ctx, event, "arg1", "arg2", "arg3")
 
-            self.assertEqual(event.replies, ["随机福利已暂停。"])
+            self.assertEqual([item["text"] for item in ctx.messages.sent], ["随机福利已暂停。"])
 
         asyncio.run(run_case())
 

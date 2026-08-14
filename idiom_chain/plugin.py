@@ -10,6 +10,7 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 from app.worker.command import current_command_prefix
@@ -1065,6 +1066,10 @@ class IdiomChainPlugin(Plugin):
             return [{"type": "end_session"}]
         return []
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        event = event_from_interaction_payload(payload)
+        return await self.on_interaction(ctx, str(event.trigger.get("entry_key") or "start_idiom_chain"), payload)
+
     async def _interaction_start(
         self,
         ctx: PluginContext,
@@ -1210,6 +1215,17 @@ class IdiomChainPlugin(Plugin):
         lines.append(f"限时 {game.timeout} 秒，直接发成语即可")
         return "\n".join(lines)
 
+    async def _legacy_reply(self, ctx: PluginContext, event: Any, text: str, *, parse_mode: str = "html") -> Any:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id or 0)
+        save_key = f"idiom_chain:{ctx.account_id}:{chat_id}:{time.time_ns()}"
+        await messages.send(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_to_message_id=int(getattr(event, "id", 0) or 0) or None, save_message_id_key=save_key)
+        sent_id = await messages.read_saved_message_id(save_key)
+        await messages.delete_saved_message_id(save_key)
+        return SimpleNamespace(id=sent_id or 0)
+
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
     ) -> None:
@@ -1222,19 +1238,19 @@ class IdiomChainPlugin(Plugin):
             async with self._get_lock(chat_id):
                 if chat_id in self._games:
                     self._games.pop(chat_id)
-                    await event.reply("📜 成语接龙已结束", parse_mode="html")
+                    await self._legacy_reply(ctx, event, "📜 成语接龙已结束", parse_mode="html")
             return
 
         prize = self._parse_prize(args)
         if prize <= 0:
             prefix = current_command_prefix(fallback=",")
-            await event.reply(f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
+            await self._legacy_reply(ctx, event, f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
             return
 
         # 开始新游戏
         async with self._get_lock(chat_id):
             if chat_id in self._games and self._games[chat_id].waiting:
-                await event.reply("已有进行中的接龙~", parse_mode="html")
+                await self._legacy_reply(ctx, event, "已有进行中的接龙~", parse_mode="html")
                 return
 
             starter = random.choice(random.choice(list(IDIOM_DB.values())))
@@ -1247,7 +1263,7 @@ class IdiomChainPlugin(Plugin):
             )
             self._games[chat_id] = game
 
-        msg = await event.reply(self._format_game_prompt(game), parse_mode="html")
+        msg = await self._legacy_reply(ctx, event, self._format_game_prompt(game), parse_mode="html")
         game.message_id = int(getattr(msg, "id", 0) or 0) or None
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, game.started_at)))
 
@@ -1279,7 +1295,7 @@ class IdiomChainPlugin(Plugin):
             last_char = game.current_idiom[-1]
             ok, reason = _validate_answer(text, last_char, game.used_idioms, self._forbidden_words, game.used_forbidden)
             if not ok:
-                await event.reply(f"❌ {reason}", parse_mode="html")
+                await self._legacy_reply(ctx, event, f"❌ {reason}", parse_mode="html")
                 return
 
             sender = await event.get_sender()
@@ -1334,26 +1350,17 @@ class IdiomChainPlugin(Plugin):
             return 0
 
     async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
-        text = f"+{prize}"
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
+        await ctx.messages.payout(
+            chat_id=chat_id, amount=prize, text=f"+{prize}", reply_to_message_id=message_id
+        )
 
     async def _edit_game_message(self, ctx: PluginContext, chat_id: int, game: ChainGame, text: str) -> None:
-        if not ctx.client or not game.message_id:
+        if not game.message_id:
             return
         try:
-            await ctx.client.edit_message(chat_id, game.message_id, text, parse_mode="html")
+            await ctx.messages.edit(
+                chat_id=chat_id, message_id=game.message_id, text=text, parse_mode="html"
+            )
         except Exception as exc:
             if ctx.log:
                 await ctx.log("warn", f"[idiom_chain] 题目消息更新失败：{type(exc).__name__}: {exc}")

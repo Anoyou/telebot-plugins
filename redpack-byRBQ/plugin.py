@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from app.worker.plugins.base import Plugin, PluginContext, register
+try:
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover - isolated unit-test stubs
+    event_from_interaction_payload = None  # type: ignore[assignment]
 
 
 DEFAULT_COMMAND = "redpack"
@@ -203,8 +207,11 @@ async def _resolve_sender(event: Any) -> Any:
 
 
 class _NativeClientAdapter:
-    def __init__(self, raw_client: Any) -> None:
+    def __init__(self, ctx: PluginContext, raw_client: Any) -> None:
+        self._ctx = ctx
         self._client = raw_client
+        if getattr(ctx, "messages", None) is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台处理红包消息")
 
     async def get_me(self) -> Any:
         return await self._client.get_me()
@@ -218,37 +225,64 @@ class _NativeClientAdapter:
         return normalized
 
     async def send_message(self, chat_id: int, text: str, **kwargs: Any) -> Any:
-        return await self._client.send_message(chat_id, text, **self._normalize_send_kwargs(kwargs))
+        normalized = self._normalize_send_kwargs(kwargs)
+        return await self._ctx.messages.send(
+            chat_id=int(chat_id),
+            text=text,
+            parse_mode="html" if str(normalized.get("parse_mode") or "").lower() == "html" else "plain",
+            reply_to_message_id=normalized.get("reply_to"),
+        )
+
+    async def payout(self, chat_id: int, amount: int, **kwargs: Any) -> Any:
+        normalized = self._normalize_send_kwargs(kwargs)
+        return await self._ctx.messages.payout(
+            chat_id=int(chat_id),
+            amount=int(amount),
+            text=normalized.get("text"),
+            parse_mode="html" if str(normalized.get("parse_mode") or "").lower() == "html" else "plain",
+            reply_to_message_id=normalized.get("reply_to"),
+            reply_to_user_id=normalized.get("reply_to_user_id"),
+        )
 
     async def send_photo(self, chat_id: int, photo: Any, **kwargs: Any) -> Any:
         kwargs = self._normalize_send_kwargs(kwargs)
-        send_file = _get_client_method(self._client, "send_file")
-        if send_file is not None:
-            kwargs.setdefault("force_document", False)
-            return await send_file(chat_id, _telegram_file(photo), **kwargs)
-        send_photo = _get_client_method(self._client, "send_photo")
-        if send_photo is not None:
-            return await send_photo(chat_id, photo, **kwargs)
-        raise PermissionError("当前客户端没有可用的 send_file/send_photo 能力")
+        source = _telegram_file(photo)
+        if isinstance(source, io.BytesIO):
+            payload = source.getvalue()
+            filename = getattr(source, "name", "redpack.png")
+        elif isinstance(source, (bytes, bytearray, memoryview)):
+            payload = bytes(source)
+            filename = "redpack.png"
+        else:
+            raise TypeError("红包图片必须是本地文件或字节数据")
+        return await self._ctx.messages.send_photo(
+            chat_id=int(chat_id),
+            photo=payload,
+            filename=filename,
+            caption=kwargs.get("caption"),
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+            reply_to_message_id=kwargs.get("reply_to"),
+        )
 
     async def edit_message_caption(self, chat_id: int, message_id: int, caption: str, **kwargs: Any) -> Any:
-        edit_caption = _get_client_method(self._client, "edit_message_caption")
-        if edit_caption is not None:
-            return await edit_caption(chat_id, message_id, caption, **kwargs)
-        return await self._client.edit_message(chat_id, message_id, caption, **kwargs)
+        return await self._ctx.messages.edit_caption(
+            chat_id=int(chat_id), message_id=int(message_id), caption=caption,
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+        )
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, **kwargs: Any) -> Any:
-        edit_text = _get_client_method(self._client, "edit_message_text")
-        if edit_text is not None:
-            return await edit_text(chat_id, message_id, text, **kwargs)
-        return await self._client.edit_message(chat_id, message_id, text, **kwargs)
+        return await self._ctx.messages.edit(
+            chat_id=int(chat_id), message_id=int(message_id), text=text,
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._client, name)
 
 
 class _NativeMessageAdapter:
-    def __init__(self, event: Any, args: list[str] | None = None, sender: Any = None) -> None:
+    def __init__(self, ctx: PluginContext, event: Any, args: list[str] | None = None, sender: Any = None) -> None:
+        self._ctx = ctx
         self._event = event
         self._message = _event_message(event)
         self._sender = sender
@@ -260,11 +294,13 @@ class _NativeMessageAdapter:
         return result
 
     async def _respond(self, text: str, **kwargs: Any) -> Any:
-        for method_name in ("respond", "reply"):
-            method = getattr(self._event, method_name, None)
-            if callable(method):
-                return self._remember_result_message(await method(text, **kwargs))
-        return None
+        result = await self._ctx.messages.send(
+            chat_id=_chat_id(self._event),
+            text=text,
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+            reply_to_message_id=getattr(self._event, "id", None),
+        )
+        return self._remember_result_message(result)
 
     @property
     def id(self) -> Any:
@@ -330,28 +366,25 @@ class _NativeMessageAdapter:
     async def edit(self, text: str, **kwargs: Any) -> Any:
         if not _is_outgoing_event(self._event):
             return await self._respond(text, **kwargs)
-        edit = getattr(self._event, "edit", None)
-        if callable(edit):
-            return self._remember_result_message(await edit(text, **kwargs))
-        return await self._respond(text, **kwargs)
+        message_id = self.id
+        if message_id is None:
+            return await self._respond(text, **kwargs)
+        result = await self._ctx.messages.edit(
+            chat_id=_chat_id(self._event), message_id=int(message_id), text=text,
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+        )
+        return self._remember_result_message(result)
 
     async def delete(self) -> Any:
-        delete = getattr(self._event, "delete", None) or getattr(self._message, "delete", None)
-        if callable(delete):
-            return await delete()
-        return None
+        if self.id is None:
+            return None
+        return await self._ctx.messages.delete(chat_id=_chat_id(self._event), message_id=int(self.id))
 
     async def reply(self, text: str, **kwargs: Any) -> Any:
-        reply = getattr(self._event, "reply", None)
-        if callable(reply):
-            return self._remember_result_message(await reply(text, **kwargs))
-        return await self.edit(text, **kwargs)
+        return await self._respond(text, **kwargs)
 
     async def click(self, row: int, col: int) -> Any:
-        click = getattr(self._event, "click", None) or getattr(self._message, "click", None)
-        if callable(click):
-            return await click(row, col)
-        return None
+        raise RuntimeError("TelePilot 0.97.0 未提供该资金确认按钮的受控动作，已拒绝直连点击")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._message, name)
@@ -386,6 +419,15 @@ class RedpackByRBQPlugin(Plugin):
     async def on_shutdown(self, ctx: PluginContext) -> None:
         if ctx.log:
             await ctx.log("info", "[redpack-byRBQ] 已停止")
+
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        event = event_from_interaction_payload(payload) if event_from_interaction_payload is not None else None
+        trigger = event.trigger if event is not None else (payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {})
+        return await self.on_interaction(
+            ctx,
+            str(trigger.get("entry_key") or "start_redpack"),
+            payload,
+        )
 
     async def on_interaction(
         self,
@@ -436,8 +478,8 @@ class RedpackByRBQPlugin(Plugin):
             return
         self._bind_core_config(account_id)
         self._apply_core_settings(ctx)
-        message = _NativeMessageAdapter(event, args)
-        bot = _NativeClientAdapter(command_client)
+        message = _NativeMessageAdapter(ctx, event, args)
+        bot = _NativeClientAdapter(ctx, command_client)
         await redpack_core.redpack_command(message, bot)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
@@ -445,8 +487,6 @@ class RedpackByRBQPlugin(Plugin):
             return
         self._bind_core_config(ctx.account_id)
         self._apply_core_settings(ctx)
-        message = _NativeMessageAdapter(event, sender=await _resolve_sender(event))
-        bot = _NativeClientAdapter(ctx.client)
+        message = _NativeMessageAdapter(ctx, event, sender=await _resolve_sender(event))
+        bot = _NativeClientAdapter(ctx, ctx.client)
         await redpack_core.redpack_claim_listener(message, bot)
-        if not _is_outgoing_event(event):
-            await redpack_core.redpack_transfer_confirm_listener(message, bot)

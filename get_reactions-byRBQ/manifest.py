@@ -35,12 +35,12 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="get_reactions-byRBQ",
     display_name="get_reactions-byRBQ",
-    version="1.0.7",
+    version="1.0.8",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="表情获取辅助命令，用于测试环境是否支持自定义表情反应",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat"],
 
     category="utility",
     interaction_entries=[],

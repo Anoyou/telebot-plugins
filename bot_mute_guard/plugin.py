@@ -561,11 +561,13 @@ class BotMuteGuardPlugin(Plugin):
         reason: str,
         sender_id: int,
     ) -> bool:
-        if ctx.client is None:
-            await self._log(ctx, "error", "ctx.client 未初始化，无法删除消息", chat_id, message_id, sender_id)
+        messages = getattr(ctx, "messages", None)
+        delete = getattr(messages, "delete", None)
+        if not callable(delete):
+            await self._log(ctx, "error", "平台 MessageOps 不可用，无法删除消息", chat_id, message_id, sender_id)
             return False
         try:
-            await ctx.client.delete_messages(chat_id, message_id)
+            await delete(chat_id=chat_id, message_id=message_id)
         except PermissionError as exc:
             await self._log(
                 ctx,
@@ -591,10 +593,12 @@ class BotMuteGuardPlugin(Plugin):
         return True
 
     async def _send_notice(self, ctx: PluginContext, chat_id: int, reason: str) -> None:
-        if ctx.client is None:
+        messages = getattr(ctx, "messages", None)
+        send = getattr(messages, "send", None)
+        if not callable(send):
             return
         try:
-            await ctx.client.send_message(chat_id, f"已删除疑似 Bot 广告触发消息：{reason}")
+            await send(chat_id=chat_id, text=f"已删除疑似 Bot 广告触发消息：{reason}")
         except PermissionError as exc:
             await self._log(ctx, "error", f"缺少 send_message 权限，无法发送提示：{exc}", chat_id, None, 0)
         except Exception as exc:  # noqa: BLE001

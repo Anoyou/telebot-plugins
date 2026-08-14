@@ -19,7 +19,6 @@ except Exception:  # pragma: no cover - older runtimes
 
 from app.worker.plugins.base import Plugin, PluginContext, register
 
-PLUGIN_VERSION = "0.1.11"
 DEFAULT_COMMAND = "ask"
 MAX_TELEGRAM_TEXT = 3900
 HISTORY_TTL_SECONDS = 6 * 60 * 60
@@ -461,28 +460,23 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-async def _safe_edit(event: Any, text: str) -> Any:
-    edit = getattr(event, "edit", None)
-    if edit is None:
-        return event
-    try:
-        out = edit(text)
-        return await _maybe_await(out)
-    except Exception:
-        return event
+async def _safe_edit(ctx: PluginContext, event: Any, text: str) -> Any:
+    chat_id = _event_chat_id(event)
+    message_id = _message_id(event)
+    messages = getattr(ctx, "messages", None)
+    if chat_id is None or message_id is None or messages is None:
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台编辑消息")
+    return await messages.edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode="plain")
 
 
 async def _send_text(ctx: PluginContext, event: Any, text: str, *, reply_to: int | None = None) -> None:
     chat_id = _event_chat_id(event)
     if chat_id is None:
         return
-    client = getattr(ctx, "client", None)
-    if client is None:
-        return
-    kwargs: dict[str, Any] = {}
-    if reply_to is not None:
-        kwargs["reply_to"] = reply_to
-    await client.send_message(chat_id, text, **kwargs)
+    messages = getattr(ctx, "messages", None)
+    if messages is None:
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝绕过平台发送消息")
+    await messages.send(chat_id=chat_id, text=text, parse_mode="plain", reply_to_message_id=reply_to)
 
 
 async def _trigger_message_available(ctx: PluginContext, event: Any) -> bool:
@@ -689,13 +683,13 @@ class AIChatPlugin(Plugin):
         cfg = _cfg(ctx)
         sub = (args[0].lower() if args else "").strip()
         if sub in {"help", "-h", "--help", "帮助"}:
-            await _safe_edit(event, self._help_text(cfg))
+            await _safe_edit(ctx, event, self._help_text(cfg))
             return
         if sub in {"reset", "clear", "forget", "清空", "重置"}:
             chat_id = _event_chat_id(event)
             if chat_id is not None:
                 self._history.pop(self._history_key(ctx, chat_id), None)
-            await _safe_edit(event, "已清空当前会话记忆。")
+            await _safe_edit(ctx, event, "已清空当前会话记忆。")
             return
         if sub in {"providers", "provider", "llm", "模型"}:
             await self._cmd_providers(event, ctx)
@@ -709,12 +703,12 @@ class AIChatPlugin(Plugin):
         reply = await _get_reply_message(event)
         reply_text = _message_text(reply)
         if not query and not reply_text:
-            await _safe_edit(event, self._help_text(cfg))
+            await _safe_edit(ctx, event, self._help_text(cfg))
             return
 
         content = self._build_command_content(query, reply_text)
         prompt = self._build_explain_prompt(cfg, content)
-        await _safe_edit(event, "正在调用 AI，请稍等...")
+        await _safe_edit(ctx, event, "正在调用 AI，请稍等...")
         try:
             answer = await self._call_ai(
                 ctx,
@@ -725,13 +719,13 @@ class AIChatPlugin(Plugin):
                 source="plugin:ai-chat:command",
             )
         except Exception as exc:  # noqa: BLE001
-            await _safe_edit(event, _classify_ai_error(exc))
+            await _safe_edit(ctx, event, _classify_ai_error(exc))
             return
 
         answer = _guard_ai_output(ctx, cfg, answer)
         answer = _trim_text(answer, cfg["max_output_chars"])
         chunks = _split_text(answer or "AI 未返回内容。")
-        await _safe_edit(event, chunks[0])
+        await _safe_edit(ctx, event, chunks[0])
         for chunk in chunks[1:]:
             await _send_text(ctx, event, chunk)
 
@@ -739,15 +733,15 @@ class AIChatPlugin(Plugin):
         ai = getattr(ctx, "ai", None)
         list_providers = getattr(ai, "list_providers", None) if ai is not None else None
         if list_providers is None:
-            await _safe_edit(event, "当前插件上下文未提供 Provider 列表接口；请在 TelePilot 的 AI Provider 设置页查看。")
+            await _safe_edit(ctx, event, "当前插件上下文未提供 Provider 列表接口；请在 TelePilot 的 AI Provider 设置页查看。")
             return
         try:
             providers = list(await _maybe_await(list_providers()) or [])
         except Exception as exc:  # noqa: BLE001
-            await _safe_edit(event, _classify_ai_error(exc))
+            await _safe_edit(ctx, event, _classify_ai_error(exc))
             return
         if not providers:
-            await _safe_edit(event, "TelePilot 尚未配置任何 AI Provider。")
+            await _safe_edit(ctx, event, "TelePilot 尚未配置任何 AI Provider。")
             return
         lines = ["TelePilot 可用 AI Provider", ""]
         for provider in providers:
@@ -760,7 +754,7 @@ class AIChatPlugin(Plugin):
             lines.append(f"{provider_id} {name}")
             lines.append(f"默认模型: {model} / 标签: {tag_text}")
             lines.append("")
-        await _safe_edit(event, "\n".join(lines).strip())
+        await _safe_edit(ctx, event, "\n".join(lines).strip())
 
     async def _cmd_model_test(
         self,
@@ -769,7 +763,7 @@ class AIChatPlugin(Plugin):
         cfg: dict[str, Any],
         test_prompt: str,
     ) -> None:
-        await _safe_edit(event, "正在测试 AI-Chat 模型，请稍等...")
+        await _safe_edit(ctx, event, "正在测试 AI-Chat 模型，请稍等...")
         started = time.perf_counter()
         try:
             answer = await self._call_ai(
@@ -789,7 +783,7 @@ class AIChatPlugin(Plugin):
                 provider=cfg["telepilot_provider"] or "auto",
                 model=cfg["telepilot_model"] or "default",
             )
-            await _safe_edit(event, f"AI-Chat 模型不可用\n\n{error_text}")
+            await _safe_edit(ctx, event, f"AI-Chat 模型不可用\n\n{error_text}")
             return
 
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -804,6 +798,7 @@ class AIChatPlugin(Plugin):
             latency_ms=latency_ms,
         )
         await _safe_edit(
+            ctx,
             event,
             "\n".join(
                 [
@@ -1164,4 +1159,4 @@ class AIChatPlugin(Plugin):
         )
 
 
-__all__ = ["AIChatPlugin", "PLUGIN_VERSION"]
+__all__ = ["AIChatPlugin"]

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.18 (2026-08-15)
+- 新增标准 Event Bus 主入口；奖励与题面编辑统一改走 MessageOps。
+
 ## 1.0.17 (2026-08-15)
 - 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
 

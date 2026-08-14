@@ -27,11 +27,15 @@ from app.worker.plugins.base import (
     resolve_public_sender_identity,
     sanitize_public_display_name,
 )
+try:
+    from app.worker.plugins.events import event_from_interaction_payload
+except ImportError:  # pragma: no cover - isolated unit-test stubs
+    event_from_interaction_payload = None  # type: ignore[assignment]
 
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.41"
+PLUGIN_VERSION = "0.1.42"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -643,7 +647,29 @@ class AIRedpacketPlugin(Plugin):
         await self._log(ctx, "info", "AI 答题红包插件已停止", version=PLUGIN_VERSION)
 
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        return await self.on_interaction(ctx, ENTRY_KEY, payload)
+        if event_from_interaction_payload is None:
+            return await self.on_interaction(ctx, ENTRY_KEY, payload)
+        event = event_from_interaction_payload(payload)
+        canonical = dict(payload)
+        canonical["source"] = {
+            "type": event.type,
+            "channel": event.source_channel,
+            "synthetic": event.source_synthetic,
+        }
+        canonical["message"] = {
+            "chat_id": event.message.chat_id,
+            "message_id": event.message.message_id,
+            "text": event.message.text,
+            "reply_to_message_id": event.message.reply_to_message_id,
+        }
+        canonical["actor"] = {
+            "user_id": event.actor.user_id,
+            "display_name": event.actor.display_name,
+            "username": event.actor.username,
+        }
+        if event.callback is not None:
+            canonical["callback_query"] = {"id": event.callback.id, "data": event.callback.data}
+        return await self.on_interaction(ctx, ENTRY_KEY, canonical)
 
     async def on_interaction(self, ctx: PluginContext, entry_key: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
         self._ensure_storage(ctx)

@@ -24,6 +24,46 @@ def _load_plugin_module():
     class Plugin:
         pass
 
+    class MessageOps:
+        def __init__(self, ctx) -> None:
+            self.ctx = ctx
+
+        async def send(self, **kwargs):
+            kwargs = dict(kwargs)
+            chat_id = kwargs.pop("chat_id")
+            text = kwargs.pop("text")
+            reply_to = kwargs.pop("reply_to_message_id", None)
+            kwargs.pop("save_message_id_key", None)
+            kwargs.pop("replace_saved_message_id_key", None)
+            if reply_to is not None:
+                kwargs["reply_to"] = reply_to
+            return await self.ctx.client.send_message(chat_id, text, **kwargs)
+
+        async def payout(self, **kwargs):
+            kwargs = dict(kwargs)
+            kwargs.pop("amount", None)
+            return await self.send(**kwargs)
+
+        async def send_photo(self, **kwargs):
+            kwargs = dict(kwargs)
+            chat_id = kwargs.pop("chat_id")
+            photo = kwargs.pop("photo")
+            kwargs.pop("save_message_id_key", None)
+            reply_to = kwargs.pop("reply_to_message_id", None)
+            if reply_to is not None:
+                kwargs["reply_to"] = reply_to
+            return await self.ctx.client.send_file(chat_id, photo, **kwargs)
+
+        async def edit(self, **kwargs):
+            kwargs = dict(kwargs)
+            chat_id = kwargs.pop("chat_id")
+            message_id = kwargs.pop("message_id")
+            text = kwargs.pop("text")
+            return await self.ctx.client.edit_message(chat_id, message_id, text, **kwargs)
+
+        async def delete(self, **kwargs):
+            return await self.ctx.client.delete_messages(kwargs["chat_id"], [kwargs["message_id"]])
+
     class PluginContext:
         def __init__(self, account_id: int = 1, redis=None) -> None:
             self.account_id = account_id
@@ -32,7 +72,7 @@ def _load_plugin_module():
             self.config = {}
             self.client = None
             self.redis = redis
-            self.messages = None
+            self.messages = MessageOps(self)
             self.data_dir = Path(os.environ["LUCKY_REDPACK_TEST_DATA_DIR"])
 
     def register(cls):
@@ -324,7 +364,10 @@ class LuckyRedpackTest(unittest.TestCase):
 
             self.assertEqual(len(ctx.client.sent), 3)
             self.assertEqual(ctx.client.edited, [])
-            self.assertEqual(ctx.client.deleted[0]["message_ids"], [old_redpack_message_id])
+            self.assertIn(
+                old_redpack_message_id,
+                [message_id for item in ctx.client.deleted for message_id in item["message_ids"]],
+            )
             self.assertNotEqual(pack.current_password, first_password)
             self.assertIn("财富密码：", ctx.client.sent[2]["text"])
             self.assertIn("<blockquote expandable>领取详情：", ctx.client.sent[2]["text"])
@@ -535,7 +578,10 @@ class LuckyRedpackTest(unittest.TestCase):
                 self.assertIn("财富密码：见图片", ctx.client.files[0]["caption"])
                 self.assertNotIn(pack.current_password, ctx.client.files[0]["caption"])
                 self.assertEqual(ctx.client.files[0]["parse_mode"], "html")
-                self.assertTrue(command_event.deleted)
+                self.assertIn(
+                    command_event.id,
+                    [message_id for item in ctx.client.deleted for message_id in item["message_ids"]],
+                )
             finally:
                 plugin_module.build_password_image = original_builder
                 fake_path = ROOT / "tests" / "_fake_lucky_redpack.png"
@@ -686,7 +732,10 @@ class LuckyRedpackTest(unittest.TestCase):
             self.assertRegex(actions[0]["text"], r"^\+\d+$")
             await asyncio.sleep(0.01)
 
-            self.assertEqual(ctx.client.deleted[0]["message_ids"], [old_redpack_message_id])
+            self.assertIn(
+                old_redpack_message_id,
+                [message_id for item in ctx.client.deleted for message_id in item["message_ids"]],
+            )
             self.assertIn("领取详情", ctx.client.sent[-1]["text"])
 
             await plugin.on_shutdown(ctx)

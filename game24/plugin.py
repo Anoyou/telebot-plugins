@@ -30,7 +30,7 @@ MAX_TIMEOUT = 3600
 INTERACTION_GAME_PREFIX = "game:"
 INTERACTION_GAME_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.1.13"
+PLUGIN_VERSION = "1.1.14"
 
 
 # ─────────────────────────────────────────────────────
@@ -583,6 +583,10 @@ class Game24Plugin(Plugin):
             return await self._handle_interaction_close(ctx, chat_id)
         return []
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        event = event_from_interaction_payload(payload)
+        return await self.on_interaction(ctx, str(event.trigger.get("entry_key") or "start_game24"), payload)
+
     async def _handle_interaction_start(
         self,
         ctx: PluginContext,
@@ -829,7 +833,10 @@ class Game24Plugin(Plugin):
 
         prize = self._parse_prize(args)
         if prize <= 0:
-            await event.edit(
+            await ctx.messages.edit(
+                chat_id=_event_chat_id(event),
+                message_id=_event_message_id(event),
+                text=
                 f"⚠️ 请指定奖金金额，例如：{current_command_prefix()}{self._config.command} 2000"
             )
             return
@@ -850,12 +857,12 @@ class Game24Plugin(Plugin):
         async with lock:
             active = self._games.get(chat_id)
             if active and active.active:
-                await event.edit("⚠️ 当前已有进行中的 24 点游戏，请先答完再开新局。")
+                await ctx.messages.edit(chat_id=chat_id, message_id=trigger_msg_id, text="⚠️ 当前已有进行中的 24 点游戏，请先答完再开新局。")
                 return
 
             numbers = generate_24_puzzle()
             try:
-                await event.edit(self._render_start_message(numbers, prize))
+                await ctx.messages.edit(chat_id=chat_id, message_id=trigger_msg_id, text=self._render_start_message(numbers, prize), parse_mode="html")
             except Exception as exc:
                 await self._log(
                     ctx,
@@ -1039,115 +1046,17 @@ class Game24Plugin(Plugin):
             )
             return True
 
-        def _send_fail_hint(exc: Exception) -> str:
-            name = type(exc).__name__
-            msg = str(exc)
-            if "ChatWriteForbidden" in name or "CHAT_WRITE_FORBIDDEN" in msg.upper():
-                return "当前账号在该会话无发言权限（常见于频道评论区/被禁言）。"
-            if "MessageIdInvalid" in name or "REPLY_MESSAGE_ID_INVALID" in msg.upper():
-                return "引用的消息不可回复（消息已删除/不可见/跨会话）。"
-            if "SlowModeWait" in name:
-                return "会话处于慢速模式，当前发送被限流。"
-            if "FloodWait" in name:
-                seconds = getattr(exc, "seconds", None)
-                return f"触发 FloodWait，需等待 {seconds or '?'} 秒。"
-            return "请检查会话权限、发言限制和消息可见性。"
-        reply = getattr(event, "reply", None)
-        if callable(reply):
-            try:
-                await reply(prize_text)
-                await self._log(
-                    ctx,
-                    "info",
-                    f"24 点游戏奖励已发出：已回复 {msg.sender_name} 的答案消息，内容 {prize_text}。",
-                    chat_id=gs.chat_id,
-                    sender_id=msg.sender_id,
-                    winner_msg_id=msg.message_id,
-                    send_method="event.reply",
-                )
-                return True
-            except Exception as exc:
-                await self._log(
-                    ctx,
-                    "warn",
-                    (
-                        f"24 点游戏用 reply 发奖失败，准备改用 send_message 兜底。"
-                        f"原因：{type(exc).__name__}: {exc}。提示：{_send_fail_hint(exc)}"
-                    ),
-                    chat_id=gs.chat_id,
-                    sender_id=msg.sender_id,
-                    winner_msg_id=msg.message_id,
-                    send_method="event.reply",
-                    exc_type=type(exc).__name__,
-                    exc_repr=repr(exc),
-                    hint=_send_fail_hint(exc),
-                )
-
-        if msg.message_id is not None:
-            try:
-                await ctx.client.send_message(
-                    entity=gs.chat_id,
-                    message=prize_text,
-                    reply_to=msg.message_id,
-                )
-                await self._log(
-                    ctx,
-                    "info",
-                    f"24 点游戏奖励已发出：已回复答案消息 {msg.message_id}，内容 {prize_text}。",
-                    chat_id=gs.chat_id,
-                    sender_id=msg.sender_id,
-                    winner_msg_id=msg.message_id,
-                    send_method="client.send_message.reply_to",
-                )
-                return True
-            except Exception as exc:
-                await self._log(
-                    ctx,
-                    "warn",
-                    (
-                        "24 点游戏用 reply_to 发奖失败，准备改成普通消息发送。"
-                        f"频道/匿名频道消息经常会走到这里。原因：{type(exc).__name__}: {exc}。"
-                        f"提示：{_send_fail_hint(exc)}"
-                    ),
-                    chat_id=gs.chat_id,
-                    sender_id=msg.sender_id,
-                    winner_msg_id=msg.message_id,
-                    send_method="client.send_message.reply_to",
-                    exc_type=type(exc).__name__,
-                    exc_repr=repr(exc),
-                    hint=_send_fail_hint(exc),
-                )
-
-        try:
-            await ctx.client.send_message(entity=gs.chat_id, message=prize_text)
-            await self._log(
-                ctx,
-                "info",
-                f"24 点游戏奖励已发出：已向聊天 {gs.chat_id} 发送普通消息 {prize_text}。没有引用回复，但奖励没有丢。",
-                chat_id=gs.chat_id,
-                sender_id=msg.sender_id,
-                winner_msg_id=msg.message_id,
-                send_method="client.send_message.plain",
-            )
-            return True
-        except Exception as exc:
-            await self._log(
-                ctx,
-                "error",
-                (
-                    f"24 点游戏发奖失败：已经识别 {msg.sender_name} 答对，但奖励消息 {prize_text} 没发出去。"
-                    f"原因：{type(exc).__name__}: {exc}。提示：{_send_fail_hint(exc)}"
-                ),
-                chat_id=gs.chat_id,
-                sender_id=msg.sender_id,
-                winner_msg_id=msg.message_id,
-                prize=gs.prize,
-                send_method="client.send_message",
-                exc_type=type(exc).__name__,
-                exc_repr=repr(exc),
-                hint=_send_fail_hint(exc),
-            )
-            return False
+        await self._log(
+            ctx,
+            "error",
+            "24 点游戏奖励未提交：TelePilot ledger payout 不可用，已拒绝直接发奖兜底。",
+            chat_id=gs.chat_id,
+            sender_id=msg.sender_id,
+            winner_msg_id=msg.message_id,
+            prize=gs.prize,
+            send_method="fail_closed",
+        )
+        return False
 
     # ── 超时处理 ─────────────────────────────
     async def _game_timeout(self, ctx: PluginContext, gs: GameState) -> None:
@@ -1215,9 +1124,9 @@ class Game24Plugin(Plugin):
         try:
             msg_obj = await ctx.client.get_messages(gs.chat_id, ids=gs.trigger_msg_id)
             original = getattr(msg_obj, "text", None) or getattr(msg_obj, "raw_text", "") or ""
-            await ctx.client.edit_message(
-                entity=gs.chat_id,
-                message=gs.trigger_msg_id,
+            await ctx.messages.edit(
+                chat_id=gs.chat_id,
+                message_id=gs.trigger_msg_id,
                 text=f"{original}{suffix}",
             )
         except Exception as exc:

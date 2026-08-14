@@ -431,7 +431,7 @@ class SummaryPlugin(Plugin):
             rest = args[1:]
 
             if sub in {"help", "帮助"}:
-                await self._edit_or_reply(event, self._help_text(), parse_mode="html")
+                await self._edit_or_reply(ctx, event, self._help_text(), parse_mode="html")
                 return
             if sub == "prompts":
                 await self._show_prompts(event)
@@ -467,11 +467,11 @@ class SummaryPlugin(Plugin):
                 await self._quick_summary(event, args, ctx)
                 return
 
-            await self._edit_or_reply(event, self._help_text(), parse_mode="html")
+            await self._edit_or_reply(ctx, event, self._help_text(), parse_mode="html")
         except Exception as exc:
             if ctx.log:
                 await ctx.log("error", f"[sum] 命令执行失败：{type(exc).__name__}: {exc}")
-            await self._edit_or_reply(event, f"❌ 错误：{_html(exc)}", parse_mode="html")
+            await self._edit_or_reply(ctx, event, f"❌ 错误：{_html(exc)}", parse_mode="html")
 
     @staticmethod
     def _looks_like_quick_summary_args(args: list[str]) -> bool:
@@ -714,11 +714,11 @@ class SummaryPlugin(Plugin):
                 continue
             if arg in {"--time", "-time", "time"}:
                 if i + 1 >= len(args):
-                    await self._edit_command_message(event, "❌ --time 需要跟时间段，例如 1h / 1d / 30m")
+                    await self._edit_command_message(ctx, event, "❌ --time 需要跟时间段，例如 1h / 1d / 30m")
                     return
                 since_seconds = _duration_to_seconds(_normalize_cli_token(args[i + 1]))
                 if since_seconds <= 0:
-                    await self._edit_command_message(event, "❌ 时间段格式无效，支持 30m / 1h / 1d")
+                    await self._edit_command_message(ctx, event, "❌ 时间段格式无效，支持 30m / 1h / 1d")
                     return
                 i += 2
                 continue
@@ -736,23 +736,23 @@ class SummaryPlugin(Plugin):
         count = min(max(1, count), max_count)
         chat_id = str(_event_chat_id(event))
         if not chat_id or chat_id == "0":
-            await self._edit_command_message(event, "❌ 无法识别当前聊天。")
+            await self._edit_command_message(ctx, event, "❌ 无法识别当前聊天。")
             return
 
-        await self._edit_command_message(event, "⏳ 正在获取消息...")
+        await self._edit_command_message(ctx, event, "⏳ 正在获取消息...")
         chat_targets = await self._event_chat_targets(event, chat_id)
         message_data = await self._get_group_messages(ctx, chat_id, count, since_seconds=since_seconds, target=chat_targets)
         if not message_data:
-            await self._edit_command_message(event, "❌ 未找到可处理的消息")
+            await self._edit_command_message(ctx, event, "❌ 未找到可处理的消息")
             return
 
         if enable_cloud:
-            await self._edit_command_message(event, "⏳ 正在生成热词云...")
+            await self._edit_command_message(ctx, event, "⏳ 正在生成热词云...")
             cloud_ok, cloud_message = await self._maybe_send_wordcloud(ctx, event, message_data)
             if cloud_ok:
                 await self._delete_command_message(ctx, event)
             else:
-                await self._edit_command_message(event, f"❌ {cloud_message}")
+                await self._edit_command_message(ctx, event, f"❌ {cloud_message}")
             return
 
         db = await self._load_db()
@@ -767,11 +767,11 @@ class SummaryPlugin(Plugin):
         )
         result = await self._summarize_messages(ctx, task, message_data, db)
         if not result["success"]:
-            await self._edit_command_message(event, f"❌ {result['error']}")
+            await self._edit_command_message(ctx, event, f"❌ {result['error']}")
             return
 
         summary_text, need_html = self._build_summary_text(task, str(result["result"]), db)
-        await self._edit_command_message(event, summary_text, parse_mode="html" if need_html else None)
+        await self._edit_command_message(ctx, event, summary_text, parse_mode="html" if need_html else None)
 
     async def _maybe_send_wordcloud(self, ctx: PluginContext, event: Any, message_data: list[MessageData]) -> tuple[bool, str]:
         image_data, error = self._render_wordcloud_png(message_data)
@@ -1202,73 +1202,40 @@ class SummaryPlugin(Plugin):
         )
 
     async def _send_message(self, ctx: PluginContext, chat_id: Any, text: str, **kwargs: Any) -> Any:
-        if not ctx.client:
-            raise RuntimeError("Telegram 客户端未初始化")
-        clean_kwargs = {k: v for k, v in kwargs.items() if v is not None}
-        last_lookup_error: BaseException | None = None
-        for target in _target_candidates(chat_id):
-            try:
-                return await ctx.client.send_message(_telegram_target(target), text, **clean_kwargs)
-            except Exception as exc:
-                if _is_entity_lookup_error(exc):
-                    last_lookup_error = exc
-                    continue
-                raise
-        for target in await self._client_chat_targets(ctx, chat_id):
-            try:
-                return await ctx.client.send_message(_telegram_target(target), text, **clean_kwargs)
-            except Exception as exc:
-                if _is_entity_lookup_error(exc):
-                    last_lookup_error = exc
-                    continue
-                raise
-        if last_lookup_error is not None:
-            raise _chat_lookup_error(chat_id, last_lookup_error) from last_lookup_error
-        raise RuntimeError("无法识别发送目标")
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+        return await messages.send(
+            chat_id=int(chat_id), text=text,
+            parse_mode=kwargs.get("parse_mode") or "plain",
+            reply_to_message_id=kwargs.get("reply_to"),
+        )
 
-    async def _edit_or_reply(self, event: Any, text: str, *, parse_mode: str | None = None) -> None:
+    async def _edit_or_reply(self, ctx: PluginContext, event: Any, text: str, *, parse_mode: str | None = None) -> None:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝编辑消息")
+        chat_id = int(_event_chat_id(event))
+        message_id = _event_message_id(event)
         try:
-            await event.edit(text, parse_mode=parse_mode)
+            await messages.edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode=parse_mode or "plain")
             return
         except Exception:
-            pass
-        try:
-            await event.reply(text, parse_mode=parse_mode)
-        except Exception:
-            pass
+            await messages.send(chat_id=chat_id, text=text, parse_mode=parse_mode or "plain", reply_to_message_id=message_id)
 
-    async def _edit_command_message(self, event: Any, text: str, *, parse_mode: str | None = None) -> None:
-        try:
-            await event.edit(text, parse_mode=parse_mode)
-            return
-        except Exception:
-            if parse_mode:
-                await event.edit(text)
-                return
-            raise RuntimeError("当前消息无法编辑（已按你的要求禁用 reply 回退）")
+    async def _edit_command_message(self, ctx: PluginContext, event: Any, text: str, *, parse_mode: str | None = None) -> None:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝编辑消息")
+        await messages.edit(chat_id=int(_event_chat_id(event)), message_id=_event_message_id(event), text=text, parse_mode=parse_mode or "plain")
 
     async def _delete_command_message(self, ctx: PluginContext, event: Any) -> None:
-        # 优先走事件删除；失败再用客户端按 chat_id+message_id 强删。
-        try:
-            delete = getattr(event, "delete", None)
-            if callable(delete):
-                await delete()
-                return
-        except Exception as exc:
-            if ctx.log:
-                await ctx.log("warning", f"[sum] event.delete 失败：{type(exc).__name__}: {exc}")
         message_id = _event_message_id(event)
-        chat_id = str(_event_chat_id(event))
-        if not message_id or not chat_id or not ctx.client:
+        chat_id = int(_event_chat_id(event))
+        messages = getattr(ctx, "messages", None)
+        if not message_id or not chat_id or messages is None:
             return
-        try:
-            delete_messages = getattr(ctx.client, "delete_messages", None)
-            if callable(delete_messages):
-                await _maybe_await(delete_messages(_telegram_target(chat_id), [int(message_id)]))
-                return
-        except Exception as exc:
-            if ctx.log:
-                await ctx.log("warning", f"[sum] client.delete_messages 失败：{type(exc).__name__}: {exc}")
+        await messages.delete(chat_id=chat_id, message_id=int(message_id))
 
     async def _show_prompts(self, event: Any) -> None:
         prompts = [
@@ -1286,22 +1253,22 @@ class SummaryPlugin(Plugin):
             lines.append("")
         lines.append("使用方法：")
         lines.append(_code(f"{_command_prefix()}{self._command} config set prompt 您的提示词"))
-        await self._edit_or_reply(event, "\n".join(lines), parse_mode="html")
+        await self._edit_or_reply(ctx, event, "\n".join(lines), parse_mode="html")
 
     async def _debug_messages(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         count = max(1, min(_int(args[0], 50) if args else 50, _int(self._cfg.get("max_fetch_count"), 300)))
         chat_id = str(_event_chat_id(event))
-        await self._edit_or_reply(event, "⏳ 正在获取消息...")
+        await self._edit_or_reply(ctx, event, "⏳ 正在获取消息...")
         chat_targets = await self._event_chat_targets(event, chat_id)
         data = await self._get_group_messages(ctx, chat_id, count, target=chat_targets)
         if not data:
-            await self._edit_or_reply(event, "❌ 未找到消息")
+            await self._edit_or_reply(ctx, event, "❌ 未找到消息")
             return
         formatted = self._format_messages_for_ai(data)
         preview = formatted[-2000:]
         if len(formatted) > 2000:
             preview = "...(前面省略)...\n\n" + preview
-        await self._edit_or_reply(event, f"📋 发送给 AI 的文本预览（最后2000字符）：\n\n{_code(preview)}", parse_mode="html")
+        await self._edit_or_reply(ctx, event, f"📋 发送给 AI 的文本预览（最后2000字符）：\n\n{_code(preview)}", parse_mode="html")
 
     def _parse_interval(self, tokens: list[str]) -> tuple[str, str, int]:
         if not tokens:
@@ -1327,19 +1294,19 @@ class SummaryPlugin(Plugin):
 
     async def _add_task(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         if len(args) < 2:
-            await self._edit_or_reply(event, f"❌ 用法：{_code(f'{_command_prefix()}{self._command} add <群组标识> <间隔> [消息数] [选项]')}", parse_mode="html")
+            await self._edit_or_reply(ctx, event, f"❌ 用法：{_code(f'{_command_prefix()}{self._command} add <群组标识> <间隔> [消息数] [选项]')}", parse_mode="html")
             return
         chat_input = args[0]
         cron_expr, interval_text, used = self._parse_interval(args[1:])
         if not cron_expr:
-            await self._edit_or_reply(event, "❌ 无效间隔。支持 2h、30m，或 5/6 字段 cron 表达式。")
+            await self._edit_or_reply(ctx, event, "❌ 无效间隔。支持 2h、30m，或 5/6 字段 cron 表达式。")
             return
         db = await self._load_db()
         db.seq += 1
         task_id = str(db.seq)
         parsed_chat = _parse_chat_identifier(chat_input)
         if _is_placeholder_chat_identifier(parsed_chat):
-            await self._edit_or_reply(event, "❌ 请填写真实群 ID、@用户名或 t.me 链接，不要使用“群组 ID”占位文字。")
+            await self._edit_or_reply(ctx, event, "❌ 请填写真实群 ID、@用户名或 t.me 链接，不要使用“群组 ID”占位文字。")
             return
         chat_display = await self._chat_display(ctx, parsed_chat)
         message_count = max(1, _int(self._cfg.get("default_count"), 100))
@@ -1354,7 +1321,7 @@ class SummaryPlugin(Plugin):
                 time_range = max(0, _int(rest[i + 1], 0))
                 i += 2
             elif arg in {"--provider", "-p"}:
-                await self._edit_or_reply(event, "❌ 已移除模块内 AI 配置选择；总结会直接调用 TelePilot 已配置的 AI。")
+                await self._edit_or_reply(ctx, event, "❌ 已移除模块内 AI 配置选择；总结会直接调用 TelePilot 已配置的 AI。")
                 return
             elif arg == "--spoiler":
                 use_spoiler = True
@@ -1397,7 +1364,7 @@ class SummaryPlugin(Plugin):
             lines.append(f"备注: {_html(task.remark)}")
         if not scheduled:
             lines.append("提示: 当前运行环境没有可用调度器，只有简化间隔会由模块内后台任务执行。")
-        await self._edit_or_reply(event, "\n".join(lines), parse_mode="html")
+        await self._edit_or_reply(ctx, event, "\n".join(lines), parse_mode="html")
 
     async def _schedule_task(self, ctx: PluginContext, task: SummaryTask) -> bool:
         if task.disabled or task.id in self._scheduled:
@@ -1493,7 +1460,7 @@ class SummaryPlugin(Plugin):
     async def _list_tasks(self, event: Any, ctx: PluginContext) -> None:
         db = await self._load_db()
         if not db.tasks:
-            await self._edit_or_reply(event, "暂无总结任务")
+            await self._edit_or_reply(ctx, event, "暂无总结任务")
             return
         lines = ["📋 所有总结任务", ""]
         for task in sorted(db.tasks, key=lambda t: _int(t.id)):
@@ -1512,26 +1479,26 @@ class SummaryPlugin(Plugin):
             if task.last_error:
                 lines.append(f"错误: {_html(task.last_error)}")
             lines.append("")
-        await self._edit_or_reply(event, "\n".join(lines), parse_mode="html")
+        await self._edit_or_reply(ctx, event, "\n".join(lines), parse_mode="html")
 
     async def _delete_task(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         task_id = args[0] if args else ""
         if not task_id:
-            await self._edit_or_reply(event, "请提供任务ID")
+            await self._edit_or_reply(ctx, event, "请提供任务ID")
             return
         db = await self._load_db()
         existing = next((task for task in db.tasks if task.id == task_id), None)
         if existing and existing.managed_by_config:
-            await self._edit_or_reply(event, "❌ 该任务来自配置页，请在插件配置里的定时任务 JSON 中删除。")
+            await self._edit_or_reply(ctx, event, "❌ 该任务来自配置页，请在插件配置里的定时任务 JSON 中删除。")
             return
         before = len(db.tasks)
         db.tasks = [task for task in db.tasks if task.id != task_id]
         if len(db.tasks) == before:
-            await self._edit_or_reply(event, f"未找到任务: {_code(task_id)}", parse_mode="html")
+            await self._edit_or_reply(ctx, event, f"未找到任务: {_code(task_id)}", parse_mode="html")
             return
         await self._save_db(db)
         await self._unregister_one(ctx, task_id)
-        await self._edit_or_reply(event, f"✅ 已删除任务 {_code(task_id)}", parse_mode="html")
+        await self._edit_or_reply(ctx, event, f"✅ 已删除任务 {_code(task_id)}", parse_mode="html")
 
     async def _unregister_one(self, ctx: PluginContext, task_id: str) -> None:
         scheduler = getattr(ctx, "scheduler", None)
@@ -1546,25 +1513,25 @@ class SummaryPlugin(Plugin):
     async def _run_task_command(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         task_id = args[0] if args else ""
         if not task_id:
-            await self._edit_or_reply(event, "请提供任务ID")
+            await self._edit_or_reply(ctx, event, "请提供任务ID")
             return
-        await self._edit_or_reply(event, f"⏳ 正在执行总结任务 {_code(task_id)}...", parse_mode="html")
+        await self._edit_or_reply(ctx, event, f"⏳ 正在执行总结任务 {_code(task_id)}...", parse_mode="html")
         result = await self._execute_task_by_id(ctx, task_id)
-        await self._edit_or_reply(event, f"{'✅' if result['success'] else '❌'} {_html(result['message'])}", parse_mode="html")
+        await self._edit_or_reply(ctx, event, f"{'✅' if result['success'] else '❌'} {_html(result['message'])}", parse_mode="html")
 
     async def _edit_task(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         if len(args) < 2:
-            await self._edit_or_reply(event, "❌ 用法：sum edit <任务ID> <spoiler/prompt/push> <值>")
+            await self._edit_or_reply(ctx, event, "❌ 用法：sum edit <任务ID> <spoiler/prompt/push> <值>")
             return
         task_id, prop = args[0], args[1].lower()
         value = " ".join(args[2:])
         db = await self._load_db()
         task = next((item for item in db.tasks if item.id == task_id), None)
         if not task:
-            await self._edit_or_reply(event, f"未找到任务: {_code(task_id)}", parse_mode="html")
+            await self._edit_or_reply(ctx, event, f"未找到任务: {_code(task_id)}", parse_mode="html")
             return
         if task.managed_by_config:
-            await self._edit_or_reply(event, "❌ 该任务来自配置页，请直接修改插件配置里的定时任务 JSON。")
+            await self._edit_or_reply(ctx, event, "❌ 该任务来自配置页，请直接修改插件配置里的定时任务 JSON。")
             return
         if prop == "spoiler":
             task.use_spoiler = _bool(value, task.use_spoiler)
@@ -1573,23 +1540,23 @@ class SummaryPlugin(Plugin):
         elif prop == "push":
             task.push_target = value
         else:
-            await self._edit_or_reply(event, "❌ 未知属性，支持 spoiler/prompt/push")
+            await self._edit_or_reply(ctx, event, "❌ 未知属性，支持 spoiler/prompt/push")
             return
         await self._save_db(db)
-        await self._edit_or_reply(event, f"✅ 已更新任务 {_code(task_id)} 的 {_code(prop)}", parse_mode="html")
+        await self._edit_or_reply(ctx, event, f"✅ 已更新任务 {_code(task_id)} 的 {_code(prop)}", parse_mode="html")
 
     async def _toggle_task(self, event: Any, args: list[str], ctx: PluginContext, *, enable: bool) -> None:
         task_id = args[0] if args else ""
         if not task_id:
-            await self._edit_or_reply(event, "请提供任务ID")
+            await self._edit_or_reply(ctx, event, "请提供任务ID")
             return
         db = await self._load_db()
         task = next((item for item in db.tasks if item.id == task_id), None)
         if not task:
-            await self._edit_or_reply(event, f"未找到任务: {_code(task_id)}", parse_mode="html")
+            await self._edit_or_reply(ctx, event, f"未找到任务: {_code(task_id)}", parse_mode="html")
             return
         if task.managed_by_config:
-            await self._edit_or_reply(event, "❌ 该任务来自配置页，请在插件配置里的定时任务 JSON 中修改 disabled。")
+            await self._edit_or_reply(ctx, event, "❌ 该任务来自配置页，请在插件配置里的定时任务 JSON 中修改 disabled。")
             return
         task.disabled = not enable
         await self._save_db(db)
@@ -1597,7 +1564,7 @@ class SummaryPlugin(Plugin):
             await self._schedule_task(ctx, task)
         else:
             await self._unregister_one(ctx, task_id)
-        await self._edit_or_reply(event, f"{'▶️ 已启用' if enable else '⏸️ 已禁用'}任务 {_code(task_id)}", parse_mode="html")
+        await self._edit_or_reply(ctx, event, f"{'▶️ 已启用' if enable else '⏸️ 已禁用'}任务 {_code(task_id)}", parse_mode="html")
 
     async def _reorder_tasks(self, event: Any, ctx: PluginContext) -> None:
         db = await self._load_db()
@@ -1610,7 +1577,7 @@ class SummaryPlugin(Plugin):
         await self._unregister_all(ctx)
         await self._bootstrap_tasks(ctx)
         mapping = ", ".join(f"{old} → {i + 1}" for i, old in enumerate(old_ids))
-        await self._edit_or_reply(event, f"✅ 已重新排序 {len(command_tasks)} 个命令任务\n\n{_html(mapping)}", parse_mode="html")
+        await self._edit_or_reply(ctx, event, f"✅ 已重新排序 {len(command_tasks)} 个命令任务\n\n{_html(mapping)}", parse_mode="html")
 
     async def _config_command(self, event: Any, args: list[str], ctx: PluginContext) -> None:
         action = args[0].lower() if args else ""
@@ -1630,7 +1597,7 @@ class SummaryPlugin(Plugin):
             config_count = len([task for task in db.tasks if task.managed_by_config])
             command_count = len(db.tasks) - config_count
             lines.append(f"定时任务: 配置页 {config_count} 个 / 命令 {command_count} 个")
-            await self._edit_or_reply(event, "\n".join(lines), parse_mode="html")
+            await self._edit_or_reply(ctx, event, "\n".join(lines), parse_mode="html")
             return
         if action in {"providers", "provider", "llm"}:
             await self._list_telepilot_providers(event, ctx)
@@ -1639,20 +1606,20 @@ class SummaryPlugin(Plugin):
             await self._config_set(event, args[1:], db)
             return
         if action in {"add", "del", "rm"}:
-            await self._edit_or_reply(event, "❌ 已移除模块内 AI 配置管理；请在 TelePilot 的 AI Provider 中维护模型。")
+            await self._edit_or_reply(ctx, event, "❌ 已移除模块内 AI 配置管理；请在 TelePilot 的 AI Provider 中维护模型。")
             return
-        await self._edit_or_reply(event, self._help_text(), parse_mode="html")
+        await self._edit_or_reply(ctx, event, self._help_text(), parse_mode="html")
 
     async def _list_telepilot_providers(self, event: Any, ctx: PluginContext) -> None:
         ai = getattr(ctx, "ai", None)
         list_providers = getattr(ai, "list_providers", None) if ai is not None else None
         if list_providers is None:
-            await self._edit_or_reply(event, "ℹ️ 当前插件上下文未提供 Provider 列表接口。请在 TelePilot 的 AI 设置页查看可用 Provider；sum 默认会通过 ctx.ai 自动路由。")
+            await self._edit_or_reply(ctx, event, "ℹ️ 当前插件上下文未提供 Provider 列表接口。请在 TelePilot 的 AI 设置页查看可用 Provider；sum 默认会通过 ctx.ai 自动路由。")
             return
 
         providers = list(await _maybe_await(list_providers()) or [])
         if not providers:
-            await self._edit_or_reply(event, "❌ TelePilot 尚未配置任何 LLM Provider。")
+            await self._edit_or_reply(ctx, event, "❌ TelePilot 尚未配置任何 LLM Provider。")
             return
 
         prefix = _command_prefix()
@@ -1678,7 +1645,7 @@ class SummaryPlugin(Plugin):
             lines.append(f"类型: {_code(provider_kind)} · 默认模型: {_code(default_model or '-')}")
             lines.append(f"标签: {_code(tags or '-')} · 成本档: {_code(cost_tier)} · {ready}")
             lines.append("")
-        await self._edit_or_reply(event, "\n".join(lines).strip(), parse_mode="html")
+        await self._edit_or_reply(ctx, event, "\n".join(lines).strip(), parse_mode="html")
 
     @staticmethod
     def _provider_value(provider: Any, key: str, default: Any = None) -> Any:
@@ -1688,7 +1655,7 @@ class SummaryPlugin(Plugin):
 
     async def _config_set(self, event: Any, args: list[str], db: SummaryDB) -> None:
         if not args:
-            await self._edit_or_reply(event, "用法：sum config set provider|model|push|prompt|spoiler|timeout|reply|maxoutput <值>")
+            await self._edit_or_reply(ctx, event, "用法：sum config set provider|model|push|prompt|spoiler|timeout|reply|maxoutput <值>")
             return
         name = args[0].lower()
         prop = args[1] if len(args) > 1 else ""
@@ -1703,7 +1670,7 @@ class SummaryPlugin(Plugin):
         elif name == "timeout":
             seconds = _int(prop, 0)
             if seconds < 10:
-                await self._edit_or_reply(event, "❌ 超时时间必须至少为10秒")
+                await self._edit_or_reply(ctx, event, "❌ 超时时间必须至少为10秒")
                 return
             db.ai_config.default_timeout = seconds * 1000
         elif name == "reply":
@@ -1719,10 +1686,10 @@ class SummaryPlugin(Plugin):
         elif name == "telepilot" and prop.lower() == "model":
             db.ai_config.telepilot_model = "" if value.lower() in {"auto", "reset", "clear", "default", "自动", "默认", "清空"} else value
         else:
-            await self._edit_or_reply(event, "❌ 无效配置项。AI 只调用 TelePilot 已配置的 Provider，不再支持模块内 OpenAI/Gemini。")
+            await self._edit_or_reply(ctx, event, "❌ 无效配置项。AI 只调用 TelePilot 已配置的 Provider，不再支持模块内 OpenAI/Gemini。")
             return
         await self._save_db(db)
-        await self._edit_or_reply(event, "✅ 配置已更新")
+        await self._edit_or_reply(ctx, event, "✅ 配置已更新")
 
     def _help_text(self) -> str:
         prefix = _command_prefix()

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 0.1.6 (2026-08-15)
+- 图片状态编辑与结果发送统一改用平台 MessageOps，ChatGPT 请求与远程导入接入 ctx.http 白名单；受 TelePilot 0.97.0 facade 限制，参考图 PUT 上传会明确拒绝。
+
 ## 0.1.5 (2026-08-15)
 - 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
 

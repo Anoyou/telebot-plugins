@@ -36,12 +36,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ais-byRBQ",
     display_name="ais-byRBQ",
-    version="1.0.9",
+    version="1.0.10",
     min_telepilot_version="0.59.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="AI 查询插件，支持联网搜索增强、参考网址追加、实体查询图片预览、API URL/base url 快速切换与备用模型重试",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "delete_message", "send_file", "read_chat", "external_http"],
+    allowed_hosts=["html.duckduckgo.com", "duckduckgo.com", "api.openai.com"],
 
     category="utility",
     interaction_entries=[],

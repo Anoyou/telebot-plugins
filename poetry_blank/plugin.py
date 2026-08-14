@@ -9,6 +9,7 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from app.worker.command import current_command_prefix
@@ -427,6 +428,10 @@ class PoetryBlankPlugin(Plugin):
             return [{"type": "end_session"}]
         return []
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        event = event_from_interaction_payload(payload)
+        return await self.on_interaction(ctx, str(event.trigger.get("entry_key") or "start_poetry_blank"), payload)
+
     async def _interaction_start(
         self,
         ctx: PluginContext,
@@ -557,6 +562,17 @@ class PoetryBlankPlugin(Plugin):
         blanked, answer = _blank_line(line, blank_count)
         return line, author, title, blanked, answer
 
+    async def _legacy_reply(self, ctx: PluginContext, event: Any, text: str, *, parse_mode: str = "html") -> Any:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id or 0)
+        save_key = f"poetry_blank:{ctx.account_id}:{chat_id}:{time.time_ns()}"
+        await messages.send(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_to_message_id=int(getattr(event, "id", 0) or 0) or None, save_message_id_key=save_key)
+        sent_id = await messages.read_saved_message_id(save_key)
+        await messages.delete_saved_message_id(save_key)
+        return SimpleNamespace(id=sent_id or 0)
+
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
     ) -> None:
@@ -566,7 +582,7 @@ class PoetryBlankPlugin(Plugin):
         prize = self._parse_prize(args)
         if prize <= 0:
             prefix = current_command_prefix(fallback=",")
-            await event.reply(f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
+            await self._legacy_reply(ctx, event, f"请指定奖励金额，例如：{prefix}{self._command} 100", parse_mode="html")
             return
 
         lock = self._get_lock(chat_id)
@@ -574,7 +590,7 @@ class PoetryBlankPlugin(Plugin):
             # 已有进行中的题
             rd = self._rounds.get(chat_id)
             if rd and not rd.finished:
-                await event.reply(
+                await self._legacy_reply(ctx, event,
                     f"<b>📝 诗词填空</b>（进行中）\n\n"
                     f"<code>{rd.blanked}</code>\n"
                     f"作者：{rd.author} · 《{rd.title}》\n\n"
@@ -596,7 +612,7 @@ class PoetryBlankPlugin(Plugin):
             )
             self._rounds[chat_id] = rd
 
-        msg = await event.reply(
+        msg = await self._legacy_reply(ctx, event,
             f"<b>📝 诗词填空</b> · 奖励 +{rd.prize}\n\n"
             f"<code>{blanked}</code>\n\n"
             f"💡 提示：{author} · 《{title}》\n"
@@ -656,29 +672,18 @@ class PoetryBlankPlugin(Plugin):
             return 0
 
     async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, message_id: int | None, prize: int) -> None:
-        text = f"+{prize}"
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
+        await ctx.messages.payout(
+            chat_id=chat_id, amount=prize, text=f"+{prize}", reply_to_message_id=message_id
+        )
 
     async def _edit_round_message(self, ctx: PluginContext, chat_id: int, rd: RoundState, suffix: str) -> None:
-        if not ctx.client or not rd.message_id:
+        if not rd.message_id:
             return
         try:
-            await ctx.client.edit_message(
-                chat_id,
-                rd.message_id,
-                f"<b>📝 诗词填空</b> · 奖励 +{rd.prize}\n\n<code>{rd.blanked}</code>\n\n💡 提示：{rd.author} · 《{rd.title}》{suffix}",
+            await ctx.messages.edit(
+                chat_id=chat_id,
+                message_id=rd.message_id,
+                text=f"<b>📝 诗词填空</b> · 奖励 +{rd.prize}\n\n<code>{rd.blanked}</code>\n\n💡 提示：{rd.author} · 《{rd.title}》{suffix}",
                 parse_mode="html",
             )
         except Exception as exc:

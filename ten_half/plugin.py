@@ -86,7 +86,7 @@ REDIS_LOBBY_STATE_KEY_PREFIX = "lobby_state:"
 REDIS_TRANSIENT_USERBOT_MSG_KEY_PREFIX = "transient_userbot:"
 INTERACTION_SEND_VIA = "interaction_bot"
 USERBOT_SEND_VIA = "userbot_reply"
-PLUGIN_VERSION = "0.4.19"
+PLUGIN_VERSION = "0.4.20"
 JOIN_NOTICE_AUTO_DELETE_DELAY_SECONDS = 10
 TRANSIENT_USERBOT_DELETE_DELAY_SECONDS = 5
 JOIN_MODE_TRANSFER = "transfer"
@@ -2282,10 +2282,16 @@ class TenHalfPlugin(Plugin):
         self, client: Any, event: Any, args: list[str],
         account_id: int, ctx: PluginContext,
     ) -> None:
-        await event.reply(
-            "十点半现在只通过交互 Bot 关键词/规则开局；账号 userbot 只负责收付款和发奖。"
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送迁移提示")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id or 0)
+        await messages.send(
+            chat_id=chat_id,
+            text="十点半现在只通过交互 Bot 关键词/规则开局；账号 userbot 只负责收付款和发奖。"
             " 账号本人可在群内发送「10d模式」切换转账/无感扣款入局；已有等待大厅时发送「入局」可直接加入，普通消息由交互 Bot 通道处理。",
             parse_mode="html",
+            reply_to_message_id=int(getattr(event, "id", 0) or 0) or None,
         )
 
     # ═══════════════════════════════════════════════════
@@ -2434,6 +2440,10 @@ class TenHalfPlugin(Plugin):
     # ═══════════════════════════════════════════════════
     # on_interaction（交互 bot 流）
     # ═══════════════════════════════════════════════════
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        trigger = payload.get("trigger") if isinstance(payload.get("trigger"), dict) else {}
+        return await self.on_interaction(ctx, str(trigger.get("entry_key") or "start_ten_half"), payload)
+
     async def on_interaction(
         self,
         ctx: PluginContext,

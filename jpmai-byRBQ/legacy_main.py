@@ -14,8 +14,6 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Optional, Dict
 
-import httpx
-
 from pagermaid.listener import listener
 from pagermaid.hook import Hook
 from pagermaid.enums import Message, Client
@@ -27,6 +25,12 @@ LEGACY_CONFIG_FILE = Path(__file__).parent / "jpmai_config.json"
 LEGACY_TRIGGER_LOG_FILE = Path(__file__).parent / "jpmai_trigger_log.json"
 config_file: Path | None = None
 trigger_log_file: Path | None = None
+platform_http: Any | None = None
+
+
+def configure_http(http: Any | None) -> None:
+    global platform_http
+    platform_http = http
 
 # 默认频率限制（秒）
 DEFAULT_RATE_LIMIT = 3600
@@ -280,43 +284,28 @@ class AIGenerator:
 
         for attempt in range(max_retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    response = await client.post(url, json=payload, headers=headers)
-                    response.raise_for_status()
+                if platform_http is None:
+                    raise RuntimeError("TelePilot 未注入 ctx.http，拒绝直连 AI 服务。")
+                response = await platform_http.post(url, json=payload, headers=headers)
+                if not 200 <= response.status_code < 300:
+                    raise RuntimeError(f"HTTP {response.status_code}: {response.text[:300]}")
 
-                    data = response.json()
-                    content = extract_ai_response_text(data)
+                data = response.json()
+                content = extract_ai_response_text(data)
 
-                    if content:
-                        # 提取真正的文案内容（过滤掉思考过程）
-                        extracted_content = self._extract_content(content)
+                if content:
+                    # 提取真正的文案内容（过滤掉思考过程）
+                    extracted_content = self._extract_content(content)
 
-                        if extracted_content:
-                            return extracted_content
-                        else:
-                            # 如果提取失败，返回原始内容
-                            logs.warning("[JPMAI] 内容提取失败，返回原始内容")
-                            return content.strip()
+                    if extracted_content:
+                        return extracted_content
+                    # 如果提取失败，返回原始内容
+                    logs.warning("[JPMAI] 内容提取失败，返回原始内容")
+                    return content.strip()
 
-                    logs.error(f"[JPMAI] API 返回无有效文本: {data}")
-                    return "响应解析失败，请稍后再试"
+                logs.error(f"[JPMAI] API 返回无有效文本: {data}")
+                return "响应解析失败，请稍后再试"
 
-            except httpx.TimeoutException as e:
-                last_error = e
-                logs.warning(
-                    f"[JPMAI] API 请求超时 (尝试 {attempt + 1}/{max_retries + 1})"
-                )
-            except httpx.HTTPStatusError as e:
-                last_error = e
-                error_preview = ""
-                with contextlib.suppress(Exception):
-                    error_preview = e.response.text.strip()[:300]
-                logs.warning(
-                    f"[JPMAI] API 请求失败: status={e.response.status_code} "
-                    f"url={url} model={self.model} max_tokens={DEFAULT_MAX_TOKENS} "
-                    f"body={error_preview or '无响应正文'} "
-                    f"(尝试 {attempt + 1}/{max_retries + 1})"
-                )
             except Exception as e:
                 last_error = e
                 logs.warning(
@@ -326,14 +315,9 @@ class AIGenerator:
                 )
 
         # 所有重试都失败后返回错误信息
-        if isinstance(last_error, httpx.TimeoutException):
-            logs.error("[JPMAI] API 请求超时，已重试1次均失败")
-            return "生成超时，请稍后再试"
-        elif isinstance(last_error, httpx.HTTPStatusError):
-            logs.error(
-                f"[JPMAI] API 请求失败，已重试1次均失败: {last_error.response.status_code}"
-            )
-            return f"生成失败: HTTP {last_error.response.status_code}"
+        if last_error is not None:
+            logs.error(f"[JPMAI] API 请求失败，已重试1次均失败: {last_error}")
+            return f"生成失败: {last_error}"
         else:
             logs.error(f"[JPMAI] API 调用异常，已重试1次均失败: {last_error}")
             return f"生成失败: {last_error}"

@@ -15,9 +15,12 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional
 
-import aiohttp
+from .http_bridge import Session as TelePilotHTTPSession
 from PIL import Image, ImageOps
-from pyrogram.types import InputMediaPhoto
+class InputMediaPhoto:
+    def __init__(self, media: Any, caption: str | None = None):
+        self.media = media
+        self.caption = caption
 
 from pagermaid.enums import Client, Message
 from pagermaid.listener import listener
@@ -30,7 +33,11 @@ DEFAULT_PUSH_COUNT = 1
 MAX_PUSH_COUNT = 20
 ALBUM_BATCH_SIZE = 10
 MAX_FETCH_ATTEMPTS = 6
-REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
+REQUEST_TIMEOUT = 30
+HTTP_FACADE: object | None = None
+def configure_http(http: object) -> None:
+    global HTTP_FACADE
+    HTTP_FACADE = http
 DOWNLOAD_CONCURRENCY = 4
 MAX_IMAGE_SIDE = 2560
 
@@ -103,7 +110,7 @@ def looks_like_bishoujo(tags: list[str]) -> bool:
 
 
 async def request_lolicon(
-    session: aiohttp.ClientSession, *, is_r18: bool, tag: str, count: int
+    session: Any, *, is_r18: bool, tag: str, count: int
 ) -> list[dict[str, Any]]:
     """向图源接口请求图片"""
     params = {
@@ -174,7 +181,8 @@ async def fetch_pixiv_items(count: int, *, is_r18: bool) -> list[dict[str, Any]]
     result: list[dict[str, Any]] = []
     seen_pids: set[int] = set()
 
-    async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
+    if HTTP_FACADE is None: raise RuntimeError("TelePilot ctx.http 未注入，拒绝直连网络")
+    async with TelePilotHTTPSession(HTTP_FACADE) as session:
         for attempt in range(MAX_FETCH_ATTEMPTS):
             if len(result) >= count:
                 break
@@ -210,7 +218,7 @@ def chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]
 
 
 async def download_item(
-    session: aiohttp.ClientSession,
+    session: Any,
     item: dict[str, Any],
     target_dir: Path,
     index: int,
@@ -254,7 +262,8 @@ def normalize_image_bytes(image_bytes: bytes, target_dir: Path, pid: int, index:
 
 async def download_pixiv_items(items: list[dict[str, Any]], target_dir: Path) -> list[Path]:
     """批量下载图片，避免 Telegram 直接抓取外链失败"""
-    async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
+    if HTTP_FACADE is None: raise RuntimeError("TelePilot ctx.http 未注入，拒绝直连网络")
+    async with TelePilotHTTPSession(HTTP_FACADE) as session:
         semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
 
         async def worker(index: int, item: dict[str, Any]) -> Path:

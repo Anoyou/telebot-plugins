@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EVENT_REGISTRY: dict[tuple[int, int], object] = {}
 
 
 def _install_stubs() -> None:
@@ -31,6 +32,7 @@ def _install_stubs() -> None:
             self.client = client
             self.log = log
             self.ai = None
+            self.messages = FakeMessages(client)
 
     class Manifest:
         def __init__(self, **kwargs):
@@ -117,6 +119,24 @@ class FakeClient:
         return types.SimpleNamespace(id=ids, raw_text="触发消息", sender_id=100)
 
 
+class FakeMessages:
+    def __init__(self, client) -> None:
+        self.client = client
+
+    async def send(self, *, chat_id, text, parse_mode="plain", reply_to_message_id=None, **kwargs):
+        send_kwargs = dict(kwargs)
+        if reply_to_message_id is not None:
+            send_kwargs["reply_to"] = reply_to_message_id
+        return await self.client.send_message(chat_id, text, **send_kwargs)
+
+    async def edit(self, *, chat_id, message_id, text, **_kwargs):
+        event = EVENT_REGISTRY.get((int(chat_id), int(message_id)))
+        if event is not None:
+            event.edits.append(text)
+            return event
+        return types.SimpleNamespace(id=message_id, text=text)
+
+
 class FakeEvent:
     chat_id = -100123
 
@@ -124,6 +144,7 @@ class FakeEvent:
         self.id = 77
         self.edits: list[str] = []
         self._reply_text = reply_text
+        EVENT_REGISTRY[(int(self.chat_id), int(self.id))] = self
 
     async def edit(self, text):
         self.edits.append(text)
@@ -170,6 +191,7 @@ class FakeIncomingEvent(FakeEvent):
         self.is_private = is_private
         self.is_group = is_group
         self.media = media
+        EVENT_REGISTRY[(int(self.chat_id), int(self.id))] = self
 
     async def get_sender(self):
         return types.SimpleNamespace(id=100, bot=False, is_bot=False)

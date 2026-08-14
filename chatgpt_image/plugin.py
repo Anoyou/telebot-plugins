@@ -41,7 +41,7 @@ from .token_pool import (
     parse_token_lines,
 )
 
-PLUGIN_VERSION = "0.1.5"
+PLUGIN_VERSION = "0.1.6"
 DEFAULT_MODELS = [
     "gpt-image-2",
     "codex-gpt-image-2",
@@ -232,14 +232,21 @@ def _event_message_id(event: Any) -> int | None:
     return getattr(msg, "id", None) or getattr(event, "id", None)
 
 
-async def _safe_edit(event: Any, text: str) -> None:
-    try:
-        await event.edit(text)
-    except Exception:
+async def _safe_edit(ctx: PluginContext, event: Any, text: str) -> None:
+    messages = getattr(ctx, "messages", None)
+    edit = getattr(messages, "edit", None)
+    chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+    message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
+    if callable(edit) and chat_id and message_id:
         try:
-            await event.respond(text)
-        except Exception:
+            await edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode="plain")
             return
+        except Exception:
+            pass
+    send = getattr(messages, "send", None)
+    if not callable(send):
+        raise RuntimeError("平台 MessageOps 不可用，已拒绝发送消息")
+    await send(chat_id=chat_id, text=text, reply_to_message_id=message_id or None)
 
 
 def _preview(text: str, limit: int = 80) -> str:
@@ -376,7 +383,7 @@ class ChatGPTImagePlugin(Plugin):
         if args and args[0].lower() == "last":
             chat_id = _event_chat_id(event)
             if chat_id is None or chat_id not in self._last_images_by_chat:
-                await _safe_edit(event, "没有可续改的最近图片。请先生成一张图，或回复图片使用编辑命令。")
+                await _safe_edit(ctx, event, "没有可续改的最近图片。请先生成一张图，或回复图片使用编辑命令。")
                 return
             await self._handle_image_request(ctx, event, args[1:], reference_images=self._last_images_by_chat[chat_id])
             return
@@ -384,7 +391,7 @@ class ChatGPTImagePlugin(Plugin):
         reference_images = await self._collect_reference_images(ctx, event)
         if not reference_images:
             prefix = current_command_prefix()
-            await _safe_edit(event, f"请回复一张图片后使用 {prefix}{self._cfg.edit_command} 提示词，或使用 {prefix}{self._cfg.edit_command} last 提示词。")
+            await _safe_edit(ctx, event, f"请回复一张图片后使用 {prefix}{self._cfg.edit_command} 提示词，或使用 {prefix}{self._cfg.edit_command} last 提示词。")
             return
         await self._handle_image_request(ctx, event, args, reference_images=reference_images)
 
@@ -399,14 +406,14 @@ class ChatGPTImagePlugin(Plugin):
         try:
             parsed = _parse_image_args(args, self._cfg)
         except ValueError as exc:
-            await _safe_edit(event, str(exc))
+            await _safe_edit(ctx, event, str(exc))
             return
         if not parsed.prompt:
-            await _safe_edit(event, f"请在命令后写提示词。例：{current_command_prefix()}{self._cfg.command} 一只漂浮在太空里的猫")
+            await _safe_edit(ctx, event, f"请在命令后写提示词。例：{current_command_prefix()}{self._cfg.command} 一只漂浮在太空里的猫")
             return
         prompt = _render_style(parsed.prompt, parsed.style, self._cfg.style_templates)
         started = time.monotonic()
-        await _safe_edit(event, f"正在生成图片：模型 {parsed.model}，数量 {parsed.count}，请稍等...")
+        await _safe_edit(ctx, event, f"正在生成图片：模型 {parsed.model}，数量 {parsed.count}，请稍等...")
         await self._log(
             ctx,
             "info",
@@ -431,7 +438,7 @@ class ChatGPTImagePlugin(Plugin):
                     self._cfg.skip_failed_seconds,
                     disable_invalid=self._cfg.auto_disable_invalid_tokens,
                 )
-            await _safe_edit(event, f"生成失败：{humanize_error(exc)}")
+            await _safe_edit(ctx, event, f"生成失败：{humanize_error(exc)}")
             await self._log(
                 ctx,
                 "error",
@@ -447,7 +454,7 @@ class ChatGPTImagePlugin(Plugin):
         if chat_id is not None and self._cfg.remember_last_image:
             self._last_images_by_chat[int(chat_id)] = [result.data for result in results]
         await self._send_results(ctx, event, results, parsed, prompt, elapsed, len(reference_images))
-        await _safe_edit(event, f"已完成：{len(results)} 张，耗时 {_format_seconds(elapsed)}。")
+        await _safe_edit(ctx, event, f"已完成：{len(results)} 张，耗时 {_format_seconds(elapsed)}。")
         await self._log(
             ctx,
             "info",
@@ -466,7 +473,8 @@ class ChatGPTImagePlugin(Plugin):
     ) -> list[ImageResult]:
         client = ChatGPTWebImageClient(
             token,
-            proxy_url=self._proxy_url,
+            http=self._ctx.http,
+                proxy_url=self._proxy_url,
             timeout=self._cfg.timeout,
             poll_timeout=self._cfg.poll_timeout,
             poll_interval=self._cfg.poll_interval,
@@ -492,8 +500,9 @@ class ChatGPTImagePlugin(Plugin):
         elapsed: float,
         reference_count: int,
     ) -> None:
-        if ctx.client is None:
-            return
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("平台 MessageOps 不可用，已拒绝发送图片")
         chat_id = _event_chat_id(event)
         reply_to = _event_message_id(event)
         caption = _render_message_template(
@@ -519,37 +528,25 @@ class ChatGPTImagePlugin(Plugin):
         ).strip()
         for idx, result in enumerate(results, start=1):
             ext = result.extension or (".jpg" if self._cfg.image_format == "jpeg" else f".{self._cfg.image_format}")
-            file_obj = telegram_file(result.data, f"chatgpt_image_{int(time.time())}_{idx}{ext}")
+            filename = f"chatgpt_image_{int(time.time())}_{idx}{ext}"
             kwargs: dict[str, Any] = {
                 "caption": caption if idx == 1 else None,
-                "reply_to": reply_to,
+                "reply_to_message_id": reply_to,
+                "parse_mode": "html" if idx == 1 and caption else "plain",
             }
-            if idx == 1 and caption:
-                kwargs["parse_mode"] = "html"
-            if self._cfg.output_mode == "file":
-                kwargs["force_document"] = True
-            elif self._cfg.output_mode == "image":
-                kwargs["force_document"] = False
+            send_media = messages.send_file if self._cfg.output_mode == "file" else messages.send_photo
+            data_key = "file" if self._cfg.output_mode == "file" else "photo"
             try:
-                await ctx.client.send_file(chat_id, file_obj, **kwargs)
+                await send_media(chat_id=chat_id, filename=filename, **{data_key: result.data}, **kwargs)
             except Exception:
-                if idx == 1 and caption and kwargs.get("parse_mode") == "html":
+                if idx == 1 and caption:
                     plain_kwargs = dict(kwargs)
                     plain_kwargs["caption"] = _strip_html_tags(caption)[:1024]
-                    plain_kwargs.pop("parse_mode", None)
-                    file_obj.seek(0)
-                    try:
-                        await ctx.client.send_file(chat_id, file_obj, **plain_kwargs)
-                        continue
-                    except Exception:
-                        if self._cfg.output_mode != "auto":
-                            raise
-                        kwargs = plain_kwargs
+                    plain_kwargs["parse_mode"] = "plain"
+                    await send_media(chat_id=chat_id, filename=filename, **{data_key: result.data}, **plain_kwargs)
+                    continue
                 if self._cfg.output_mode == "auto":
-                    file_obj.seek(0)
-                    fallback_kwargs = dict(kwargs)
-                    fallback_kwargs["force_document"] = True
-                    await ctx.client.send_file(chat_id, file_obj, **fallback_kwargs)
+                    await messages.send_file(chat_id=chat_id, filename=filename, file=result.data, **kwargs)
                 else:
                     raise
 
@@ -572,27 +569,27 @@ class ChatGPTImagePlugin(Plugin):
         rest = args[1:]
         try:
             if sub in {"help", "-h", "--help"}:
-                await _safe_edit(event, self._help_text())
+                await _safe_edit(ctx, event, self._help_text())
             elif sub == "models":
-                await _safe_edit(event, await self._models_text())
+                await _safe_edit(ctx, event, await self._models_text())
             elif sub == "ping":
-                await _safe_edit(event, await self._ping_text())
+                await _safe_edit(ctx, event, await self._ping_text())
             elif sub == "version":
-                await _safe_edit(event, f"ChatGPT2API v{PLUGIN_VERSION}\n命令：{self._cfg.command} / {self._cfg.edit_command} / {self._cfg.admin_command}")
+                await _safe_edit(ctx, event, f"ChatGPT2API v{PLUGIN_VERSION}\n命令：{self._cfg.command} / {self._cfg.edit_command} / {self._cfg.admin_command}")
             elif sub == "status":
-                await _safe_edit(event, self._status_text())
+                await _safe_edit(ctx, event, self._status_text())
             elif sub == "refresh":
-                await _safe_edit(event, await self._refresh_tokens(ctx))
+                await _safe_edit(ctx, event, await self._refresh_tokens(ctx))
             elif sub == "token":
-                await _safe_edit(event, await self._token_command(ctx, rest))
+                await _safe_edit(ctx, event, await self._token_command(ctx, rest))
             elif sub == "import":
-                await _safe_edit(event, await self._import_command(ctx, rest))
+                await _safe_edit(ctx, event, await self._import_command(ctx, rest))
             elif sub == "proxy":
-                await _safe_edit(event, await self._proxy_command())
+                await _safe_edit(ctx, event, await self._proxy_command())
             else:
-                await _safe_edit(event, f"未知管理子命令：{sub}\n\n{self._help_text()}")
+                await _safe_edit(ctx, event, f"未知管理子命令：{sub}\n\n{self._help_text()}")
         except Exception as exc:  # noqa: BLE001
-            await _safe_edit(event, f"管理命令执行失败：{humanize_error(exc)}")
+            await _safe_edit(ctx, event, f"管理命令执行失败：{humanize_error(exc)}")
             await self._log(ctx, "error", "ChatGPT2API 管理命令失败。", subcommand=sub, error=humanize_error(exc))
 
     def _help_text(self) -> str:
@@ -636,6 +633,7 @@ class ChatGPTImagePlugin(Plugin):
         try:
             models = await ChatGPTWebImageClient(
                 self._pool.tokens[0],
+                http=self._ctx.http,
                 proxy_url=self._proxy_url,
                 timeout=self._cfg.timeout,
                 poll_timeout=self._cfg.poll_timeout,
@@ -654,6 +652,7 @@ class ChatGPTImagePlugin(Plugin):
         try:
             info = await ChatGPTWebImageClient(
                 self._pool.tokens[0],
+                http=self._ctx.http,
                 proxy_url=self._proxy_url,
                 timeout=self._cfg.timeout,
                 poll_timeout=self._cfg.poll_timeout,
@@ -681,7 +680,8 @@ class ChatGPTImagePlugin(Plugin):
             try:
                 info = await ChatGPTWebImageClient(
                     token,
-                    proxy_url=self._proxy_url,
+                    http=self._ctx.http,
+                proxy_url=self._proxy_url,
                     timeout=self._cfg.timeout,
                     poll_timeout=self._cfg.poll_timeout,
                     poll_interval=self._cfg.poll_interval,
@@ -729,7 +729,7 @@ class ChatGPTImagePlugin(Plugin):
 
     async def _import_command(self, ctx: PluginContext, args: list[str]) -> str:
         source = (args[0].lower() if args else "").strip()
-        importer = ImportClient(proxy_url=self._proxy_url, timeout=self._cfg.timeout)
+        importer = ImportClient(http=ctx.http, proxy_url=self._proxy_url, timeout=self._cfg.timeout)
         if source in {"session", "auth", "json"}:
             token = extract_auth_session_access_token(" ".join(args[1:]))
             if not token:
@@ -795,7 +795,8 @@ class ChatGPTImagePlugin(Plugin):
     async def _proxy_command(self) -> str:
         result = await ChatGPTWebImageClient(
             self._pool.tokens[0] if self._pool.tokens else "",
-            proxy_url=self._proxy_url,
+            http=self._ctx.http,
+                proxy_url=self._proxy_url,
             timeout=self._cfg.timeout,
             poll_timeout=self._cfg.poll_timeout,
             poll_interval=self._cfg.poll_interval,

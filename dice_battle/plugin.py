@@ -221,6 +221,11 @@ class DiceBattlePlugin(Plugin):
             return [{"type": "end_session"}]
         return []
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Event Bus 主入口；entry_key 由 TelePilot loader 注入 trigger。"""
+        event = event_from_interaction_payload(payload)
+        return await self.on_interaction(ctx, str(event.trigger.get("entry_key") or "start_dice_battle"), payload)
+
     async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any], chat_id: int, event: Any = None) -> list[dict[str, Any]]:
         # 主路径：标准事件的 actor/payment；取不到时回退旧平铺 helper。
         challenger_id, challenger_name = 0, "玩家"
@@ -343,6 +348,14 @@ class DiceBattlePlugin(Plugin):
         return actions
 
     # ── 命令入口 ─────────────────────────────────────
+    @staticmethod
+    async def _legacy_reply(ctx: PluginContext, event: Any, text: str, *, parse_mode: str = "html") -> None:
+        messages = getattr(ctx, "messages", None)
+        if messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝发送消息")
+        chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id or 0)
+        await messages.send(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_to_message_id=int(getattr(event, "id", 0) or 0) or None)
+
     async def _cmd_handler(
         self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext,
     ) -> None:
@@ -390,7 +403,7 @@ class DiceBattlePlugin(Plugin):
                 target_name = public_entity_display_name(reply_sender, default="对手")
 
                 if target_id == sender_id:
-                    await event.reply("不能跟自己对战啦~", parse_mode="html")
+                    await self._legacy_reply(ctx, event, "不能跟自己对战啦~", parse_mode="html")
                     return
 
                 # 发起对战
@@ -408,7 +421,7 @@ class DiceBattlePlugin(Plugin):
                     self._battles[chat_id] = battle
 
                 bet_text = f" 下注 {bet} 筹码" if bet > 0 else ""
-                await event.reply(
+                await self._legacy_reply(ctx, event,
                     f"<b>🎲 骰子对战邀请！</b>{bet_text}\n\n"
                     f"{sender_name} 向 {target_name} 发起挑战！\n"
                     f"每人 {dice_count} 颗骰子\n\n"
@@ -421,7 +434,7 @@ class DiceBattlePlugin(Plugin):
         # 没有回复 → 自己掷骰子
         roll = _roll_dice(dice_count)
         total = _total(roll)
-        await event.reply(
+        await self._legacy_reply(ctx, event,
             f"<b>🎲 掷骰子</b>\n\n"
             f"{_format_dice(roll)}\n"
             f"总计：<b>{total}</b> 点",
@@ -434,11 +447,11 @@ class DiceBattlePlugin(Plugin):
     ) -> None:
         battle = self._battles.get(chat_id)
         if not battle or battle.phase != "waiting":
-            await event.reply("没有等待中的对战邀请~", parse_mode="html")
+            await self._legacy_reply(ctx, event, "没有等待中的对战邀请~", parse_mode="html")
             return
 
         if sender_id != battle.opponent_id:
-            await event.reply(
+            await self._legacy_reply(ctx, event,
                 f"这个邀请是给 {battle.opponent_name} 的哦~",
                 parse_mode="html",
             )
@@ -466,7 +479,7 @@ class DiceBattlePlugin(Plugin):
         if battle.bet > 0 and winner:
             bet_text = f"\n💰 {winner} 赢得 {battle.bet} 筹码"
 
-        await event.reply(
+        await self._legacy_reply(ctx, event,
             f"<b>🎲 骰子对战结果！</b>\n\n"
             f"{battle.challenger_name}：{_format_dice(battle.challenger_roll)} = {c_total} 点\n"
             f"{battle.opponent_name}：{_format_dice(battle.opponent_roll)} = {o_total} 点\n\n"

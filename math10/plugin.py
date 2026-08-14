@@ -15,7 +15,7 @@ from app.worker.plugins.events import event_from_interaction_payload
 MATH10_GAME_PREFIX = "game:"
 MATH10_CLAIM_PREFIX = "claim:"
 MESSAGE_ID_NAMESPACE_PREFIX = "tp:msgid"
-PLUGIN_VERSION = "1.0.12"
+PLUGIN_VERSION = "1.0.13"
 DEFAULT_PRIZE = 123
 DEFAULT_TTL_SECONDS = 900
 MIN_TTL_SECONDS = 30
@@ -267,6 +267,10 @@ class Math10Plugin(Plugin):
         if event_type == "session_close":
             return await self._handle_close(ctx, chat_id)
         return []
+
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        event = event_from_interaction_payload(payload)
+        return await self.on_interaction(ctx, str(event.trigger.get("entry_key") or "start_math10"), payload)
 
     async def _handle_start(
         self,

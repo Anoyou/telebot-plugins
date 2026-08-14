@@ -12,9 +12,29 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginContext:
-    def __init__(self, *, config=None, log=None):
+    def __init__(self, *, config=None, log=None, messages=None):
+        self.account_id = 1
         self.config = config or {}
         self.log = log
+        self.messages = messages
+
+
+class FakeMessages:
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self.saved: dict[str, int] = {}
+
+    async def send(self, **kwargs):
+        self.sent.append(kwargs)
+        if key := kwargs.get("save_message_id_key"):
+            self.saved[key] = len(self.sent)
+        return kwargs
+
+    async def read_saved_message_id(self, key):
+        return self.saved.get(key)
+
+    async def delete_saved_message_id(self, key):
+        return self.saved.pop(key, None) is not None
 
 
 class FakeEvent:
@@ -89,11 +109,12 @@ class CommandPrefixExamplesTest(unittest.TestCase):
                 event = FakeEvent()
                 await plugin.on_startup(PluginContext(config={"command": command}))
 
-                await plugin._cmd_handler(None, event, [], 1, PluginContext())
+                messages = FakeMessages()
+                await plugin._cmd_handler(None, event, [], 1, PluginContext(messages=messages))
 
-                self.assertEqual(len(event.replies), 1, plugin_key)
-                self.assertIn(f"例如：。{command} 100", event.replies[0]["text"])
-                self.assertNotIn(f",{command}", event.replies[0]["text"])
+                self.assertEqual(len(messages.sent), 1, plugin_key)
+                self.assertIn(f"例如：。{command} 100", messages.sent[0]["text"])
+                self.assertNotIn(f",{command}", messages.sent[0]["text"])
 
         asyncio.run(scenario())
 

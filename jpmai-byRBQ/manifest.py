@@ -35,12 +35,13 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="jpmai-byRBQ",
     display_name="jpmai-byRBQ",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.59.1",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="AI 生成艳情文案插件，支持完整 chat/completions URL 兼容、非标准响应文本提取和连通性测试",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "delete_message", "send_file", "read_chat", "external_http"],
+    allowed_hosts=["**.openai.com", "**.deepseek.com", "generativelanguage.googleapis.com"],
 
     category="utility",
     interaction_entries=[],

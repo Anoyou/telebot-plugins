@@ -3,7 +3,7 @@
   "display_name": "get_reactions-byRBQ",
   "description": "表情获取辅助命令，用于测试环境是否支持自定义表情反应",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "commands": [
@@ -19,6 +19,7 @@
   "permissions": [
     "send_message",
     "edit_message",
+    "delete_message",
     "read_chat"
   ],
   "config_schema": {

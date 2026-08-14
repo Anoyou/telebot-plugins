@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.3"
+PLUGIN_VERSION = "1.5.4"
 
 REPLY_TEMPLATE_DEFAULT = "+1-6666"
 TEMPLATE_PREVIEW_DEFAULT = "+1-6666"

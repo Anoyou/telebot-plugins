@@ -29,6 +29,7 @@ class _CompatRuntime:
         self.shutdown_hooks: list[Callable[..., Any]] = []
         self.ctx: PluginContext | None = None
         self.client: Any = None
+        self.messages: Any = None
         self._installed = False
 
     def install(self) -> None:
@@ -114,7 +115,7 @@ class _CompatRuntime:
 
     async def run_hooks(self, startup: bool) -> None:
         hooks = self.startup_hooks if startup else self.shutdown_hooks
-        bot = _CompatClient(self.client)
+        bot = _CompatClient(self.client, self.messages)
         for h in hooks:
             try:
                 out = h()
@@ -129,8 +130,8 @@ class _CompatRuntime:
         if not self.ctx:
             return False
         text = (getattr(event, "raw_text", None) or getattr(event, "text", None) or "").strip()
-        msg = _CompatMessage(event, text, args)
-        bot = _CompatClient(self.client)
+        msg = _CompatMessage(event, text, args, self.messages)
+        bot = _CompatClient(self.client, self.messages)
         handled = False
         is_out = self._is_outgoing(event)
         for spec in self.listeners:
@@ -151,8 +152,8 @@ class _CompatRuntime:
             return
         text = (getattr(event, "raw_text", None) or getattr(event, "text", None) or "").strip()
         cmd, args = _parse_command(text)
-        msg = _CompatMessage(event, text, args)
-        bot = _CompatClient(self.client)
+        msg = _CompatMessage(event, text, args, self.messages)
+        bot = _CompatClient(self.client, self.messages)
         is_out = self._is_outgoing(event)
 
         for spec in self.listeners:
@@ -178,8 +179,25 @@ def _parse_command(text: str) -> tuple[str | None, list[str]]:
 
 
 class _CompatClient:
-    def __init__(self, raw_client: Any) -> None:
+    def __init__(self, raw_client: Any, messages: Any = None) -> None:
         self._c = raw_client
+        self._m = messages
+
+    async def _message_op(self, name: str, **kwargs: Any) -> Any:
+        if self._m is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝直接发送或编辑消息")
+        method = getattr(self._m, name, None)
+        if callable(method):
+            return await method(**kwargs)
+        from app.worker.plugins.message_ops import BufferedMessageOps
+
+        buffered = BufferedMessageOps()
+        action = await getattr(buffered, name)(**kwargs)
+        apply = getattr(self._m, "apply", None)
+        if not callable(apply):
+            raise RuntimeError(f"TelePilot MessageOps 不支持 {name}")
+        await apply([action])
+        return action
 
     async def get_me(self):
         if hasattr(self._c, "get_me"):
@@ -187,53 +205,78 @@ class _CompatClient:
         return types.SimpleNamespace(id=0)
 
     async def send_message(self, chat_id: int, text: str, **kwargs):
-        return await self._c.send_message(chat_id, text, **kwargs)
+        return await self._message_op(
+            "send", chat_id=int(chat_id), text=text,
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+            reply_to_message_id=kwargs.get("reply_to_message_id") or kwargs.get("reply_to"),
+        )
 
     async def send_photo(self, chat_id: int, photo: Any, **kwargs):
-        if hasattr(self._c, "send_photo"):
-            return await self._c.send_photo(chat_id, photo, **kwargs)
-        return await self._c.send_file(chat_id, photo, **kwargs)
+        payload, filename = _media_bytes(photo, "photo.png")
+        return await self._message_op(
+            "send_photo", chat_id=int(chat_id), photo=payload, filename=filename,
+            caption=kwargs.get("caption"),
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+            reply_to_message_id=kwargs.get("reply_to_message_id") or kwargs.get("reply_to"),
+        )
 
     async def send_document(self, chat_id: int, document: Any, **kwargs):
-        if hasattr(self._c, "send_document"):
-            return await self._c.send_document(chat_id, document, **kwargs)
-        return await self._c.send_file(chat_id, document, **kwargs)
+        payload, filename = _media_bytes(document, "file.bin")
+        return await self._message_op(
+            "send_file", chat_id=int(chat_id), file=payload, filename=filename,
+            caption=kwargs.get("caption"),
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+            reply_to_message_id=kwargs.get("reply_to_message_id") or kwargs.get("reply_to"),
+        )
 
     async def send_media_group(self, chat_id: int, media: list[Any], **kwargs):
-        if hasattr(self._c, "send_media_group"):
-            return await self._c.send_media_group(chat_id, media, **kwargs)
         out = []
+        options = dict(kwargs)
+        options.pop("caption", None)
         for m in media:
             cap = getattr(m, "caption", None)
             file = getattr(m, "media", None) or getattr(m, "file", None) or m
-            out.append(await self.send_photo(chat_id, file, caption=cap, **kwargs))
+            out.append(await self.send_photo(chat_id, file, caption=cap, **options))
         return out
 
     async def get_messages(self, chat_id: int, message_ids: Any):
         return await self._c.get_messages(chat_id, message_ids)
 
     async def edit_message_caption(self, chat_id: int, message_id: int, caption: str, **kwargs):
-        if hasattr(self._c, "edit_message_caption"):
-            return await self._c.edit_message_caption(chat_id, message_id, caption, **kwargs)
-        return await self._c.edit_message(chat_id, message_id, caption, **kwargs)
+        return await self._message_op(
+            "edit_caption", chat_id=int(chat_id), message_id=int(message_id), caption=caption,
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+        )
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, **kwargs):
-        if hasattr(self._c, "edit_message_text"):
-            return await self._c.edit_message_text(chat_id, message_id, text, **kwargs)
-        return await self._c.edit_message(chat_id, message_id, text, **kwargs)
+        return await self._message_op(
+            "edit", chat_id=int(chat_id), message_id=int(message_id), text=text,
+            parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
+        )
 
     async def send_reaction(self, chat_id: int, message_id: int, emoji: Any):
-        if hasattr(self._c, "send_reaction"):
-            return await self._c.send_reaction(chat_id, message_id, emoji)
-        return None
+        raise RuntimeError("TelePilot 0.97.0 MessageOps 暂不支持发送表情反应，已拒绝直连客户端")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._c, name)
 
 
+def _media_bytes(value: Any, fallback_name: str) -> tuple[bytes, str]:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value), fallback_name
+    if hasattr(value, "read"):
+        data = value.read()
+        return bytes(data), str(getattr(value, "name", fallback_name) or fallback_name).rsplit("/", 1)[-1]
+    from pathlib import Path
+
+    path = Path(str(value))
+    return path.read_bytes(), path.name or fallback_name
+
+
 class _CompatMessage:
-    def __init__(self, event: Any, text: str, args: list[str]) -> None:
+    def __init__(self, event: Any, text: str, args: list[str], messages: Any = None) -> None:
         self._e = event
+        self._messages = messages
         self.text = text
         self.caption = getattr(event, "caption", None)
         self.arguments = " ".join(args).strip()
@@ -259,7 +302,11 @@ class _CompatMessage:
 
     @property
     def reply_to_message(self):
-        return getattr(self._e, "reply_to_message", None)
+        reply = getattr(self._e, "reply_to_message", None)
+        if reply is None:
+            return None
+        text = str(getattr(reply, "raw_text", None) or getattr(reply, "text", None) or "")
+        return _CompatMessage(reply, text, [], self._messages)
 
     @property
     def sticker(self):
@@ -278,33 +325,24 @@ class _CompatMessage:
         return getattr(self._e, "reactions", None)
 
     async def edit(self, text: str, **kwargs):
-        if hasattr(self._e, "edit"):
-            return await self._e.edit(text, **kwargs)
-        if hasattr(self._e, "reply"):
-            return await self._e.reply(text, **kwargs)
-        return None
+        client = _CompatClient(None, self._messages)
+        return await client.edit_message_text(self.chat.id, self.id, text, **kwargs)
 
     async def delete(self):
-        if hasattr(self._e, "delete"):
-            return await self._e.delete()
-        return None
+        if self._messages is None:
+            raise RuntimeError("TelePilot MessageOps 不可用，拒绝直接删除消息")
+        return await self._messages.delete(chat_id=int(self.chat.id), message_id=int(self.id))
 
     async def reply(self, text: str, **kwargs):
-        if hasattr(self._e, "reply"):
-            return await self._e.reply(text, **kwargs)
-        return await self.edit(text, **kwargs)
+        return await _CompatClient(None, self._messages).send_message(
+            self.chat.id, text, reply_to_message_id=self.id, **kwargs
+        )
 
     async def reply_sticker(self, sticker: Any, **kwargs):
-        if hasattr(self._e, "reply_sticker"):
-            return await self._e.reply_sticker(sticker, **kwargs)
-        if hasattr(self._e, "reply"):
-            return await self._e.reply(f"[sticker] {sticker}", **kwargs)
-        return None
+        raise RuntimeError("TelePilot 0.97.0 MessageOps 不支持 sticker 发送，已拒绝直连客户端")
 
     async def click(self, row: int, col: int):
-        if hasattr(self._e, "click"):
-            return await self._e.click(row, col)
-        return None
+        raise RuntimeError("未声明第三方 Bot 按钮契约，已拒绝直连客户端点击")
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._e, name)
@@ -327,6 +365,7 @@ class JpmByRBQPlugin(Plugin):
         legacy_main.configure_data_dir(ctx.data_dir, ctx.account_id)
         RUNTIME.ctx = ctx
         RUNTIME.client = ctx.client
+        RUNTIME.messages = ctx.messages
         cmds = {spec.command for spec in RUNTIME.listeners if spec.command}
         self.commands = {c: self._cmd_dispatch for c in sorted(cmds)}
         await RUNTIME.run_hooks(startup=True)
@@ -334,6 +373,7 @@ class JpmByRBQPlugin(Plugin):
     async def on_shutdown(self, ctx: PluginContext) -> None:
         RUNTIME.ctx = ctx
         RUNTIME.client = ctx.client
+        RUNTIME.messages = ctx.messages
         await RUNTIME.run_hooks(startup=False)
 
     async def _cmd_dispatch(self, client: Any, event: Any, args: list[str], account_id: int, ctx: PluginContext) -> None:
@@ -343,9 +383,11 @@ class JpmByRBQPlugin(Plugin):
             return
         RUNTIME.ctx = ctx
         RUNTIME.client = client
+        RUNTIME.messages = ctx.messages
         await RUNTIME.dispatch_command(cmd, event, parsed_args)
 
     async def on_message(self, ctx: PluginContext, event: Any) -> None:
         RUNTIME.ctx = ctx
         RUNTIME.client = ctx.client
+        RUNTIME.messages = ctx.messages
         await RUNTIME.dispatch_message(event)

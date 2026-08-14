@@ -70,6 +70,15 @@ def _content_key(text: str) -> str:
     return text if len(text) <= 50 else text[:50] + str(len(text))
 
 
+async def _edit_command(ctx: PluginContext, event: Any, text: str) -> None:
+    messages = getattr(ctx, "messages", None)
+    if messages is None:
+        raise RuntimeError("TelePilot MessageOps 不可用，拒绝编辑消息")
+    chat_id = int(getattr(getattr(event, "chat_id", None), "channel_id", None) or getattr(event, "chat_id", 0) or 0)
+    message_id = int(getattr(event, "id", 0) or getattr(getattr(event, "message", None), "id", 0) or 0)
+    await messages.edit(chat_id=chat_id, message_id=message_id, text=text, parse_mode="html")
+
+
 # ─── Redis 键名 ─────────────────────────────────────────
 
 _RK_DAILY = "daily:{cid}"  # SET, TTL 24h
@@ -247,10 +256,10 @@ class AutoRepeatPlugin(Plugin):
             return  # 今日已复读过
 
         # 执行复读
-        client = ctx.client
-        if client:
+        messages = getattr(ctx, "messages", None)
+        if messages:
             try:
-                await client.send_message(chat_id, text)
+                await messages.send(chat_id=chat_id, text=text, parse_mode="plain")
                 if ctx.log:
                     await ctx.log(
                         "info", "autorepeat triggered", chat_id=chat_id, content_key=ckey
@@ -312,7 +321,7 @@ class AutoRepeatPlugin(Plugin):
             await self._dispatch_command(ctx, args, event)
         except Exception as exc:
             try:
-                await event.edit(f"❌ 操作失败: {_html_escape(str(exc))}")
+                await _edit_command(ctx, event, f"❌ 操作失败: {_html_escape(str(exc))}")
             except Exception:
                 pass
         return True
@@ -335,7 +344,7 @@ class AutoRepeatPlugin(Plugin):
             if _is_group_chat(event):
                 await self._cmd_status(ctx, event)
             else:
-                await event.edit(_help_text())
+                await _edit_command(ctx, event, _help_text())
 
     # ── 子命令实现 ────────────────────────────────────
 
@@ -345,12 +354,12 @@ class AutoRepeatPlugin(Plugin):
         """通过命令添加规则（快捷操作，等价于前端新建规则）。"""
         client = ctx.client
         if not client:
-            await event.edit("❌ 客户端未初始化")
+            await _edit_command(ctx, event, "❌ 客户端未初始化")
             return
 
         result = await self._parse_group_identifier(client, event, identifier)
         if not result["success"]:
-            await event.edit(result.get("error", "操作失败"))
+            await _edit_command(ctx, event, result.get("error", "操作失败"))
             return
 
         chat_id = result["chat_id"]
@@ -359,7 +368,7 @@ class AutoRepeatPlugin(Plugin):
         # 检查是否已存在规则
         existing = self._find_matching_rule(ctx.rules, chat_id)
         if existing:
-            await event.edit(f"⚠️ <b>{_html_escape(title)}</b> 已有规则，无需重复添加")
+            await _edit_command(ctx, event, f"⚠️ <b>{_html_escape(title)}</b> 已有规则，无需重复添加")
             return
 
         # 通过数据库创建规则
@@ -385,9 +394,9 @@ class AutoRepeatPlugin(Plugin):
 
             # 通知 worker 热更新
             await self._request_reload(ctx)
-            await event.edit(f"✅ 已添加 <b>{_html_escape(title)}</b> 的自动复读规则")
+            await _edit_command(ctx, event, f"✅ 已添加 <b>{_html_escape(title)}</b> 的自动复读规则")
         except Exception as exc:
-            await event.edit(f"❌ 添加规则失败: {_html_escape(str(exc))}")
+            await _edit_command(ctx, event, f"❌ 添加规则失败: {_html_escape(str(exc))}")
 
     async def _cmd_remove_rule(
         self, ctx: PluginContext, event, identifier: str | None
@@ -395,12 +404,12 @@ class AutoRepeatPlugin(Plugin):
         """通过命令删除规则（快捷操作）。"""
         client = ctx.client
         if not client:
-            await event.edit("❌ 客户端未初始化")
+            await _edit_command(ctx, event, "❌ 客户端未初始化")
             return
 
         result = await self._parse_group_identifier(client, event, identifier)
         if not result["success"]:
-            await event.edit(result.get("error", "操作失败"))
+            await _edit_command(ctx, event, result.get("error", "操作失败"))
             return
 
         chat_id = result["chat_id"]
@@ -409,7 +418,7 @@ class AutoRepeatPlugin(Plugin):
         # 查找对应规则
         match = self._find_matching_rule(ctx.rules, chat_id)
         if not match:
-            await event.edit(f"⚠️ <b>{_html_escape(title)}</b> 没有规则，无需删除")
+            await _edit_command(ctx, event, f"⚠️ <b>{_html_escape(title)}</b> 没有规则，无需删除")
             return
 
         rule, _ = match
@@ -422,14 +431,14 @@ class AutoRepeatPlugin(Plugin):
                 await db.commit()
 
             await self._request_reload(ctx)
-            await event.edit(f"❌ 已删除 <b>{_html_escape(title)}</b> 的自动复读规则")
+            await _edit_command(ctx, event, f"❌ 已删除 <b>{_html_escape(title)}</b> 的自动复读规则")
         except Exception as exc:
-            await event.edit(f"❌ 删除规则失败: {_html_escape(str(exc))}")
+            await _edit_command(ctx, event, f"❌ 删除规则失败: {_html_escape(str(exc))}")
 
     async def _cmd_list(self, ctx: PluginContext, event) -> None:
         """列出当前所有规则对应的群组。"""
         if not ctx.rules:
-            await event.edit("📝 当前没有自动复读规则")
+            await _edit_command(ctx, event, "📝 当前没有自动复读规则")
             return
 
         client = ctx.client
@@ -455,7 +464,7 @@ class AutoRepeatPlugin(Plugin):
                 lines.append(f"• <code>{chat_id}</code> — {time_window}秒/{min_users}人")
 
         text = f"📝 <b>自动复读规则 ({len(lines)}):</b>\n\n" + "\n".join(lines)
-        await event.edit(text)
+        await _edit_command(ctx, event, text)
 
     async def _cmd_status(self, ctx: PluginContext, event) -> None:
         """查看当前群组状态。"""
@@ -476,7 +485,7 @@ class AutoRepeatPlugin(Plugin):
         except Exception:
             title = str(chat_id)
 
-        await event.edit(
+        await _edit_command(ctx, event,
             f"🤖 <b>{title}</b>\n"
             f"群组ID: <code>{chat_id}</code>\n"
             f"状态: {status}\n"

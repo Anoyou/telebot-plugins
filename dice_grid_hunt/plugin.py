@@ -36,8 +36,6 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
-PLUGIN_VERSION = "1.1.31"
-
 try:
     from app.worker.plugins.base import public_entity_display_name
 except ImportError:  # pragma: no cover - older TelePilot compatibility
@@ -442,6 +440,14 @@ class DiceGridHuntPlugin(Plugin):
             return await self._interaction_close(payload)
         return []
 
+    async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+        event = self._framework_event(payload)
+        return await self.on_interaction(
+            ctx,
+            str(event.trigger.get("entry_key") or "start_dice_grid_hunt"),
+            payload,
+        )
+
     async def _interaction_start(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
         chat_id = self._payload_chat_id(payload)
         if not chat_id:
@@ -667,28 +673,24 @@ class DiceGridHuntPlugin(Plugin):
         self._track_task(asyncio.create_task(self._auto_timeout(chat_id, ctx, rd.started_at)))
 
     async def _send_round(self, ctx: PluginContext, event: Any, rd: RoundState) -> Any:
-        image_file = io.BytesIO(_render_grid_png(rd))
-        image_file.name = "dice_grid_hunt.png"
         caption = self._render_round_text(rd, include_guide=True)
-        # 优先编辑触发命令的消息（在可编辑场景下）
-        if ctx.client:
-            try:
-                edited = await ctx.client.edit_message(event.chat_id, event.id, caption, file=image_file, parse_mode="html")
-                return edited
-            except Exception:
-                image_file.seek(0)
-        if ctx.client:
-            return await ctx.client.send_file(event.chat_id, image_file, caption=caption, parse_mode="html")
-        return await event.reply(caption, parse_mode="html")
+        return await ctx.messages.send_photo(
+            chat_id=event.chat_id,
+            photo=_render_grid_png(rd),
+            filename="dice_grid_hunt.png",
+            caption=caption,
+            parse_mode="html",
+            reply_to_message_id=getattr(event, "id", None),
+            save_message_id_key=f"dice_grid_hunt:{ctx.account_id}:{event.chat_id}",
+        )
 
     async def _edit_trigger_or_reply(self, ctx: PluginContext, event: Any, text: str) -> None:
-        if ctx.client:
-            try:
-                await ctx.client.edit_message(event.chat_id, event.id, text, parse_mode="html")
-                return
-            except Exception:
-                pass
-        await event.reply(text, parse_mode="html")
+        await ctx.messages.edit(
+            chat_id=event.chat_id,
+            message_id=event.id,
+            text=text,
+            parse_mode="html",
+        )
 
     def _new_round(self, prize: int, *, timeout: int | None = None) -> RoundState:
         while True:
@@ -1077,25 +1079,23 @@ class DiceGridHuntPlugin(Plugin):
 
     async def _send_prize_reply(self, ctx: PluginContext, event: Any, chat_id: int, rd: RoundState) -> None:
         text = self._render_text(self._prize_message_template, {"prize": rd.prize})
-        try:
-            await event.reply(text)
-            return
-        except Exception:
-            pass
-        if ctx.client and rd.winner_message_id:
-            try:
-                await ctx.client.send_message(chat_id, text, reply_to=rd.winner_message_id)
-                return
-            except Exception:
-                pass
-        if ctx.client:
-            await ctx.client.send_message(chat_id, text)
+        await ctx.messages.payout(
+            chat_id=chat_id,
+            amount=rd.prize,
+            text=text,
+            reply_to_message_id=rd.winner_message_id,
+        )
 
     async def _edit_round_message(self, ctx: PluginContext, chat_id: int, rd: RoundState, suffix: str) -> None:
-        if not ctx.client or not rd.message_id:
+        if not rd.message_id:
             return
         try:
-            await ctx.client.edit_message(chat_id, rd.message_id, self._render_round_text(rd, include_guide=True) + suffix, parse_mode="html")
+            await ctx.messages.edit_caption(
+                chat_id=chat_id,
+                message_id=rd.message_id,
+                caption=self._render_round_text(rd, include_guide=True) + suffix,
+                parse_mode="html",
+            )
         except Exception as exc:
             if ctx.log:
                 await ctx.log("warn", f"[dice_grid_hunt] 题目消息更新失败：{type(exc).__name__}: {exc}")
@@ -1130,11 +1130,11 @@ class DiceGridHuntPlugin(Plugin):
         self._track_task(asyncio.create_task(self._delete_round_message_later(ctx, chat_id, rd.message_id)))
 
     async def _delete_round_message_later(self, ctx: PluginContext, chat_id: int, message_id: int | None) -> None:
-        if not ctx.client or not message_id or self._delete_after_round <= 0:
+        if not message_id or self._delete_after_round <= 0:
             return
         await asyncio.sleep(self._delete_after_round)
         try:
-            await ctx.client.delete_messages(chat_id, message_id)
+            await ctx.messages.delete(chat_id=chat_id, message_id=message_id)
         except Exception:
             pass
 

@@ -35,12 +35,12 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="share_plugins-byRBQ",
     display_name="share_plugins-byRBQ",
-    version="1.0.7",
+    version="1.0.8",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="分享插件，将现有插件以文件形式分享，支持列表查看和序号选择",
-    permissions=["send_message", "edit_message", "read_chat"],
+    permissions=["send_message", "edit_message", "delete_message", "send_file", "read_chat"],
 
     category="utility",
     interaction_entries=[],

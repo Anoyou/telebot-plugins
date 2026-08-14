@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.26 (2026-08-15)
+- 新增标准 Event Bus 主入口，按 TelePilot loader 注入的入口键处理交互事件。
+
 ## 1.0.25 (2026-08-15)
 - 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
 

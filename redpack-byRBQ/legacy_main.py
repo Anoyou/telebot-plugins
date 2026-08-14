@@ -2133,42 +2133,9 @@ def should_auto_confirm_transfer(message: Message) -> bool:
 
 
 async def click_transfer_confirm_button(message: Message) -> bool:
-    """自动点击转账确认消息中的“确认”按钮"""
-    reply_markup = getattr(message, "reply_markup", None)
-    inline_keyboard = getattr(reply_markup, "inline_keyboard", None) if reply_markup else None
-    if not inline_keyboard:
-        return False
-
-    target: Optional[tuple[int, int, str]] = None
-    fallback: Optional[tuple[int, int, str]] = None
-    for row_idx, row in enumerate(inline_keyboard):
-        for col_idx, button in enumerate(row):
-            button_text = str(getattr(button, "text", "") or "").strip()
-            if not button_text:
-                continue
-            if "取消" in button_text:
-                continue
-            if button_text == "确认":
-                target = (row_idx, col_idx, button_text)
-                break
-            if "确认" in button_text and fallback is None:
-                fallback = (row_idx, col_idx, button_text)
-        if target is not None:
-            break
-
-    chosen = target or fallback
-    if chosen is None:
-        return False
-
-    row_idx, col_idx, button_text = chosen
-    await asyncio.sleep(AUTO_CONFIRM_CLICK_DELAY)
-    await message.click(row_idx, col_idx)
-    logs.info(
-        f"[REDPACK] 已自动点击转账确认按钮 | chat_id={getattr(message.chat, 'id', None)} | "
-        f"message_id={getattr(message, 'id', None)} | button={button_text}"
-    )
-    return True
-
+    """旧第三方高额转账确认按钮已停用，避免绕过平台 ledger 审计。"""
+    logs.warning("[REDPACK] 已拒绝旧第三方转账确认按钮直连")
+    return False
 
 @listener(
     command="redpack",
@@ -2375,6 +2342,21 @@ async def redpack_claim_listener(message: Message, bot: Client) -> None:
         if claim_amount <= 0:
             return
 
+        try:
+            claim_reply_message = await bot.payout(
+                chat_id=chat_id,
+                amount=claim_amount,
+                text=build_claim_reply(claim_amount),
+                reply_to_message_id=claim_message_id,
+                reply_to_user_id=int(sender.id),
+            )
+        except Exception as error:
+            logs.warning(
+                f"[REDPACK] 平台 payout 失败，领取记录保持不变 | "
+                f"chat_id={chat_id} sender_id={sender.id} error={error}"
+            )
+            return
+
         config.mark_claim(
             chat_id=chat_id,
             pack=pack,
@@ -2388,18 +2370,7 @@ async def redpack_claim_listener(message: Message, bot: Client) -> None:
             settlement_text = build_settlement_text(pack)
             settlement_rich_text = build_settlement_rich_text(pack)
 
-    claim_reply_message = None
-    try:
-        claim_reply_message = await bot.send_message(
-            chat_id=chat_id,
-            text=build_claim_reply(claim_amount),
-            reply_to_message_id=claim_message_id,
-        )
-    except Exception as error:
-        logs.warning(f"[REDPACK] 发送领取提示失败: {error}")
-
     if claim_reply_message is not None:
-        register_pending_transfer_confirm(chat_id, getattr(claim_reply_message, "id", None))
         if CLAIM_REPLY_DELETE_DELAY > 0:
             asyncio.create_task(delete_message_later(claim_reply_message))
 
@@ -2418,23 +2389,5 @@ async def redpack_claim_listener(message: Message, bot: Client) -> None:
 
 @listener(is_plugin=True, incoming=True, outgoing=False, ignore_edited=False, priority=20)
 async def redpack_transfer_confirm_listener(message: Message, bot: Client) -> None:
-    """监听高额转账确认消息并自动点击确认按钮"""
-    if not AUTO_CONFIRM_ENABLED:
-        return
-    if not getattr(message, "chat", None) or not getattr(message.chat, "id", None):
-        return
-    if not should_auto_confirm_transfer(message):
-        return
-
-    try:
-        clicked = await click_transfer_confirm_button(message)
-        if not clicked:
-            logs.warning(
-                f"[REDPACK] 检测到转账确认消息，但未找到可点击的确认按钮 | "
-                f"chat_id={message.chat.id} | message_id={getattr(message, 'id', None)}"
-            )
-    except Exception as error:
-        logs.error(
-            f"[REDPACK] 自动点击转账确认失败 | "
-            f"chat_id={message.chat.id} | message_id={getattr(message, 'id', None)} | error={error}"
-        )
+    """历史确认入口已停用；资金动作统一由平台 payout/ledger 审计。"""
+    return None
