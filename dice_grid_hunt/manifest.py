@@ -267,7 +267,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.33",
+    version="1.1.34",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -300,6 +300,7 @@ MANIFEST = Manifest(
                        'required_event_fields': ['type', 'chat_id']},
   'result_contract': {'actions': ['send_message',
                                   'send_photo',
+                                  'start_session',
                                   'update_session',
                                   'edit_caption',
                                   'payout', 'end_session',

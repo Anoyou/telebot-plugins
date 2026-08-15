@@ -482,6 +482,7 @@ class DiceGridHuntPlugin(Plugin):
 
         if ctx.log:
             await ctx.log("info", f"[dice_grid_hunt] 交互 Bot 已开局 chat={chat_id} prize={prize} timeout={timeout}")
+        session_data = self._round_to_session(rd)
         return [
             {
                 "type": "send_photo",
@@ -493,7 +494,16 @@ class DiceGridHuntPlugin(Plugin):
                 "reply_to_message_id": self._payload_message_id(payload),
                 "save_message_id_key": self._interaction_message_key(ctx.account_id, chat_id),
             },
-            {"type": "update_session", "data": self._round_to_session(rd)},
+            {
+                "type": "start_session",
+                "chat_id": chat_id,
+                "entry_key": "start_dice_grid_hunt",
+                "event_type": self._interaction_event_type(payload) or "message",
+                "started_by_user_id": self._interaction_actor_user_id(payload) or None,
+                "started_by_message_id": self._payload_message_id(payload),
+                "ttl_seconds": timeout,
+                "data": session_data,
+            },
         ]
 
     async def _interaction_answer(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
