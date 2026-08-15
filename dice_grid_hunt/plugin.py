@@ -36,6 +36,23 @@ from .manifest import (
 )
 
 DICE_FACES = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"]
+
+
+async def _message_op(messages: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+    method = getattr(messages, name, None)
+    if callable(method):
+        return await method(**kwargs)
+    apply = getattr(messages, "apply", None)
+    if not callable(apply):
+        raise RuntimeError(f"TelePilot MessageOps 不支持 {name}")
+    from app.worker.plugins.message_ops import BufferedMessageOps
+
+    buffered = BufferedMessageOps()
+    action = await getattr(buffered, name)(**kwargs)
+    await apply([action])
+    return action
+
+
 try:
     from app.worker.plugins.base import public_entity_display_name
 except ImportError:  # pragma: no cover - older TelePilot compatibility
@@ -684,7 +701,9 @@ class DiceGridHuntPlugin(Plugin):
 
     async def _send_round(self, ctx: PluginContext, event: Any, rd: RoundState) -> Any:
         caption = self._render_round_text(rd, include_guide=True)
-        return await ctx.messages.send_photo(
+        return await _message_op(
+            ctx.messages,
+            "send_photo",
             chat_id=event.chat_id,
             photo=_render_grid_png(rd),
             filename="dice_grid_hunt.png",
@@ -1100,7 +1119,9 @@ class DiceGridHuntPlugin(Plugin):
         if not rd.message_id:
             return
         try:
-            await ctx.messages.edit_caption(
+            await _message_op(
+                ctx.messages,
+                "edit_caption",
                 chat_id=chat_id,
                 message_id=rd.message_id,
                 caption=self._render_round_text(rd, include_guide=True) + suffix,

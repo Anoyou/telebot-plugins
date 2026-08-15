@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.35 (2026-08-15)
+- 修复 TelePilot 0.97.0 常驻命令上下文缺少 `send_photo` / `edit_caption` facade 时无法发送或更新九宫格题图，现统一构造标准媒体 action 并由平台执行；同步新装配置页的题面版本示例。
+
 ## 1.1.34 (2026-08-15)
 - 修复 Event Bus 首次开局直接返回 `update_session` 的旧行为；现在先用 `start_session` 建立完整会话，后续猜错状态才使用 `update_session`。
 

@@ -72,9 +72,26 @@ except ImportError:  # pragma: no cover - depends on worker environment
     HAS_PIL = False
 
 
-PLUGIN_VERSION = "1.4.11"
+PLUGIN_VERSION = "1.4.12"
 PLUGIN_KEY = "lucky_redpack"
 DEFAULT_COMMAND = "rp"
+
+
+async def _message_op(messages: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+    method = getattr(messages, name, None)
+    if callable(method):
+        return await method(**kwargs)
+    apply = getattr(messages, "apply", None)
+    if not callable(apply):
+        raise RuntimeError(f"TelePilot MessageOps 不支持 {name}")
+    from app.worker.plugins.message_ops import BufferedMessageOps
+
+    buffered = BufferedMessageOps()
+    action = await getattr(buffered, name)(**kwargs)
+    await apply([action])
+    return action
+
+
 DEFAULT_AMOUNT = 88888
 DEFAULT_COUNT = 10
 DEFAULT_MIN_SHARE_AMOUNT = 1
@@ -2173,7 +2190,9 @@ class LuckyRedpackPlugin(Plugin):
         if image_path is None:
             raise RuntimeError(get_image_error())
         try:
-            return await messages.send_photo(
+            return await _message_op(
+                messages,
+                "send_photo",
                 chat_id=pack.chat_id,
                 photo=image_path.read_bytes(),
                 filename=image_path.name,

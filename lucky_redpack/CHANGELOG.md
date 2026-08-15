@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.4.12 (2026-08-15)
+- 修复 TelePilot 0.97.0 常驻事件 MessageOps 缺少 `send_photo` facade 时红包图片发送失败，改用标准媒体 action 与平台执行链。
+
 ## 1.4.11 (2026-08-15)
 - Event Bus 主路径改为标准事件解析；发送、图片、编辑、删除与结算统一绑定 MessageOps。
 

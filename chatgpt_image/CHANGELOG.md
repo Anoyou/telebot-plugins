@@ -1,5 +1,8 @@
 # 更新日志
 
+## 0.1.7 (2026-08-15)
+- 修复 TelePilot 0.97.0 常驻事件 MessageOps 缺少 `send_photo` / `send_file` facade 时的图片发送失败；现在通过标准媒体 action 与 `apply()` 执行，继续保留平台权限校验和审计。
+
 ## 0.1.6 (2026-08-15)
 - 图片状态编辑与结果发送统一改用平台 MessageOps，ChatGPT 请求与远程导入接入 ctx.http 白名单；受 TelePilot 0.97.0 facade 限制，参考图 PUT 上传会明确拒绝。
 

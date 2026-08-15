@@ -17,7 +17,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="codex_image",
     display_name="Codex 图片生成",
-    version="1.1.6",
+    version="1.1.7",
     min_telepilot_version="0.33.0",
     author="TeleBoxOrg",
     description="通过 Codex API 调用 GPT 图片生成模型，支持纯文生图和参考图生成",

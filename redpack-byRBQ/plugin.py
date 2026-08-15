@@ -24,6 +24,21 @@ DEFAULT_COMMAND = "redpack"
 PLUGIN_KEY = "redpack-byRBQ"
 
 
+async def _message_op(messages: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+    method = getattr(messages, name, None)
+    if callable(method):
+        return await method(**kwargs)
+    apply = getattr(messages, "apply", None)
+    if not callable(apply):
+        raise RuntimeError(f"TelePilot MessageOps 不支持 {name}")
+    from app.worker.plugins.message_ops import BufferedMessageOps
+
+    buffered = BufferedMessageOps()
+    action = await getattr(buffered, name)(**kwargs)
+    await apply([action])
+    return action
+
+
 def _install_legacy_import_stubs() -> None:
     """让历史业务层可被导入，但不再通过 Pagermaid 注册监听器。"""
     pagermaid = types.ModuleType("pagermaid")
@@ -255,7 +270,9 @@ class _NativeClientAdapter:
             filename = "redpack.png"
         else:
             raise TypeError("红包图片必须是本地文件或字节数据")
-        return await self._ctx.messages.send_photo(
+        return await _message_op(
+            self._ctx.messages,
+            "send_photo",
             chat_id=int(chat_id),
             photo=payload,
             filename=filename,
@@ -265,7 +282,9 @@ class _NativeClientAdapter:
         )
 
     async def edit_message_caption(self, chat_id: int, message_id: int, caption: str, **kwargs: Any) -> Any:
-        return await self._ctx.messages.edit_caption(
+        return await _message_op(
+            self._ctx.messages,
+            "edit_caption",
             chat_id=int(chat_id), message_id=int(message_id), caption=caption,
             parse_mode="html" if str(kwargs.get("parse_mode") or "").lower() == "html" else "plain",
         )

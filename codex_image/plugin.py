@@ -91,6 +91,21 @@ _CODEX_HEADERS_BASE = {
     "Referer": "https://chatgpt.com/codex",
 }
 
+
+async def _message_op(messages: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+    method = getattr(messages, name, None)
+    if callable(method):
+        return await method(**kwargs)
+    apply = getattr(messages, "apply", None)
+    if not callable(apply):
+        raise RuntimeError(f"TelePilot MessageOps 不支持 {name}")
+    from app.worker.plugins.message_ops import BufferedMessageOps
+
+    buffered = BufferedMessageOps()
+    action = await getattr(buffered, name)(**kwargs)
+    await apply([action])
+    return action
+
 # ─── 工具函数 ───────────────────────────────────────────
 
 
@@ -1503,7 +1518,9 @@ class CodexImagePlugin(Plugin):
             send_reply_to = reply_to_id or getattr(event, "id", None)
 
             try:
-                await messages.send_photo(
+                await _message_op(
+                    messages,
+                    "send_photo",
                     chat_id=int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id),
                     photo=image_bytes,
                     filename=file_name,
@@ -1519,7 +1536,9 @@ class CodexImagePlugin(Plugin):
                         error=type(send_exc).__name__,
                         detail=_safe_error_text(str(send_exc))[:300],
                     )
-                await messages.send_photo(
+                await _message_op(
+                    messages,
+                    "send_photo",
                     chat_id=int(getattr(getattr(event, "chat_id", None), "channel_id", None) or event.chat_id),
                     photo=image_bytes,
                     filename=file_name,

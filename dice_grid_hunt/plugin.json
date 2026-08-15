@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.34",
+  "version": "1.1.35",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -146,7 +146,7 @@
         "type": "string",
         "title": "模板渲染预览（只读 - 开局消息）",
         "description": "使用固定示例数据渲染最终消息。仅用于配置预览。",
-        "default": "<b>九宫格竞猜v1.1.28 开始</b>\n目标：<b>17</b> · 回 <code>1-9</code>\n奖 <b>+100</b> · 90s · 冷却 2.0s",
+        "default": "<b>九宫格竞猜v1.1.35 开始</b>\n目标：<b>17</b> · 回 <code>1-9</code>\n奖 <b>+100</b> · 90s · 冷却 2.0s",
         "readOnly": true
       },
       "in_progress_preview": {

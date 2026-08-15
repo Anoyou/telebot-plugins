@@ -3,7 +3,7 @@
   "display_name": "红包",
   "description": "口令红包插件，支持文字红包与图片数学题红包，并通过平台 payout 完成可审计派奖与结算",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.1.28",
+  "version": "1.1.29",
   "entry": "plugin.py",
   "min_telepilot_version": "0.59.1",
   "commands": [

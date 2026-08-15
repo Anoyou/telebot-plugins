@@ -41,7 +41,7 @@ from .token_pool import (
     parse_token_lines,
 )
 
-PLUGIN_VERSION = "0.1.6"
+PLUGIN_VERSION = "0.1.7"
 DEFAULT_MODELS = [
     "gpt-image-2",
     "codex-gpt-image-2",
@@ -53,6 +53,21 @@ DEFAULT_MODELS = [
     "gpt-5-3-mini",
     "gpt-5-mini",
 ]
+
+
+async def _message_op(messages: Any, name: str, **kwargs: Any) -> dict[str, Any]:
+    method = getattr(messages, name, None)
+    if callable(method):
+        return await method(**kwargs)
+    apply = getattr(messages, "apply", None)
+    if not callable(apply):
+        raise RuntimeError(f"TelePilot MessageOps 不支持 {name}")
+    from app.worker.plugins.message_ops import BufferedMessageOps
+
+    buffered = BufferedMessageOps()
+    action = await getattr(buffered, name)(**kwargs)
+    await apply([action])
+    return action
 
 CONFIG_RELOAD_KEYS = {
     "command",
@@ -534,19 +549,19 @@ class ChatGPTImagePlugin(Plugin):
                 "reply_to_message_id": reply_to,
                 "parse_mode": "html" if idx == 1 and caption else "plain",
             }
-            send_media = messages.send_file if self._cfg.output_mode == "file" else messages.send_photo
+            media_op = "send_file" if self._cfg.output_mode == "file" else "send_photo"
             data_key = "file" if self._cfg.output_mode == "file" else "photo"
             try:
-                await send_media(chat_id=chat_id, filename=filename, **{data_key: result.data}, **kwargs)
+                await _message_op(messages, media_op, chat_id=chat_id, filename=filename, **{data_key: result.data}, **kwargs)
             except Exception:
                 if idx == 1 and caption:
                     plain_kwargs = dict(kwargs)
                     plain_kwargs["caption"] = _strip_html_tags(caption)[:1024]
                     plain_kwargs["parse_mode"] = "plain"
-                    await send_media(chat_id=chat_id, filename=filename, **{data_key: result.data}, **plain_kwargs)
+                    await _message_op(messages, media_op, chat_id=chat_id, filename=filename, **{data_key: result.data}, **plain_kwargs)
                     continue
                 if self._cfg.output_mode == "auto":
-                    await messages.send_file(chat_id=chat_id, filename=filename, file=result.data, **kwargs)
+                    await _message_op(messages, "send_file", chat_id=chat_id, filename=filename, file=result.data, **kwargs)
                 else:
                     raise
 

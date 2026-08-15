@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +20,13 @@ BYRBQ = (
     "ais-byRBQ", "cai-byRBQ", "get_reactions-byRBQ", "gi2-byRBQ", "jpm-byRBQ",
     "jpmai-byRBQ", "luckydraw-byRBQ", "pixivshow-byRBQ", "sar-byRBQ", "sfl-byRBQ",
     "share_plugins-byRBQ",
+)
+LIVE_MEDIA_PLUGINS = (
+    "chatgpt_image",
+    "codex_image",
+    "dice_grid_hunt",
+    "lucky_redpack",
+    "redpack-byRBQ",
 )
 
 
@@ -97,3 +107,54 @@ def test_gi2_multipart_is_forwarded_as_facade_data_and_files() -> None:
     ]
     assert any({item.arg for item in call.keywords} >= {"data", "files"} for call in calls)
     assert "request_edit_with_curl_sync" not in source
+
+
+def test_live_message_ops_media_fallback_uses_standard_apply() -> None:
+    script = """
+import asyncio
+import sys
+from pathlib import Path
+from app.worker.plugins.loader import _load_dir
+
+ROOT = Path(sys.argv[1])
+KEYS = sys.argv[2:]
+
+class ApplyOnlyMessageOps:
+    def __init__(self):
+        self.actions = []
+
+    async def apply(self, actions):
+        self.actions.extend(actions)
+
+async def main():
+    for key in KEYS:
+        loaded = _load_dir(ROOT / key, "installed")
+        assert loaded, key
+        module = sys.modules[next(iter(loaded.values())).__module__]
+        helper = getattr(module, "_message_op")
+        for name, kwargs, expected in (
+            ("send_photo", {"chat_id": 123, "photo": b"image-bytes", "filename": "test.png"}, "send_photo"),
+            ("send_file", {"chat_id": 123, "file": b"file-bytes", "filename": "test.bin"}, "send_file"),
+            ("edit_caption", {"chat_id": 123, "message_id": 456, "caption": "updated"}, "edit_caption"),
+        ):
+            messages = ApplyOnlyMessageOps()
+            action = await helper(messages, name, **kwargs)
+            assert action["type"] == expected, (key, name)
+            assert action["chat_id"] == 123, (key, name)
+            assert messages.actions == [action], (key, name)
+
+asyncio.run(main())
+"""
+    backend = Path(sys.prefix).resolve().parent
+    assert (backend / "app/worker/plugins/loader.py").is_file()
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(backend)
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(ROOT), *LIVE_MEDIA_PLUGINS],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
