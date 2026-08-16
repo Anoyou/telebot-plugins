@@ -106,6 +106,12 @@ class _Messages:
     async def send(self, **kwargs):
         self.actions.append({"type": "send_message", **kwargs})
 
+    async def edit(self, **kwargs):
+        self.actions.append({"type": "edit_message", **kwargs})
+
+    async def delete(self, **kwargs):
+        self.actions.append({"type": "delete_message", **kwargs})
+
     async def read_saved_message_id(self, key):
         return self.saved.get(key)
 
@@ -126,7 +132,7 @@ def _ctx(*, storage=None, scheduler=None, messages=None, config=None):
             return types.SimpleNamespace(id=999, username="owner")
 
     return types.SimpleNamespace(
-        config=config or {},
+        config={"auto_delete_enabled": False} if config is None else config,
         storage=storage or _Storage(),
         scheduler=scheduler or _Scheduler(),
         messages=messages or _Messages(),
@@ -181,6 +187,20 @@ class TodoReminderTest(unittest.TestCase):
         self.assertEqual(plugin_module.parse_reminder_request("五分钟后提醒我喝水", now=now)[1:], ("喝水", True))
         self.assertEqual(plugin_module.parse_reminder_request("五分钟后提醒他喝水", now=now)[1:], ("喝水", False))
 
+    def test_repeat_requires_explicit_request_and_supports_custom_interval(self) -> None:
+        config = {"repeat_interval_minutes": 7}
+        self.assertEqual(plugin_module._extract_repeat_request("喝水", config), ("喝水", False, 7))
+        self.assertEqual(plugin_module._extract_repeat_request("喝水，重复提醒", config), ("喝水", True, 7))
+        self.assertEqual(plugin_module._extract_repeat_request("喝水每隔10分钟再次提醒", config), ("喝水", True, 10))
+        self.assertEqual(
+            plugin_module._extract_repeat_request("喝水，如果没回复就每隔十分钟再次提醒", config),
+            ("喝水", True, 10),
+        )
+        self.assertEqual(
+            plugin_module._extract_repeat_request("吃药 每两小时重复提醒", config),
+            ("吃药", True, 120),
+        )
+
     def test_other_target_uses_userbot_reply_and_self_uses_interaction_bot(self) -> None:
         async def run_case():
             plugin = plugin_module.TodoReminderPlugin()
@@ -231,6 +251,29 @@ class TodoReminderTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_command_response_edits_trigger_message_and_id_is_copyable_without_hash(self) -> None:
+        async def run_case():
+            plugin = plugin_module.TodoReminderPlugin()
+            plugin._me_id = 999
+            messages = _Messages()
+            ctx = _ctx(messages=messages)
+            await plugin._handle_command_text(
+                ctx,
+                -1001,
+                88,
+                "五分钟后提醒我喝水",
+                types.SimpleNamespace(reply_to_msg_id=None, message=None),
+            )
+            task = next(iter(plugin._tasks.values()))
+            self.assertFalse(task["repeat_enabled"])
+            self.assertEqual(messages.actions[-1]["type"], "edit_message")
+            self.assertEqual(messages.actions[-1]["message_id"], 88)
+            self.assertIn(f"<code>{task['id']}</code>", messages.actions[-1]["text"])
+            self.assertNotIn(f"#{task['id']}", messages.actions[-1]["text"])
+            self.assertFalse(any(action["type"] == "send_message" for action in messages.actions))
+
+        asyncio.run(run_case())
+
     def test_undo_command_cancels_by_id_without_todo_prefix(self) -> None:
         async def run_case():
             storage = _Storage()
@@ -250,6 +293,58 @@ class TodoReminderTest(unittest.TestCase):
             self.assertNotIn("task:undo1234", storage.values)
             self.assertIn("todo_reminder_undo1234", scheduler.unregistered)
             self.assertEqual(messages.actions[-1]["text"], "已取消提醒。")
+            self.assertEqual(messages.actions[-1]["type"], "edit_message")
+
+        asyncio.run(run_case())
+
+    def test_single_reminder_does_not_reschedule_and_repeat_starts_after_first_fire(self) -> None:
+        async def run_case():
+            scheduler = _Scheduler()
+            storage = _Storage()
+            messages = _Messages()
+            ctx = _ctx(storage=storage, scheduler=scheduler, messages=messages)
+            plugin = plugin_module.TodoReminderPlugin()
+            base = {
+                "chat_id": -1001, "target_user_id": 123, "target_username": "alice",
+                "target_display_name": "Alice", "target_is_self": False, "todo": "喝水",
+                "reply_to_message_id": 88, "repeat_interval_minutes": 5, "reminder_count": 0,
+                "reminder_message_keys": [], "fire_at": datetime.now(timezone.utc).isoformat(),
+            }
+            single = dict(base, id="single01", repeat_enabled=False)
+            plugin._tasks["single01"] = single
+            await plugin._fire_task(ctx, "single01")
+            self.assertNotIn("todo_reminder_single01", scheduler.jobs)
+
+            repeating = dict(base, id="repeat01", repeat_enabled=True)
+            plugin._tasks["repeat01"] = repeating
+            before_fire = datetime.now(timezone.utc)
+            await plugin._fire_task(ctx, "repeat01")
+            scheduled = datetime.fromisoformat(scheduler.jobs["todo_reminder_repeat01"][0]["fire_at"])
+            self.assertGreaterEqual(scheduled, before_fire + timedelta(minutes=5))
+            self.assertLess(scheduled, datetime.now(timezone.utc) + timedelta(minutes=5, seconds=1))
+
+        asyncio.run(run_case())
+
+    def test_repeat_template_placeholders_and_auto_delete(self) -> None:
+        async def run_case():
+            messages = _Messages()
+            ctx = _ctx(
+                messages=messages,
+                config={"reminder_template": "{mention} {todo} 第{count}次 {repeat}"},
+            )
+            plugin = plugin_module.TodoReminderPlugin()
+            task = {
+                "id": "repeat02", "chat_id": -1001, "target_user_id": 123,
+                "target_username": "alice", "target_display_name": "Alice",
+                "target_is_self": False, "todo": "喝水", "reply_to_message_id": 88,
+                "repeat_enabled": True, "repeat_interval_minutes": 5, "reminder_count": 0,
+                "reminder_message_keys": [], "fire_at": datetime.now(timezone.utc).isoformat(),
+            }
+            plugin._tasks["repeat02"] = task
+            await plugin._fire_task(ctx, "repeat02")
+            self.assertIn("第1次 每隔 5 分钟重复提醒", messages.actions[-1]["text"])
+            await plugin._delete_message_later(ctx, -1001, 88, 0)
+            self.assertEqual(messages.actions[-1], {"type": "delete_message", "chat_id": -1001, "message_id": 88})
 
         asyncio.run(run_case())
 

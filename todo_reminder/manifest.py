@@ -5,13 +5,15 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "todo_reminder"
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.3"
 DEFAULT_COMMAND = "todo"
 USAGE = (
     "发送 {prefix}todo 五分钟后提醒我喝水，或回复某人的消息发送 {prefix}todo 五分钟后提醒他喝水。"
-    "回复他/她的已发送提醒并发送“已完成”即可停止；未完成时按配置间隔重复提醒。"
+    "默认只提醒一次；在任务末尾写“重复提醒”或“每隔五分钟再次提醒”才会在首次提醒后开始重复。"
+    "回复他/她的已发送提醒并发送“已完成”即可停止。"
     "直接提醒自己由 Interaction Bot 在当前会话 @自己，避免 UserBot 自己发消息无法产生通知。"
-    "支持发送 {prefix}undo ID 取消提醒；自然语言时间示例：五分钟后、半小时后、明天上午九点、2026-08-17 14:30，并提供列表指令。"
+    "支持发送 {prefix}undo ID 取消提醒；ID 不带 # 并可点击复制。命令结果原地编辑，默认 30 秒后自动删除。"
+    "自然语言时间示例：五分钟后、半小时后、明天上午九点、2026-08-17 14:30，并提供列表指令。"
 )
 EVENT_SUBSCRIPTIONS = [
     {
@@ -46,10 +48,26 @@ CONFIG_SCHEMA = {
         "repeat_interval_minutes": {
             "type": "integer",
             "title": "重复提醒间隔（分钟）",
-            "description": "首次提醒后未完成时，按此间隔再次提醒。",
+            "description": "指令只写“重复提醒”而未指定间隔时使用；重复计时从首次提醒后开始。",
             "default": 5,
             "minimum": 1,
             "maximum": 1440,
+            "level": "account",
+        },
+        "auto_delete_enabled": {
+            "type": "boolean",
+            "title": "自动删除命令结果",
+            "description": "命令反馈编辑到原命令消息后，是否在延迟结束时删除该消息。",
+            "default": True,
+            "level": "account",
+        },
+        "auto_delete_delay_seconds": {
+            "type": "integer",
+            "title": "命令结果自动删除延迟（秒）",
+            "description": "仅在开启自动删除时生效；0 表示不自动删除。",
+            "default": 30,
+            "minimum": 0,
+            "maximum": 86400,
             "level": "account",
         },
         "completion_keywords": {
@@ -73,7 +91,7 @@ CONFIG_SCHEMA = {
         "reminder_template": {
             "type": "string",
             "title": "提醒消息模板",
-            "description": "支持 {mention}、{todo}、{id} 占位符；{mention} 会使用真实用户名或 Telegram 用户提及。",
+            "description": "支持 {mention}、{todo}、{id}、{count}、{reminder_count}、{repeat}、{repeat_interval}、{repeat_interval_minutes} 占位符；{mention} 会使用真实 Telegram 提及。",
             "default": "{mention} 提醒：{todo}",
             "minLength": 1,
             "maxLength": 1000,
@@ -89,10 +107,10 @@ MANIFEST = Manifest(
     version=PLUGIN_VERSION,
     min_telepilot_version="0.97.0-beta.1",
     author="Anoyou",
-    description="用自然语言创建可重复、可完成确认的 Telegram Todo 提醒。",
+    description="用自然语言创建单次或重复、可完成确认的 Telegram Todo 提醒。",
     usage=USAGE,
     category="automation",
-    permissions=["send_message", "read_chat", "resolve_entity"],
+    permissions=["send_message", "edit_message", "delete_message", "read_chat", "resolve_entity"],
     event_subscriptions=EVENT_SUBSCRIPTIONS,
     requires_platform_capabilities=["interaction_bot"],
     capabilities={},
