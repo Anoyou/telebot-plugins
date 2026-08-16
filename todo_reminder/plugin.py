@@ -23,7 +23,8 @@ ENTRY_KEY = "todo_reminder"
 DEFAULT_REPEAT_MINUTES = 5
 DEFAULT_AUTO_DELETE_SECONDS = 30
 DEFAULT_TIMEZONE = "Asia/Shanghai"
-DEFAULT_TEMPLATE = "{mention} 提醒：{todo}"
+DEFAULT_COMPLETION_HINT = "如已完成，请回复本消息“已完成”即可标记。"
+DEFAULT_TEMPLATE = "{mention} 提醒：{todo}\n{completion_hint}"
 DEFAULT_COMPLETION_KEYWORDS = ("已完成", "完成")
 CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 CN_UNITS = {"十": 10, "百": 100, "千": 1000, "万": 10000}
@@ -229,6 +230,10 @@ def _extract_repeat_request(todo: str, config: Mapping[str, Any]) -> tuple[str, 
     """提取任务末尾的显式重复请求；未声明重复时只提醒一次。"""
     source = str(todo or "").strip()
     number = r"半|[零〇一二两三四五六七八九十百千万\d]+(?:\.\d+)?"
+    single_match = re.search(r"(?:[，,；;。]\s*|\s+)(?:仅提醒一次|只提醒一次|单次提醒)\s*$", source)
+    if single_match:
+        cleaned = source[: single_match.start()].rstrip(" ，,；;。")
+        return cleaned or source, False, _repeat_minutes(config)
     interval_match = re.search(
         rf"(?:^|[，,；;。]\s*|\s*)(?:(?:如果|若)?(?:他|她|我|对方)?(?:还)?"
         rf"(?:没回复|未回复|没有回复|没完成|未完成|没有完成)(?:就|则)?\s*)?"
@@ -350,7 +355,9 @@ class TodoReminderPlugin(Plugin):
                     matched = True
                     break
             if matched:
-                await self._complete_task(ctx, str(task["id"]))
+                task_id = str(task["id"])
+                await self._complete_task(ctx, task_id)
+                await self._send_completion_feedback(ctx, chat_id, _message_id(payload), task_id)
         return None
 
     async def _load_me(self, ctx: PluginContext) -> None:
@@ -422,12 +429,18 @@ class TodoReminderPlugin(Plugin):
         if head in {"帮助", "help", "?"} or not raw:
             await self._respond_to_command(ctx, chat_id=chat_id, message_id=message_id, text=self._help_text())
             return
+        shorthand_repeat = False
+        shorthand = re.match(r"^(?P<delay>半|[零〇一二两三四五六七八九十百千万\d]+(?:\.\d+)?)\s+提醒(?P<rest>.*)$", raw)
+        if shorthand:
+            raw = f"{shorthand.group('delay')}分钟后提醒{shorthand.group('rest')}"
+            shorthand_repeat = True
         parsed = parse_reminder_request(raw, timezone_name=str((ctx.config or {}).get("timezone") or DEFAULT_TIMEZONE))
         if parsed is None:
             await self._respond_to_command(ctx, chat_id=chat_id, message_id=message_id, text=f"无法识别时间。示例：{self._command} 五分钟后提醒我喝水")
             return
         fire_at, todo, target_self = parsed
         todo, repeat_enabled, repeat_interval_minutes = _extract_repeat_request(todo, ctx.config or {})
+        repeat_enabled = repeat_enabled or shorthand_repeat
         if fire_at <= datetime.now(timezone.utc):
             await self._respond_to_command(ctx, chat_id=chat_id, message_id=message_id, text="提醒时间已经过去，请指定一个未来时间。")
             return
@@ -513,9 +526,12 @@ class TodoReminderPlugin(Plugin):
             text = template.format(
                 mention=mention, todo=todo, id=task_id, count=count, reminder_count=count,
                 repeat=repeat_text, repeat_interval=repeat_minutes, repeat_interval_minutes=repeat_minutes,
+                completion_hint=DEFAULT_COMPLETION_HINT,
             )
         except (KeyError, ValueError):
-            text = DEFAULT_TEMPLATE.format(mention=mention, todo=todo)
+            text = DEFAULT_TEMPLATE.format(mention=mention, todo=todo, completion_hint=DEFAULT_COMPLETION_HINT)
+        if DEFAULT_COMPLETION_HINT not in text:
+            text = f"{text}\n{DEFAULT_COMPLETION_HINT}"
         state["reminder_count"] = count
         keys = state.get("reminder_message_keys") if isinstance(state.get("reminder_message_keys"), list) else []
         state["reminder_message_keys"] = [*keys, key][-20:]
@@ -565,6 +581,28 @@ class TodoReminderPlugin(Plugin):
             if ctx.log:
                 await ctx.log("warn", f"[todo_reminder] 自动删除命令结果失败：{type(exc).__name__}: {exc}")
 
+    async def _delete_saved_message_later(
+        self, ctx: PluginContext, chat_id: int, key: str, delay_seconds: int
+    ) -> None:
+        await asyncio.sleep(delay_seconds)
+        await self._delete_saved_message(ctx, chat_id, key)
+
+    async def _send_completion_feedback(
+        self, ctx: PluginContext, chat_id: int, message_id: int | None, task_id: str
+    ) -> None:
+        if message_id is None:
+            return
+        key = f"completion:{task_id}:{message_id}"
+        await ctx.messages.send(
+            chat_id=chat_id, reply_to_message_id=message_id,
+            text="已完成，提醒已停止。", save_message_id_key=key,
+        )
+        delay = _auto_delete_seconds(ctx.config or {})
+        if delay > 0:
+            cleanup = asyncio.create_task(self._delete_saved_message_later(ctx, chat_id, key, delay))
+            self._cleanup_tasks.add(cleanup)
+            cleanup.add_done_callback(self._cleanup_tasks.discard)
+
     async def _complete_task(self, ctx: PluginContext, task_id: str) -> None:
         state = self._tasks.pop(task_id, None)
         if not state:
@@ -572,7 +610,7 @@ class TodoReminderPlugin(Plugin):
         if ctx.scheduler is not None:
             ctx.scheduler.unregister(f"todo_reminder_{task_id}")
         for key in state.get("reminder_message_keys") or []:
-            await self._delete_saved_message_id(ctx, str(key))
+            await self._delete_saved_message(ctx, int(state["chat_id"]), str(key))
         await self._delete_task(ctx, task_id)
 
     async def _cancel_task(self, ctx: PluginContext, task_id: str) -> bool:
@@ -606,6 +644,15 @@ class TodoReminderPlugin(Plugin):
             except Exception:
                 pass
 
+    async def _delete_saved_message(self, ctx: PluginContext, chat_id: int, key: str) -> None:
+        message_id = await self._read_saved_message_id(ctx, key)
+        if message_id is not None:
+            try:
+                await ctx.messages.delete(chat_id=chat_id, message_id=message_id)
+            except Exception:
+                pass
+        await self._delete_saved_message_id(ctx, key)
+
     def _list_text(self, chat_id: int) -> str:
         rows = [task for task in self._tasks.values() if int(task.get("chat_id", 0)) == chat_id]
         if not rows:
@@ -626,7 +673,7 @@ class TodoReminderPlugin(Plugin):
     def _help_text(self) -> str:
         return (
             f"用法：{self._command} 五分钟后提醒我喝水；回复某人的消息后发送 {self._command} 明天上午九点提醒他开会。\n"
-            f"重复：在末尾加“每隔五分钟再次提醒”或“重复提醒”；未声明时只提醒一次。\n"
+            f"简写：{self._command} 5 提醒喝水（5 分钟后开始，并按配置间隔重复）；完整时间写法默认只提醒一次。\n"
             f"列表：{self._command} 列表\n取消：undo ID"
         )
 

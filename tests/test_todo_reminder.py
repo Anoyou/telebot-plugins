@@ -274,6 +274,24 @@ class TodoReminderTest(unittest.TestCase):
 
         asyncio.run(run_case())
 
+    def test_numeric_shorthand_enables_repeat_after_initial_delay(self) -> None:
+        async def run_case():
+            plugin = plugin_module.TodoReminderPlugin()
+            plugin._me_id = 999
+            before = datetime.now(timezone.utc)
+            await plugin._handle_command_text(
+                _ctx(), -1001, 88, "5 提醒喝水",
+                types.SimpleNamespace(reply_to_msg_id=None, message=None),
+            )
+            task = next(iter(plugin._tasks.values()))
+            self.assertTrue(task["repeat_enabled"])
+            self.assertEqual(task["todo"], "喝水")
+            fire_at = datetime.fromisoformat(task["fire_at"])
+            self.assertGreaterEqual(fire_at, before + timedelta(minutes=5))
+            self.assertLess(fire_at, datetime.now(timezone.utc) + timedelta(minutes=5, seconds=1))
+
+        asyncio.run(run_case())
+
     def test_undo_command_cancels_by_id_without_todo_prefix(self) -> None:
         async def run_case():
             storage = _Storage()
@@ -343,6 +361,7 @@ class TodoReminderTest(unittest.TestCase):
             plugin._tasks["repeat02"] = task
             await plugin._fire_task(ctx, "repeat02")
             self.assertIn("第1次 每隔 5 分钟重复提醒", messages.actions[-1]["text"])
+            self.assertIn("如已完成，请回复本消息“已完成”即可标记。", messages.actions[-1]["text"])
             await plugin._delete_message_later(ctx, -1001, 88, 0)
             self.assertEqual(messages.actions[-1], {"type": "delete_message", "chat_id": -1001, "message_id": 88})
 
@@ -399,6 +418,21 @@ class TodoReminderTest(unittest.TestCase):
             self.assertNotIn("abc12345", plugin._tasks)
             self.assertNotIn("task:abc12345", storage.values)
             self.assertIn("todo_reminder_abc12345", scheduler.unregistered)
+            self.assertIn(
+                {"type": "delete_message", "chat_id": -1001, "message_id": 501},
+                messages.actions,
+            )
+            feedback = messages.actions[-1]
+            self.assertEqual(feedback["type"], "send_message")
+            self.assertEqual(feedback["text"], "已完成，提醒已停止。")
+            self.assertEqual(feedback["save_message_id_key"], "completion:abc12345:502")
+            messages.saved[feedback["save_message_id_key"]] = 503
+            await plugin._delete_saved_message_later(ctx, -1001, feedback["save_message_id_key"], 0)
+            self.assertIn("completion:abc12345:502", messages.deleted_saved)
+            self.assertIn(
+                {"type": "delete_message", "chat_id": -1001, "message_id": 503},
+                messages.actions,
+            )
 
         asyncio.run(run_case())
         message_subscription = next(

@@ -5,14 +5,14 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "todo_reminder"
-PLUGIN_VERSION = "0.1.3"
+PLUGIN_VERSION = "0.1.4"
 DEFAULT_COMMAND = "todo"
 USAGE = (
     "发送 {prefix}todo 五分钟后提醒我喝水，或回复某人的消息发送 {prefix}todo 五分钟后提醒他喝水。"
-    "默认只提醒一次；在任务末尾写“重复提醒”或“每隔五分钟再次提醒”才会在首次提醒后开始重复。"
-    "回复他/她的已发送提醒并发送“已完成”即可停止。"
+    "简写 {prefix}todo 5 提醒喝水表示 5 分钟后开始，并在首次提醒后按配置间隔重复；完整时间写法默认只提醒一次。"
+    "提醒消息会说明如何回复“已完成”，完成后会发送可自动删除的确认反馈。"
     "直接提醒自己由 Interaction Bot 在当前会话 @自己，避免 UserBot 自己发消息无法产生通知。"
-    "支持发送 {prefix}undo ID 取消提醒；ID 不带 # 并可点击复制。命令结果原地编辑，默认 30 秒后自动删除。"
+    "支持发送 {prefix}undo ID 取消提醒；ID 不带 # 并可点击复制。命令结果原地编辑，默认 30 秒后自动删除；提醒消息在完成或取消时清理。"
     "自然语言时间示例：五分钟后、半小时后、明天上午九点、2026-08-17 14:30，并提供列表指令。"
 )
 EVENT_SUBSCRIPTIONS = [
@@ -91,8 +91,8 @@ CONFIG_SCHEMA = {
         "reminder_template": {
             "type": "string",
             "title": "提醒消息模板",
-            "description": "支持 {mention}、{todo}、{id}、{count}、{reminder_count}、{repeat}、{repeat_interval}、{repeat_interval_minutes} 占位符；{mention} 会使用真实 Telegram 提及。",
-            "default": "{mention} 提醒：{todo}",
+            "description": "支持 {mention}、{todo}、{id}、{count}、{reminder_count}、{repeat}、{repeat_interval}、{repeat_interval_minutes}、{completion_hint} 占位符；{mention} 会使用真实 Telegram 提及。",
+            "default": "{mention} 提醒：{todo}\n{completion_hint}",
             "minLength": 1,
             "maxLength": 1000,
             "level": "account",
