@@ -192,12 +192,17 @@ class TodoReminderTest(unittest.TestCase):
                 "reply_to_message_id": 88, "repeat_interval_minutes": 5, "reminder_count": 0,
                 "reminder_message_keys": [], "fire_at": datetime.now(timezone.utc).isoformat(),
             }
+            other["todo"] = "喝水 <现在> & 记得"
             plugin._tasks["other001"] = other
             await plugin._fire_task(ctx, "other001")
             self.assertEqual(messages.actions[-1]["send_via"], "userbot_reply")
             self.assertEqual(messages.actions[-1]["reply_to_message_id"], 88)
             self.assertEqual(messages.actions[-1]["reply_to_user_id"], 123)
-            self.assertIn("@alice", messages.actions[-1]["text"])
+            self.assertEqual(messages.actions[-1]["parse_mode"], "html")
+            self.assertIn('tg://user?id=123', messages.actions[-1]["text"])
+            self.assertIn(">@alice</a>", messages.actions[-1]["text"])
+            self.assertIn("喝水 &lt;现在&gt; &amp; 记得", messages.actions[-1]["text"])
+            self.assertNotIn("喝水 <现在> & 记得", messages.actions[-1]["text"])
 
             own = dict(other, id="self0001", target_user_id=999, target_username="owner", target_is_self=True, reply_to_message_id=None)
             plugin._tasks["self0001"] = own
@@ -223,6 +228,28 @@ class TodoReminderTest(unittest.TestCase):
             )
             self.assertFalse(plugin._tasks)
             self.assertIn("需要回复目标用户", messages.actions[-1]["text"])
+
+        asyncio.run(run_case())
+
+    def test_undo_command_cancels_by_id_without_todo_prefix(self) -> None:
+        async def run_case():
+            storage = _Storage()
+            scheduler = _Scheduler()
+            messages = _Messages()
+            ctx = _ctx(storage=storage, scheduler=scheduler, messages=messages)
+            plugin = plugin_module.TodoReminderPlugin()
+            task = {"id": "undo1234", "chat_id": -1001, "target_user_id": 123, "reminder_message_keys": []}
+            plugin._tasks[task["id"]] = task
+            storage.values["task:undo1234"] = task
+            scheduler.jobs["todo_reminder_undo1234"] = ({}, None)
+            event = types.SimpleNamespace(chat_id=-1001, id=99, raw_text=",undo undo1234")
+            await plugin.on_startup(ctx)
+            self.assertIn("undo", plugin.commands)
+            await plugin.commands["undo"](None, event, ["undo1234"], 1, ctx)
+            self.assertNotIn("undo1234", plugin._tasks)
+            self.assertNotIn("task:undo1234", storage.values)
+            self.assertIn("todo_reminder_undo1234", scheduler.unregistered)
+            self.assertEqual(messages.actions[-1]["text"], "已取消提醒。")
 
         asyncio.run(run_case())
 

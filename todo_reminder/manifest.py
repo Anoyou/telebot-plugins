@@ -5,20 +5,20 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "todo_reminder"
-PLUGIN_VERSION = "0.1.1"
+PLUGIN_VERSION = "0.1.2"
 DEFAULT_COMMAND = "todo"
 USAGE = (
     "发送 {prefix}todo 五分钟后提醒我喝水，或回复某人的消息发送 {prefix}todo 五分钟后提醒他喝水。"
     "回复他/她的已发送提醒并发送“已完成”即可停止；未完成时按配置间隔重复提醒。"
     "直接提醒自己由 Interaction Bot 在当前会话 @自己，避免 UserBot 自己发消息无法产生通知。"
-    "支持自然语言时间（如五分钟后、半小时后、明天上午九点、2026-08-17 14:30），并提供列表与取消指令。"
+    "支持发送 {prefix}undo ID 取消提醒；自然语言时间示例：五分钟后、半小时后、明天上午九点、2026-08-17 14:30，并提供列表指令。"
 )
 EVENT_SUBSCRIPTIONS = [
     {
         "events": ["command"],
         "source": ["userbot"],
         "scope": "owner_only",
-        "description": "账号主人通过可配置的 UserBot 指令创建、查看或取消 Todo 提醒。",
+        "description": "账号主人通过可配置的 UserBot 指令创建、查看 Todo 提醒，并通过 undo 指令取消。",
     },
     {
         "events": ["message"],

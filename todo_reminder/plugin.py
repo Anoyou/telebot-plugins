@@ -264,7 +264,9 @@ class TodoReminderPlugin(Plugin):
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._command = _clean_command((ctx.config or {}).get("command"))
-        self.commands = {self._command: self._handle_configured_command}
+        self.commands = {"undo": self._handle_undo_command}
+        if self._command != "undo":
+            self.commands[self._command] = self._handle_configured_command
         await self._load_me(ctx)
         self._tasks.clear()
         if ctx.storage is not None and getattr(ctx.storage, "available", False):
@@ -344,12 +346,22 @@ class TodoReminderPlugin(Plugin):
     async def _handle_configured_command(self, _client: Any, event: Any, args: list[str], _account_id: int, ctx: PluginContext) -> None:
         chat_id = _nonzero_int(getattr(event, "chat_id", None))
         message_id = _positive_int(getattr(event, "id", None))
-        raw = str(getattr(event, "raw_text", "") or getattr(event, "text", "") or "").strip()
-        if raw:
-            raw = re.sub(rf"^[/!]?{re.escape(self._command)}(?:\s+|$)", "", raw, count=1, flags=re.I).strip()
-        else:
-            raw = " ".join(str(item) for item in args).strip()
+        raw = " ".join(str(item) for item in args).strip()
+        if not raw:
+            event_text = str(getattr(event, "raw_text", "") or getattr(event, "text", "") or "").strip()
+            raw = event_text.split(None, 1)[1].strip() if event_text and len(event_text.split(None, 1)) == 2 else ""
         await self._handle_command_text(ctx, chat_id, message_id, raw, event)
+
+    async def _handle_undo_command(self, _client: Any, event: Any, args: list[str], _account_id: int, ctx: PluginContext) -> None:
+        chat_id = _nonzero_int(getattr(event, "chat_id", None))
+        message_id = _positive_int(getattr(event, "id", None))
+        task_id = str(args[0] if args else "").strip().lstrip("#")
+        ok = await self._cancel_task(ctx, task_id) if task_id else False
+        await ctx.messages.send(
+            chat_id=chat_id,
+            reply_to_message_id=message_id,
+            text="已取消提醒。" if ok else "未找到该提醒 ID，请先发送 todo 列表。",
+        )
 
     async def _handle_command_text(self, ctx: PluginContext, chat_id: int | None, message_id: int | None, raw: str, event: Any) -> None:
         if chat_id is None:
@@ -441,8 +453,9 @@ class TodoReminderPlugin(Plugin):
             mention = f'<a href="tg://user?id={int(state["target_user_id"])}">{html_escape(display_name)}</a>'
             todo = html_escape(str(state.get("todo") or ""))
         else:
-            mention = f"@{username}" if username else display_name
-            todo = str(state.get("todo") or "")
+            label = f"@{username}" if username else display_name
+            mention = f'<a href="tg://user?id={int(state["target_user_id"])}">{html_escape(label)}</a>'
+            todo = html_escape(str(state.get("todo") or ""))
         try:
             text = template.format(mention=mention, todo=todo, id=task_id)
         except (KeyError, ValueError):
@@ -453,7 +466,7 @@ class TodoReminderPlugin(Plugin):
         state["last_sent_at"] = datetime.now(timezone.utc).isoformat()
         state["fire_at"] = (datetime.now(timezone.utc) + timedelta(minutes=int(state.get("repeat_interval_minutes") or DEFAULT_REPEAT_MINUTES))).isoformat()
         await self._save_task(ctx, state)
-        action: dict[str, Any] = {"type": "send_message", "chat_id": int(state["chat_id"]), "text": text, "parse_mode": "html" if is_self else "plain", "save_message_id_key": key}
+        action: dict[str, Any] = {"type": "send_message", "chat_id": int(state["chat_id"]), "text": text, "parse_mode": "html", "save_message_id_key": key}
         if is_self:
             action["send_via"] = "interaction_bot"
         else:
@@ -512,7 +525,7 @@ class TodoReminderPlugin(Plugin):
         return "待办提醒：\n" + "\n".join(f"#{item['id']}｜{item['todo']}｜下次 {item['fire_at']}" for item in rows)
 
     def _help_text(self) -> str:
-        return f"用法：{self._command} 五分钟后提醒我喝水；回复某人的消息后发送 {self._command} 明天上午九点提醒他开会。\n列表：{self._command} 列表\n取消：{self._command} 取消 <ID>"
+        return f"用法：{self._command} 五分钟后提醒我喝水；回复某人的消息后发送 {self._command} 明天上午九点提醒他开会。\n列表：{self._command} 列表\n取消：undo <ID>"
 
 
 __all__ = ["TodoReminderPlugin", "parse_natural_time", "parse_reminder_request"]
