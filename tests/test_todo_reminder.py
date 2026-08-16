@@ -187,19 +187,12 @@ class TodoReminderTest(unittest.TestCase):
         self.assertEqual(plugin_module.parse_reminder_request("五分钟后提醒我喝水", now=now)[1:], ("喝水", True))
         self.assertEqual(plugin_module.parse_reminder_request("五分钟后提醒他喝水", now=now)[1:], ("喝水", False))
 
-    def test_repeat_requires_explicit_request_and_supports_custom_interval(self) -> None:
+    def test_repeat_requires_numeric_shorthand(self) -> None:
         config = {"repeat_interval_minutes": 7}
         self.assertEqual(plugin_module._extract_repeat_request("喝水", config), ("喝水", False, 7))
-        self.assertEqual(plugin_module._extract_repeat_request("喝水，重复提醒", config), ("喝水", True, 7))
-        self.assertEqual(plugin_module._extract_repeat_request("喝水每隔10分钟再次提醒", config), ("喝水", True, 10))
-        self.assertEqual(
-            plugin_module._extract_repeat_request("喝水，如果没回复就每隔十分钟再次提醒", config),
-            ("喝水", True, 10),
-        )
-        self.assertEqual(
-            plugin_module._extract_repeat_request("吃药 每两小时重复提醒", config),
-            ("吃药", True, 120),
-        )
+        self.assertEqual(plugin_module._extract_repeat_request("喝水，重复提醒", config), ("喝水，重复提醒", False, 7))
+        self.assertEqual(plugin_module._extract_repeat_request("喝水每隔10分钟再次提醒", config), ("喝水每隔10分钟再次提醒", False, 7))
+        self.assertEqual(plugin_module._extract_repeat_request("喝水，仅提醒一次", config), ("喝水", False, 7))
 
     def test_other_target_uses_userbot_reply_and_self_uses_interaction_bot(self) -> None:
         async def run_case():

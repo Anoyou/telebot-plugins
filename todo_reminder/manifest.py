@@ -5,11 +5,11 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "todo_reminder"
-PLUGIN_VERSION = "0.1.4"
+PLUGIN_VERSION = "0.1.5"
 DEFAULT_COMMAND = "todo"
 USAGE = (
     "发送 {prefix}todo 五分钟后提醒我喝水，或回复某人的消息发送 {prefix}todo 五分钟后提醒他喝水。"
-    "简写 {prefix}todo 5 提醒喝水表示 5 分钟后开始，并在首次提醒后按配置间隔重复；完整时间写法默认只提醒一次。"
+    "简写 {prefix}todo 5 提醒喝水表示 5 分钟后开始，并在首次提醒后按配置间隔重复；没有数字简写时一律只提醒一次。"
     "提醒消息会说明如何回复“已完成”，完成后会发送可自动删除的确认反馈。"
     "直接提醒自己由 Interaction Bot 在当前会话 @自己，避免 UserBot 自己发消息无法产生通知。"
     "支持发送 {prefix}undo ID 取消提醒；ID 不带 # 并可点击复制。命令结果原地编辑，默认 30 秒后自动删除；提醒消息在完成或取消时清理。"
@@ -48,7 +48,7 @@ CONFIG_SCHEMA = {
         "repeat_interval_minutes": {
             "type": "integer",
             "title": "重复提醒间隔（分钟）",
-            "description": "指令只写“重复提醒”而未指定间隔时使用；重复计时从首次提醒后开始。",
+            "description": "仅用于 todo 数字简写（如 todo 5 提醒喝水）；重复计时从首次提醒后开始。",
             "default": 5,
             "minimum": 1,
             "maximum": 1440,
@@ -56,15 +56,15 @@ CONFIG_SCHEMA = {
         },
         "auto_delete_enabled": {
             "type": "boolean",
-            "title": "自动删除命令结果",
-            "description": "命令反馈编辑到原命令消息后，是否在延迟结束时删除该消息。",
+            "title": "自动删除反馈消息",
+            "description": "命令结果和“已完成，提醒已停止”反馈是否在延迟结束时自动删除。",
             "default": True,
             "level": "account",
         },
         "auto_delete_delay_seconds": {
             "type": "integer",
-            "title": "命令结果自动删除延迟（秒）",
-            "description": "仅在开启自动删除时生效；0 表示不自动删除。",
+            "title": "反馈消息自动删除延迟（秒）",
+            "description": "命令结果和完成反馈共用此延迟；0 表示不自动删除。",
             "default": 30,
             "minimum": 0,
             "maximum": 86400,

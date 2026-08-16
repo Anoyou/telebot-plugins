@@ -227,30 +227,12 @@ def _auto_delete_seconds(config: Mapping[str, Any]) -> int:
 
 
 def _extract_repeat_request(todo: str, config: Mapping[str, Any]) -> tuple[str, bool, int]:
-    """提取任务末尾的显式重复请求；未声明重复时只提醒一次。"""
+    """提取任务文本；只有命令数字简写会在调用方开启重复。"""
     source = str(todo or "").strip()
-    number = r"半|[零〇一二两三四五六七八九十百千万\d]+(?:\.\d+)?"
     single_match = re.search(r"(?:[，,；;。]\s*|\s+)(?:仅提醒一次|只提醒一次|单次提醒)\s*$", source)
     if single_match:
         cleaned = source[: single_match.start()].rstrip(" ，,；;。")
         return cleaned or source, False, _repeat_minutes(config)
-    interval_match = re.search(
-        rf"(?:^|[，,；;。]\s*|\s*)(?:(?:如果|若)?(?:他|她|我|对方)?(?:还)?"
-        rf"(?:没回复|未回复|没有回复|没完成|未完成|没有完成)(?:就|则)?\s*)?"
-        rf"(?:每隔|每)\s*(?P<value>{number})\s*(?P<unit>分钟?|小时|天)"
-        rf"\s*(?:再(?:次)?|重复)?提醒(?:一次)?\s*$",
-        source,
-    )
-    if interval_match:
-        amount = _cn_number(interval_match.group("value"))
-        factor = {"分": 1, "分钟": 1, "小时": 60, "天": 1440}[interval_match.group("unit")]
-        minutes = max(1, min(1440, int((amount or 1) * factor)))
-        cleaned = source[: interval_match.start()].rstrip(" ，,；;。")
-        return cleaned or source, True, minutes
-    repeat_match = re.search(r"(?:^|[，,；;。]\s*|\s*)(?:重复提醒|再次提醒|循环提醒|重复)\s*$", source)
-    if repeat_match:
-        cleaned = source[: repeat_match.start()].rstrip(" ，,；;。")
-        return cleaned or source, True, _repeat_minutes(config)
     return source, False, _repeat_minutes(config)
 
 
@@ -673,7 +655,7 @@ class TodoReminderPlugin(Plugin):
     def _help_text(self) -> str:
         return (
             f"用法：{self._command} 五分钟后提醒我喝水；回复某人的消息后发送 {self._command} 明天上午九点提醒他开会。\n"
-            f"简写：{self._command} 5 提醒喝水（5 分钟后开始，并按配置间隔重复）；完整时间写法默认只提醒一次。\n"
+            f"简写：{self._command} 5 提醒喝水（5 分钟后开始，并按配置间隔重复）；没有数字简写时一律只提醒一次。\n"
             f"列表：{self._command} 列表\n取消：undo ID"
         )
 
