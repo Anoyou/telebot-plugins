@@ -201,8 +201,8 @@ class QuestionGenerationTest(unittest.TestCase):
 
     def test_generation_and_user_limits_are_editable_in_supported_ranges(self) -> None:
         properties = manifest_module.CONFIG_SCHEMA["properties"]
-        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.42")
-        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.42")
+        self.assertEqual(plugin_module.PLUGIN_VERSION, "0.1.43")
+        self.assertEqual(manifest_module.PLUGIN_VERSION, "0.1.43")
         self.assertEqual(manifest_module.MANIFEST.min_telepilot_version, "0.73.0-beta.15")
         self.assertEqual(properties["generation_count"]["default"], 200)
         self.assertEqual(properties["generation_count"]["minimum"], 100)
@@ -2062,6 +2062,49 @@ class PluginActionTest(unittest.TestCase):
                 ],
             )
             self.assertEqual(unregistered, ["delete_failed_attempt-delete"])
+
+        asyncio.run(run_case())
+
+    def test_failed_message_delete_does_not_log_success_when_platform_reports_failure(self) -> None:
+        async def run_case() -> None:
+            plugin = plugin_module.AIRedpacketPlugin()
+            registered = {}
+            unregistered = []
+            logs = []
+
+            class Scheduler:
+                def register(self, job_id, schedule, callback, **kwargs):
+                    registered.update(job_id=job_id, schedule=schedule, callback=callback)
+
+                def unregister(self, job_id):
+                    unregistered.append(job_id)
+
+            class Messages:
+                async def apply(self, actions, **kwargs):
+                    return {
+                        "ok": False,
+                        "executed": 1,
+                        "failed": 1,
+                        "skipped": 0,
+                        "dropped": 0,
+                        "kinds": ["delete_message"],
+                    }
+
+            class Context:
+                scheduler = Scheduler()
+                messages = Messages()
+
+                @staticmethod
+                async def log(level, message, **detail):
+                    logs.append((level, message, detail))
+
+            plugin._schedule_failed_message_delete(Context(), -1001, 88, "attempt-delete-failed")
+
+            with self.assertRaisesRegex(RuntimeError, "挑战失败消息删除失败.*failed=1"):
+                await registered["callback"](types.SimpleNamespace())
+
+            self.assertEqual(unregistered, [])
+            self.assertEqual(logs, [])
 
         asyncio.run(run_case())
 

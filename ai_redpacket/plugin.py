@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - isolated unit-test stubs
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.42"
+PLUGIN_VERSION = "0.1.43"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60
@@ -776,7 +776,8 @@ class AIRedpacketPlugin(Plugin):
         messages = getattr(ctx, "messages", None)
         apply_actions = getattr(messages, "apply", None) if messages is not None else None
         if callable(apply_actions):
-            await apply_actions(actions, entry_key=ENTRY_KEY)
+            result = await apply_actions(actions, entry_key=ENTRY_KEY)
+            self._require_action_batch_success(result, "管理员命令消息动作")
             return
         text = "\n".join(str(action.get("text") or "") for action in actions if action.get("text")) or "操作已完成。"
         editor = getattr(event, "edit", None)
@@ -796,10 +797,11 @@ class AIRedpacketPlugin(Plugin):
             messages = getattr(ctx, "messages", None)
             apply_actions = getattr(messages, "apply", None) if messages is not None else None
             if callable(apply_actions):
-                await apply_actions(
+                result = await apply_actions(
                     [_send(text, chat_id=chat_id, reply_to=message_id, rich=True)],
                     entry_key=ENTRY_KEY,
                 )
+                self._require_action_batch_success(result, "周榜消息发送")
                 return
             text = await self._render_weekly_leaderboard(
                 ctx,
@@ -2183,7 +2185,7 @@ class AIRedpacketPlugin(Plugin):
         messages = getattr(ctx, "messages", None)
         apply_actions = getattr(messages, "apply", None) if messages is not None else None
         if callable(apply_actions):
-            await apply_actions(
+            result = await apply_actions(
                 [
                     {
                         "type": "pin_message",
@@ -2194,6 +2196,7 @@ class AIRedpacketPlugin(Plugin):
                 ],
                 entry_key=ENTRY_KEY,
             )
+            self._require_action_batch_success(result, "开题消息置顶")
             await self._log(
                 ctx,
                 "info",
@@ -2313,7 +2316,7 @@ class AIRedpacketPlugin(Plugin):
             message_id = await read_message_id(message_key)
             if not message_id:
                 raise RuntimeError("尚未读取到待删除消息 ID")
-            await apply_actions(
+            result = await apply_actions(
                 [
                     {
                         "type": "delete_message",
@@ -2324,6 +2327,7 @@ class AIRedpacketPlugin(Plugin):
                 ],
                 entry_key=ENTRY_KEY,
             )
+            self._require_action_batch_success(result, "延时消息删除")
             await self._log(
                 ctx,
                 "info",
@@ -2410,7 +2414,7 @@ class AIRedpacketPlugin(Plugin):
             message_id = await read_message_id(message_key)
             if not message_id:
                 raise RuntimeError("尚未读取到超时题目消息 ID")
-            await apply_actions(
+            result = await apply_actions(
                 [
                     {
                         "type": "edit_message",
@@ -2429,6 +2433,7 @@ class AIRedpacketPlugin(Plugin):
                 ],
                 entry_key=ENTRY_KEY,
             )
+            self._require_action_batch_success(result, "题目超时消息更新")
             self._schedule_saved_message_delete(
                 ctx,
                 chat_id,
@@ -2468,7 +2473,7 @@ class AIRedpacketPlugin(Plugin):
             messages = getattr(ctx, "messages", None)
             if messages is None or not callable(getattr(messages, "apply", None)):
                 raise RuntimeError("当前没有可用的消息删除能力")
-            await messages.apply(
+            result = await messages.apply(
                 [
                     {
                         "type": "delete_message",
@@ -2479,6 +2484,7 @@ class AIRedpacketPlugin(Plugin):
                 ],
                 entry_key=ENTRY_KEY,
             )
+            self._require_action_batch_success(result, "挑战失败消息删除")
             scheduler.unregister(job_id)
             await self._log(
                 ctx,
@@ -3244,6 +3250,25 @@ class AIRedpacketPlugin(Plugin):
         logger = getattr(ctx, "log", None)
         if callable(logger):
             await logger(level, message, **detail)
+
+    @staticmethod
+    def _require_action_batch_success(result: Any, operation: str) -> None:
+        """Raise when a new TelePilot MessageOps batch reports partial failure.
+
+        Older platform versions returned ``None``. Keeping that value compatible
+        allows the plugin package to be staged before every account has reloaded
+        the Core update, while new platforms expose precise batch failure state.
+        """
+
+        if not isinstance(result, dict):
+            return
+        if result.get("ok") is True:
+            return
+        raise RuntimeError(
+            f"{operation}失败：executed={int(result.get('executed') or 0)}, "
+            f"failed={int(result.get('failed') or 0)}, "
+            f"dropped={int(result.get('dropped') or 0)}"
+        )
 
 
 __all__ = [
