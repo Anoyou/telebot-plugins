@@ -57,7 +57,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.26",
+    version="1.0.27",
     min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
@@ -77,7 +77,7 @@ MANIFEST = Manifest(
                      'close_on': ['completed', 'failed', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'end_session', 'result']},
+  'result_contract': {'actions': ['send_message', 'end_session', 'no_session', 'result']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'torrent_id': {'type': 'string', 'title': '种子 ID', 'default': ''},

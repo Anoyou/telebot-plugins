@@ -60,7 +60,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.17",
+    version="1.0.18",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -84,7 +84,7 @@ MANIFEST = Manifest(
                      'close_on': ['winner', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'result', 'settlement']},
+  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'no_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',

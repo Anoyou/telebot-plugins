@@ -50,7 +50,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dice_battle",
     display_name="骰子比大小",
-    version="1.0.16",
+    version="1.0.17",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",
@@ -74,7 +74,7 @@ MANIFEST = Manifest(
                      'close_on': ['winner', 'draw', 'timeout', 'session_close']},
   'payload_contract': {'required_envelope': ['source', 'actor', 'trigger', 'session'],
                        'required_event_fields': ['type', 'chat_id']},
-  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'result', 'settlement']},
+  'result_contract': {'actions': ['send_message', 'payout', 'end_session', 'no_session', 'result', 'settlement']},
   'input_schema': {'type': 'object',
                    'additionalProperties': False,
                    'properties': {'prize': {'type': 'integer',
