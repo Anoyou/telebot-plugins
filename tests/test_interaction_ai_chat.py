@@ -222,8 +222,11 @@ class ManifestTest(_StubbedTestCase):
         self.assertIn("Inline Mode", usage["default"])
         self.assertEqual(
             set(schema["required"]),
-            set(schema["properties"]) - {"usage_preview", "template_placeholders", "deny_reply"},
+            {key for key in schema["properties"] if not key.startswith("pt_")}
+            - {"usage_preview", "template_placeholders", "deny_reply"},
         )
+        # PT 站点数据源字段全部可选，不进 required。
+        self.assertFalse([key for key in schema["required"] if key.startswith("pt_")])
         self.assertNotIn("timeout_seconds", schema["properties"])  # 已合并进 handler_timeout_seconds
         handler = schema["properties"]["handler_timeout_seconds"]
         self.assertEqual((handler["default"], handler["minimum"], handler["maximum"]), (45, 10, 85))

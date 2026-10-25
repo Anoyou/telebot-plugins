@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.3.0 (2026-10-26)
+- 新增“PT 站点数据源”（NexusPHP，默认关闭）：在配置页独立分组填写站点地址（仅 https）与浏览器复制的 Cookie（密码型字段，加密保存、不回显，日志与报错中永不出现），可选 User-Agent。问到资源/种子/某作品有没有种、大小、做种数、优惠等时，插件先让模型判断是否调用 `pt_search(keyword, category?)` 并给出关键词，再由插件只读搜索站点列表，把清洗后的结构化结果作为上下文交给模型回答；与原生联网搜索、识图并存。
+- 严格只读（代码层硬限制）：只发 GET；URL 必须与配置站点同源；路径白名单只有 `torrents.php`（开启“允许搜索特别区”时另含 `special.php`），查询参数也只放行搜索用的几个键；不自动跟随重定向，跨域或白名单外的重定向直接拒绝；被重定向到 login / takelogin 或返回登录页视为 Cookie 失效，只提示“站点登录已失效”，不自动登录。不访问 details 全文、download.php、RSS、thanks、bookmark、comment、take*。
+- 列表解析：标题、副标题、分类、大小、做种/下载/完成数、优惠（Free / 2xFree / 50% 等）、发布时间、种子 id；种子链接一律由代码按 `{站点}/details.php?id={id}` 重新拼接，不照搬页面 href。
+- 双重脱敏：送给模型前、发给用户（及写入记忆）前都会删除 passkey / authkey / torrent_pass / downhash / token / sign / uid 参数、长度 ≥32 的十六进制串、download.php 等下载/RSS 链接、magnet:、Cookie 内容，以及从页面顶部解析到的站点用户名与 UID；站内链接只保留 details.php?id=。命中时记一条不含敏感值的 info 日志。
+- 可用范围：默认仅白名单用户（可单独填“PT 白名单用户 ID”，留空沿用答疑白名单），可改为“所有可用答疑的人”；访客模式默认不可查站。每分钟最多查询次数（默认 6）、结果缓存秒数（默认 300，缓存的是已脱敏结果）、每次最多返回条数（默认 8）；判断与搜索都计入“处理时限”，剩余时间不足时跳过查站。
+- 新增模板“PT 站点不可用提示” `pt_unavailable_template`、“PT 登录失效提示” `pt_login_expired_template`、“PT 查询限速提示” `pt_rate_limited_template`，失败时作为 `{notices}` 附在回答前，不影响正常回答。
+- 新增配置页动作“测试 PT 站点”：用当前站点与 Cookie 只读搜索一次，验证登录并预览前几条（已脱敏）。
+- 新增权限 `external_http`（只用于上述 PT 只读搜索，走平台 `ctx.http`，默认经账号代理）；因站点由用户自填，`allowed_hosts` 按常见顶级域静态放行，实际只会访问配置的那个站点。所有 PT 配置项均为可选，不进 required。
+
 ## 0.2.0 (2026-10-25)
 - 即时反馈：收到提问先回复“🤔”占位（可在模板里改），答案出来后原地编辑这条消息；超长时首段编辑进占位、其余分段续发；出错时把占位改为对应中文提示（错误模板留空则删除占位），不再留下孤零零的 🤔。访客模式先 `answerGuestQuery` 占位，再用 `editMessageText(inline_message_id)` 编辑；旧平台不支持编辑 inline 消息时退回一次性回答。
 - Telegram 富文本：模型 Markdown（粗体、斜体、删除线、剧透、行内代码、代码块、链接、引用、列表、标题、表格）安全转换为 Telegram HTML；模型自带的 HTML 一律转义，链接只放行 http(s)/tg://；按标签栈分段，每段标签配对；Telegram 拒绝 HTML 时由平台退回纯文本。可用“Telegram 富文本”开关关闭。
