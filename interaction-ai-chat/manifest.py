@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.3.0"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -46,7 +46,14 @@ USAGE_PREVIEW = (
     "- 联网搜索只在走 Responses API 的 Provider 上可用（api_format=responses；OpenAI 官方 chat_completions Provider 会临时切到 Responses）；"
     "其它 Provider 自动降级为不联网回答，并按“联网不可用提示”模板说明。\n"
     "- 识图需要支持图片输入的模型；不支持或读图失败时降级为只看文字，并按“识图不可用提示”模板说明。\n"
-    "- 每日次数按北京时间（UTC+8）自然日统计。"
+    "- 每日次数按北京时间（UTC+8）自然日统计。\n\n"
+    "【PT 站点数据源（可选，默认关闭）】\n"
+    "- 在“PT 站点数据源”分组填写 NexusPHP 站点地址（https://域名）与浏览器复制的 Cookie 并打开开关；可用“测试 PT 站点”按钮验证登录。\n"
+    "- 严格只读：插件只 GET 站点的 torrents.php 搜索列表（启用特别区时另含 special.php），不访问详情页全文、下载、RSS、"
+    "说谢谢、收藏、评论或任何 take* 操作；登录失效只提示，不会自动登录。\n"
+    "- 问到资源/种子/某作品有没有种、大小、做种数等时，模型会先判断是否需要查站，再基于列表回答；回答只含公共详情页链接"
+    "（details.php?id=），passkey、下载链接、磁力链接、Cookie、站点用户名/UID 在送给模型前和发出前都会被过滤。\n"
+    "- 默认仅白名单用户可用、访客模式不可用；带每分钟查询上限与结果缓存。"
 )
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -69,6 +76,9 @@ DEFAULT_TEMPLATES = {
     "search_unavailable_template": "当前模型不支持联网搜索，以下回答未联网，可能不是最新信息。",
     "help_template": "我是 AI 答疑 Bot：@我 + 你的问题即可提问；回复我的回答可以继续追问；发送“重置”清空你的对话记忆。",
     "reset_template": "好的，已清空你在这里的对话记忆。",
+    "pt_unavailable_template": "PT 站点暂时无法查询（{reason}），以下回答没有参考站点数据。",
+    "pt_login_expired_template": "PT 站点登录已失效，请管理员在插件配置里更新 Cookie；以下回答没有参考站点数据。",
+    "pt_rate_limited_template": "PT 查询太频繁了（每分钟最多 {limit} 次），以下回答没有参考站点数据，稍后再试。",
 }
 
 TEMPLATE_PLACEHOLDERS = (
@@ -80,7 +90,8 @@ TEMPLATE_PLACEHOLDERS = (
     "{model} 实际模型、{provider} 实际 Provider、{notices} 降级说明（识图/联网不可用时的提示，无则为空）\n"
     "- 超时 error_timeout_template：{timeout} 超时秒数\n"
     "- 限额 limit_user_template / limit_global_template、长度 input_too_long_template：{limit} 上限\n"
-    "- 调用失败 error_ai_template：{reason} 简短原因（额度不足 / 请求过于频繁 / 鉴权失败 / 服务不可用）"
+    "- 调用失败 error_ai_template：{reason} 简短原因（额度不足 / 请求过于频繁 / 鉴权失败 / 服务不可用）\n"
+    "- PT 不可用 pt_unavailable_template：{reason} 简短原因；PT 限速 pt_rate_limited_template：{limit} 每分钟上限"
 )
 
 _SECTION_TRIGGER = "触发方式"
@@ -88,6 +99,18 @@ _SECTION_MODEL = "模型与能力"
 _SECTION_REPLY = "回复与记忆"
 _SECTION_ACCESS = "使用者与限额"
 _SECTION_GUARD = "安全护栏"
+_SECTION_PT = "PT 站点数据源"
+
+# PT 站点由用户自填，平台 allowed_hosts 只能静态声明：这里按常见顶级域放行（与 quick_qa 同一做法），
+# 真正的安全边界在插件代码：只 GET、必须与配置站点同源、路径与参数白名单、不跟随跨域重定向。
+PT_ALLOWED_HOSTS = [
+    "**.com", "**.net", "**.org", "**.cc", "**.club", "**.xyz", "**.me", "**.im", "**.top", "**.io",
+    "**.vip", "**.pw", "**.la", "**.tv", "**.info", "**.site", "**.online", "**.fun", "**.icu", "**.cn",
+    "**.co", "**.uk", "**.in", "**.de", "**.fr", "**.ru", "**.eu", "**.ws", "**.so", "**.moe",
+    "**.one", "**.pro", "**.biz", "**.app", "**.dev", "**.link", "**.live", "**.world", "**.zone", "**.today",
+    "**.space", "**.best", "**.work", "**.life", "**.cloud", "**.ink", "**.wiki", "**.hk", "**.tw", "**.jp",
+    "**.kr", "**.sg", "**.us", "**.ca", "**.nz", "**.cx", "**.ch", "**.nl", "**.se", "**.cool",
+]
 
 
 def _template_field(title: str, key: str, order: int, description: str) -> dict:
@@ -516,13 +539,152 @@ CONFIG_SCHEMA = {
         ),
         "help_template": _template_field("帮助提示", "help_template", 73, "只 @Bot 没写问题时显示。可用：{user}。"),
         "reset_template": _template_field("重置记忆确认", "reset_template", 74, "发送“重置”后显示。可用：{user}。"),
+        "pt_unavailable_template": _template_field(
+            "PT 站点不可用提示",
+            "pt_unavailable_template",
+            75,
+            "PT 查询失败（站点无法访问、超时、被只读白名单拒绝等）时作为 {notices} 附在回答前；留空则不提示。可用：{reason} {user}。",
+        ),
+        "pt_login_expired_template": _template_field(
+            "PT 登录失效提示",
+            "pt_login_expired_template",
+            76,
+            "站点 Cookie 失效（被重定向到登录页）时作为 {notices} 附在回答前；插件不会自动登录。可用：{user}。",
+        ),
+        "pt_rate_limited_template": _template_field(
+            "PT 查询限速提示",
+            "pt_rate_limited_template",
+            77,
+            "超过“PT 每分钟最多查询次数”时作为 {notices} 附在回答前。可用：{limit} {user}。",
+        ),
+        "pt_enabled": {
+            "type": "boolean",
+            "title": "启用 PT 站点数据源",
+            "description": (
+                "开启后，问到资源/种子/某作品有没有种、大小、做种数等时，模型会先判断是否需要查站，插件用你填写的 Cookie "
+                "只读搜索 NexusPHP 站点的种子列表，再把清洗后的列表交给模型回答。严格只读：只 GET torrents.php 搜索列表，"
+                "不下载、不说谢谢、不收藏、不评论、不访问详情页全文或 RSS；登录失效只提示、不自动登录。"
+            ),
+            "default": False,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 80,
+        },
+        "pt_site_url": {
+            "type": "string",
+            "title": "站点地址",
+            "description": "NexusPHP 站点首页地址，只支持 https，例如 https://pt.example.com；路径会被忽略，插件只访问该站点的 torrents.php。",
+            "default": "",
+            "maxLength": 200,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 81,
+        },
+        "pt_cookie": {
+            "type": "string",
+            "title": "站点 Cookie",
+            "description": (
+                "登录站点后从浏览器复制的完整 Cookie 字符串。按敏感字段加密保存，保存后不回显；只放在请求头里，"
+                "不会出现在日志、报错、缓存或回答中。Cookie 过期后回答会提示“站点登录已失效”，重新复制保存即可。"
+            ),
+            "format": "password",
+            "x-sensitive": True,
+            "default": "",
+            "maxLength": 8000,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 1,
+            "x-ui-order": 82,
+        },
+        "pt_user_agent": {
+            "type": "string",
+            "title": "User-Agent（可选）",
+            "description": "站点要求 Cookie 与浏览器 UA 匹配时，填写复制 Cookie 那个浏览器的 User-Agent；留空使用插件默认 UA。",
+            "default": "",
+            "maxLength": 300,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 1,
+            "x-ui-order": 83,
+        },
+        "pt_access_scope": {
+            "type": "string",
+            "title": "PT 查询可用范围",
+            "description": "仅白名单用户：只有下方“PT 白名单用户 ID”（留空则用“白名单用户 ID”）里的人提问时才会查站；所有可用答疑的人：能使用答疑的人都可触发查站。",
+            "default": "仅白名单用户",
+            "enum": ["仅白名单用户", "所有可用答疑的人"],
+            "x-ui-widget": "list-select",
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 84,
+        },
+        "pt_allowed_user_ids": {
+            "type": "string",
+            "title": "PT 白名单用户 ID（可选）",
+            "description": "“仅白名单用户”时生效；逗号或换行分隔。留空则沿用“使用者与限额”里的“白名单用户 ID”。",
+            "default": "",
+            "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 85,
+        },
+        "pt_allow_guest": {
+            "type": "boolean",
+            "title": "访客模式可查 PT",
+            "description": "访客模式（Bot 未加入的会话）里的提问默认不查站；开启后仍受上面的可用范围约束。",
+            "default": False,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 86,
+        },
+        "pt_enable_special": {
+            "type": "boolean",
+            "title": "允许搜索特别区（special.php）",
+            "description": "站点有特别区且你的账号可访问时开启；关闭时 special.php 也在只读白名单之外。",
+            "default": False,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 87,
+        },
+        "pt_rate_limit_per_minute": {
+            "type": "integer",
+            "title": "每分钟最多查询次数",
+            "description": "本插件在当前账号下每分钟最多向站点发起多少次搜索（命中缓存不计）；超出时回答附“PT 查询限速提示”。",
+            "default": 6,
+            "minimum": 1,
+            "maximum": 60,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 88,
+        },
+        "pt_cache_seconds": {
+            "type": "integer",
+            "title": "结果缓存（秒）",
+            "description": "相同关键词在这段时间内直接复用已清洗的结果，不再请求站点；0 表示不缓存。",
+            "default": 300,
+            "minimum": 0,
+            "maximum": 3600,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 89,
+        },
+        "pt_max_results": {
+            "type": "integer",
+            "title": "每次最多返回条数",
+            "description": "每次搜索最多把多少条种子交给模型（按站点默认排序取前 N 条）。",
+            "default": 8,
+            "minimum": 1,
+            "maximum": 20,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 90,
+        },
     },
 }
 CONFIG_SCHEMA["required"] = [
     key
     for key, field in CONFIG_SCHEMA["properties"].items()
-    if not field.get("readOnly") and key != "deny_reply"
+    if not field.get("readOnly") and key != "deny_reply" and not key.startswith("pt_")
 ]
+# PT 站点数据源（pt_*）全部是可选字段，不进 required。
 
 CONFIG_ACTIONS = [
     {
@@ -543,7 +705,25 @@ CONFIG_ACTIONS = [
                 }
             },
         },
-    }
+    },
+    {
+        "key": "test_pt",
+        "title": "测试 PT 站点",
+        "description": "用当前站点地址与 Cookie 只读搜索一次 torrents.php，验证登录是否有效并预览前几条（已脱敏）；计入每分钟查询次数，不使用缓存。",
+        "submit_label": "开始测试",
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "title": "搜索关键词（可留空看最新列表）",
+                    "default": "",
+                    "maxLength": 80,
+                }
+            },
+        },
+    },
 ]
 
 EVENT_SUBSCRIPTIONS = [
@@ -574,7 +754,9 @@ MANIFEST = Manifest(
     min_telebot_version="0.10.2",
     author="Anoyou",
     description="交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
-    permissions=["send_message", "read_chat", "ai_text", "ai_vision"],
+    # external_http：仅用于 PT 站点只读搜索（ctx.http）；请求白名单见 pt_source.py。
+    permissions=["send_message", "read_chat", "ai_text", "ai_vision", "external_http"],
+    allowed_hosts=PT_ALLOWED_HOSTS,
     category="utility",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
@@ -596,4 +778,5 @@ __all__ = [
     "DEFAULT_SYSTEM_PROMPT",
     "DEFAULT_TEMPLATES",
     "TEMPLATE_PLACEHOLDERS",
+    "PT_ALLOWED_HOSTS",
 ]
