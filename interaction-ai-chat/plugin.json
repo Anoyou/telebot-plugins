@@ -3,7 +3,7 @@
   "display_name": "AI 答疑（交互 Bot）",
   "description": "交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
   "author": "Anoyou",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.105.0-beta.1",
@@ -23,7 +23,8 @@
     "read_chat",
     "ai_text",
     "ai_vision",
-    "external_http"
+    "external_http",
+    "agent_skills"
   ],
   "allowed_hosts": [
     "**.com",
@@ -138,7 +139,7 @@
         "title": "使用说明（只读）",
         "readOnly": true,
         "x-ui-widget": "textarea",
-        "default": "【怎么用】\n1. 访客模式：在任意群/私聊输入“@你的交互Bot 你的问题”，或回复 Bot 之前的回答继续追问。\n2. Bot 已加入的群：@Bot 或回复 Bot 的消息提问（平台会自动识别 Bot 用户名；读取失败时用下方“交互 Bot 用户名”兜底）。\n3. 与 Bot 私聊：直接发送问题。\n3b. 关键词触发（可选）：在下方“触发关键词”填写如“AI”“问问”，Bot 已加入的群里以关键词开头（或包含关键词）的消息也会触发，不必 @Bot；需关闭 Bot 的群隐私模式。\n4. 发送“重置”或 reset：清空你在当前会话的短期记忆。\n5. 回复别人的消息并 @Bot：被回复消息会作为本轮参考内容；被回复的是图片时（开启识图）会把图片交给模型。\n6. 发图片并在说明里 @Bot（或私聊直接发图）：开启识图后让模型看图回答。\n\n【为什么没反应】\n- 收到提问会立即回复“🤔”占位；连占位都没有，说明这条消息没有触发插件：\n  · 交互 Bot 账号配置了“允许会话”时，只有列表里的群/私聊会投递给插件（访客模式不受限）；不在列表里的消息由平台直接丢弃、插件收不到，平台日志会记一条 info（账号 + chat_id + 原因）；\n  · 群里需 @Bot 或回复 Bot，且 Bot 要能收到消息（关闭 Group Privacy 或设为管理员）；\n  · 会话黑/白名单、仅白名单用户（提示语留空时静默）、/ 开头的指令会被忽略；\n  · 具体原因可在“运行日志”里按本插件筛选查看。\n- “隐藏思考标签”只影响回复里是否去掉 <think>…</think>，不影响速度或是否触发。\n\n【开启前准备】\n1. 在 Telegram 打开 @BotFather 的 Mini App，进入交互 Bot 设置，开启 Guest Chat Mode（访客模式）。\n2. 在 BotFather 关闭该 Bot 的 Inline Mode（/setinline 关闭），避免输入 @Bot 时弹出 Inline 结果抢走访客提问。\n3. 在 TelePilot“账号 → Bot 联动 → 交互 Bot”点“重新检测”，确认“访客模式：已开启”。\n4. 在 TelePilot 配好至少一个可用的 AI Provider；需要固定模型时在下方选择。\n5. 群里 @Bot 触发需要 Bot 能收到该消息：建议在 BotFather 关闭 Group Privacy，或把 Bot 设为群管理员；回复 Bot 消息始终可触发。\n\n【费用与限制】\n- 访客模式对任何人开放（guest_all），请务必设置每日上限，必要时改为仅白名单用户。\n- 平台另有访客限流：每个调用者每分钟 6 次、每个 Bot 每分钟 60 次。\n- 处理时限默认 45 秒（可在“处理时限”调到 10–85 秒，含读图、联网与模型调用；插件向平台声明 90 秒上限）；超时会把“🤔”占位改为超时提示。访客模式每条消息只能回复一次（先回“🤔”占位，再原地编辑为答案）。\n- 联网搜索只在走 Responses API 的 Provider 上可用（api_format=responses；OpenAI 官方 chat_completions Provider 会临时切到 Responses）；其它 Provider 自动降级为不联网回答，并按“联网不可用提示”模板说明。\n- 识图需要支持图片输入的模型；不支持或读图失败时降级为只看文字，并按“识图不可用提示”模板说明。\n- 每日次数按北京时间（UTC+8）自然日统计。\n\n【PT 站点数据源（可选，默认关闭）】\n- 在“PT 站点数据源”分组填写 NexusPHP 站点地址（https://域名）与浏览器复制的 Cookie 并打开开关；可用“测试 PT 站点”按钮验证登录。\n- 严格只读：插件只 GET 站点的 torrents.php 搜索列表（启用特别区时另含 special.php），不访问详情页全文、下载、RSS、说谢谢、收藏、评论或任何 take* 操作；登录失效只提示，不会自动登录。\n- 问到资源/种子/某作品有没有种、大小、做种数等时，模型会先判断是否需要查站，再基于列表回答；回答只含公共详情页链接（details.php?id=），passkey、下载链接、磁力链接、Cookie、站点用户名/UID 在送给模型前和发出前都会被过滤。\n- 默认仅白名单用户可用、访客模式不可用；带每分钟查询上限与结果缓存。",
+        "default": "【怎么用】\n1. 访客模式：在任意群/私聊输入“@你的交互Bot 你的问题”，或回复 Bot 之前的回答继续追问。\n2. Bot 已加入的群：@Bot 或回复 Bot 的消息提问（平台会自动识别 Bot 用户名；读取失败时用下方“交互 Bot 用户名”兜底）。\n3. 与 Bot 私聊：直接发送问题。\n3b. 关键词触发（可选）：在下方“触发关键词”填写如“AI”“问问”，Bot 已加入的群里以关键词开头（或包含关键词）的消息也会触发，不必 @Bot；需关闭 Bot 的群隐私模式。\n4. 发送“重置”或 reset：清空你在当前会话的短期记忆。\n5. 回复别人的消息并 @Bot：被回复消息会作为本轮参考内容；被回复的是图片时（开启识图）会把图片交给模型。\n6. 发图片并在说明里 @Bot（或私聊直接发图）：开启识图后让模型看图回答。\n\n【为什么没反应】\n- 收到提问会立即回复“🤔”占位；连占位都没有，说明这条消息没有触发插件：\n  · 交互 Bot 账号配置了“允许会话”时，只有列表里的群/私聊会投递给插件（访客模式不受限）；不在列表里的消息由平台直接丢弃、插件收不到，平台日志会记一条 info（账号 + chat_id + 原因）；\n  · 群里需 @Bot 或回复 Bot，且 Bot 要能收到消息（关闭 Group Privacy 或设为管理员）；\n  · 会话黑/白名单、仅白名单用户（提示语留空时静默）、/ 开头的指令会被忽略；\n  · 具体原因可在“运行日志”里按本插件筛选查看。\n- “隐藏思考标签”只影响回复里是否去掉 <think>…</think>，不影响速度或是否触发。\n\n【开启前准备】\n1. 在 Telegram 打开 @BotFather 的 Mini App，进入交互 Bot 设置，开启 Guest Chat Mode（访客模式）。\n2. 在 BotFather 关闭该 Bot 的 Inline Mode（/setinline 关闭），避免输入 @Bot 时弹出 Inline 结果抢走访客提问。\n3. 在 TelePilot“账号 → Bot 联动 → 交互 Bot”点“重新检测”，确认“访客模式：已开启”。\n4. 在 TelePilot 配好至少一个可用的 AI Provider；需要固定模型时在下方选择。\n5. 群里 @Bot 触发需要 Bot 能收到该消息：建议在 BotFather 关闭 Group Privacy，或把 Bot 设为群管理员；回复 Bot 消息始终可触发。\n\n【费用与限制】\n- 访客模式对任何人开放（guest_all），请务必设置每日上限，必要时改为仅白名单用户。\n- 平台另有访客限流：每个调用者每分钟 6 次、每个 Bot 每分钟 60 次。\n- 处理时限默认 45 秒（可在“处理时限”调到 10–85 秒，含读图、联网与模型调用；插件向平台声明 90 秒上限）；超时会把“🤔”占位改为超时提示。访客模式每条消息只能回复一次（先回“🤔”占位，再原地编辑为答案）。\n- 联网搜索只在走 Responses API 的 Provider 上可用（api_format=responses；OpenAI 官方 chat_completions Provider 会临时切到 Responses）；其它 Provider 自动降级为不联网回答，并按“联网不可用提示”模板说明。\n- 识图需要支持图片输入的模型；不支持或读图失败时降级为只看文字，并按“识图不可用提示”模板说明。\n- 每日次数按北京时间（UTC+8）自然日统计。\n\n【PT 站点数据源（可选，默认关闭）】\n- 在“PT 站点数据源”分组填写 NexusPHP 站点地址（https://域名）与浏览器复制的 Cookie 并打开开关；可用“测试 PT 站点”按钮验证登录。\n- 严格只读：插件只 GET 站点的 torrents.php 搜索列表（启用特别区时另含 special.php），不访问详情页全文、下载、RSS、说谢谢、收藏、评论或任何 take* 操作；登录失效只提示，不会自动登录。\n- 问到资源/种子/某作品有没有种、大小、做种数等时，模型会先判断是否需要查站，再基于列表回答；回答只含公共详情页链接（details.php?id=），passkey、下载链接、磁力链接、Cookie、站点用户名/UID 在送给模型前和发出前都会被过滤。\n- 默认仅白名单用户可用、访客模式不可用；带每分钟查询上限与结果缓存。\n\n【Skills 与站点 Wiki（可选）】\n- 插件自带两个内置 skill：group-helper（答疑助手能力与群聊礼仪，每次回答都附带）与 qingwa-wiki（青蛙站点 Wiki 页面目录）。TelePilot 支持 Agent Skills 时，它们会出现在“助手 → Skills”，可编辑、停用、恢复默认；插件升级不会覆盖你的修改。旧版 TelePilot 没有 ctx.skills 时自动使用插件自带版本。\n- “使用已安装的 Agent Skills”可多选管理员安装并对插件启用的 skills；回答前模型按名称和用途判断，最多加载 2 个。\n- 填写“站点 Wiki 地址”（如 https://wiki.qingwapt.org/docs）后，站点规则、新手、蝌蚪/魔力、保种区、工具配置类问题会先读取1–2 个相关 Wiki 页面再回答，并附页面链接；访客模式同样可用；只读、只访问该域名 /docs 下页面，正文缓存 6 小时。",
         "x-ui-order": 0
       },
       "enable_guest": {
@@ -776,6 +777,29 @@
         "x-ui-section": "PT 站点数据源",
         "x-ui-columns": 2,
         "x-ui-order": 93
+      },
+      "skill_names": {
+        "type": "array",
+        "title": "使用已安装的 Agent Skills（可多选，可不选）",
+        "description": "从管理员在「助手 → Skills」安装并“对插件启用”的 skills 中选择。回答前模型先根据各 skill 的名称和用途判断是否需要，只把需要的（最多 2 个）正文加入本次请求；不需要时不加载、不多耗时。skill 只作为说明文本，其中脚本不会执行。需要 TelePilot 提供 ctx.skills 能力（较旧版本会自动跳过）。",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "maxItems": 10,
+        "x-ui-widget": "agent-skill-multi-select",
+        "x-ui-section": "Skills（技能说明）",
+        "x-ui-order": 96
+      },
+      "wiki_base_url": {
+        "type": "string",
+        "title": "站点 Wiki 地址（可选）",
+        "description": "填写后，群友问站点规则、新手入门、蝌蚪/魔力、保种区、工具配置等问题时，插件按内置 skill「qingwa-wiki」的页面目录选 1–2 个相关页面只读读取正文作为依据，回答附页面链接；访客模式同样可用。例如 https://wiki.qingwapt.org/docs。只访问该域名 /docs 下的页面（只 GET、不带参数、不跟随跨域重定向），正文缓存 6 小时，含 passkey/RSS 的内容会被剔除。留空则不查 Wiki。页面目录可在「助手 → Skills → qingwa-wiki」编辑，停用该 skill 也会停用 Wiki 查询。",
+        "default": "",
+        "maxLength": 300,
+        "x-ui-placeholder": "https://wiki.qingwapt.org/docs",
+        "x-ui-section": "站点 Wiki",
+        "x-ui-order": 97
       }
     },
     "required": []
