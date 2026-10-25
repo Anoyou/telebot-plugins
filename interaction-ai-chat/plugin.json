@@ -3,7 +3,7 @@
   "display_name": "AI 答疑（交互 Bot）",
   "description": "交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
   "author": "Anoyou",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.105.0-beta.1",
@@ -297,7 +297,7 @@
       "rich_text": {
         "type": "boolean",
         "title": "Telegram 富文本",
-        "description": "把模型的 Markdown（粗体、斜体、代码、代码块、链接、引用等）转成 Telegram HTML；Telegram 拒绝时自动退回纯文本。关闭则按纯文本发送模型原文。",
+        "description": "优先用 Telegram 原生 Rich Message（Bot API 10.2+，标题、列表、任务列表、表格、折叠详情、公式原生渲染）发送/编辑答案；失败或访客模式占位编辑时改用 Telegram HTML（粗体、斜体、下划线、删除线、剧透、代码、代码块、链接、引用），Telegram 再拒绝时由平台退回纯文本。关闭则按纯文本发送模型原文。",
         "default": true,
         "x-ui-section": "回复与记忆",
         "x-ui-columns": 2,
@@ -745,6 +745,37 @@
         "x-ui-section": "PT 站点数据源",
         "x-ui-columns": 2,
         "x-ui-order": 90
+      },
+      "pt_site_name": {
+        "type": "string",
+        "title": "站点别名（可选）",
+        "description": "站点的名称或简称，多个用逗号分隔，例如“空枪”。用户说“空枪站里有哪些资源”“我配置的 PT 站点”时，模型据此识别是在查这个站点（站点名本身不当作搜索关键词）。留空时自动从站点域名与页面标题推断。",
+        "default": "",
+        "maxLength": 80,
+        "x-ui-section": "PT 站点数据源",
+        "x-ui-columns": 2,
+        "x-ui-order": 91
+      },
+      "pt_allowed_chat_ids": {
+        "type": "string",
+        "title": "允许 PT 搜索的群 ID（可选）",
+        "description": "只在这些会话里查站（群 ID 通常以 -100 开头；私聊填对方用户 ID）；逗号或换行分隔，留空表示不限群。不在列表里的会话不会请求站点，回答会说明“当前群未开启 PT 搜索”。仍受上面的可用范围与访客模式开关约束。",
+        "default": "",
+        "x-ui-widget": "textarea",
+        "x-ui-section": "PT 站点数据源",
+        "x-ui-columns": 2,
+        "x-ui-order": 92
+      },
+      "pt_hide_categories": {
+        "type": "string",
+        "title": "隐藏的分类关键词（可选）",
+        "description": "分类（或标题/副标题）包含这些关键词的种子不交给模型、也不会出现在回答里，例如成人类分类名；逗号或换行分隔，默认空。",
+        "default": "",
+        "x-ui-widget": "textarea",
+        "maxLength": 500,
+        "x-ui-section": "PT 站点数据源",
+        "x-ui-columns": 2,
+        "x-ui-order": 93
       }
     },
     "required": []
