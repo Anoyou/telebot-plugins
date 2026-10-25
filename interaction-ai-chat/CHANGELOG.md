@@ -1,5 +1,17 @@
 # 更新日志
 
+## 0.4.0 (2026-10-26)
+- 新增 Agent Skills 支持（权限 `agent_skills`，走平台 `ctx.skills`，skill 只作为说明文本，其中脚本从不执行）：
+  - 随插件分发两个内置 skill：`group-helper`（答疑助手能做什么：搜索、查询、总结、识图、PT 只读搜索、站点 Wiki，以及群聊礼仪与格式；每次回答都附带）与 `qingwa-wiki`（青蛙站点 Wiki 的主题与 38 个 `/docs` 页面目录，只在查 Wiki 时作为页面目录使用，不整篇注入）。
+  - 内置 skill 优先读取 `ctx.skills.bundled()`：包含管理员在 App/Web「助手 → Skills」里的编辑与启停，插件升级不会覆盖用户修改（平台标记“内置有新版本”，可查看差异、恢复默认或保留我的修改）；平台没有 `ctx.skills`（旧版 TelePilot）或读取失败时，自动退回插件自带的 `skills/*/SKILL.md`，运行日志只记一次原因。插件内不再提供单独的内置 skill 开关。
+  - 新配置项“使用已安装的 Agent Skills” `skill_names`（多选，可不选，App/Web 以 skill 多选控件显示）：回答前先让模型只看各 skill 的名称与用途判断是否需要，最多加载 2 个正文；不需要时不加载。与 Wiki 页面选择并行进行。
+- 新增站点 Wiki 只读检索（`wiki_source.py`）：新配置项“站点 Wiki 地址” `wiki_base_url`（默认空=关闭，例如 `https://wiki.qingwapt.org/docs`）。站点规则、新手、蝌蚪/魔力、保种区、工具配置类问题先由模型按 `qingwa-wiki` 目录选 1–2 个页面，插件只读读取正文作为上下文，回答固定附上所用 Wiki 页面链接；访客模式同样可用。
+  - 代码层硬限制：只发 GET；必须与配置地址同 host 且路径在 `/docs` 下，不带查询参数；不自动跟随重定向，跨 host 或 `/docs` 之外的重定向直接拒绝；模型给出的目录外路径一律忽略。
+  - 只提取页面 `<h1>` 至「本页内容」目录之前的正文（去掉脚本、样式、图片），每页截断到约 3500 字、合计不超过 6000 字；送给模型前剔除所有含 passkey / RSS 的行以及任何 passkey 值（≥32 位十六进制串、`passkey=`/`authkey=` 等参数）。正文按页面缓存 6 小时。
+  - 未填写地址、`qingwa-wiki` 被停用、问题与 Wiki 无关、剩余时间不足、读取失败或超时时都跳过查 Wiki 并在运行日志写明原因，不影响正常回答。
+- `group-helper` 补充：站点规则、新手、蝌蚪/魔力、保种区、工具配置类问题优先查站点 Wiki。
+- 兼容性：内置 skill 的编辑/停用与已安装 skills 需要 TelePilot 提供 `ctx.skills`（Agent Skills，随 TelePilot Beta 中 0.105.0-beta.1 之后的下一个检查点发布）；更早的版本仍可安装本插件，内置 skill 使用插件自带版本、`skill_names` 自动跳过，Wiki 检索照常可用。
+
 ## 0.3.2 (2026-10-26)
 - 答案优先用 Telegram 原生 Rich Message 发送（Bot API 10.2+ `InputRichMessage.markdown`）：有“🤔”占位时用 `edit_message.rich_message`（editMessageText.rich_message）原地编辑，没有占位时用 `send_rich_message`（sendRichMessage，群里仍回复提问消息）；标题、列表、任务列表、表格、折叠详情、公式由 Telegram 原生渲染。动作经 `ctx.messages.apply` 实时执行并读取批次结果，被拒绝或抛错时退回原有 Telegram HTML，HTML 再被拒时由平台退回纯文本。
 - 访客模式：平台的 inline 消息编辑只支持 text/parse_mode，占位编辑继续走 Telegram HTML；关闭占位时用 `answer_guest_query.rich_message` 直接回答，失败同样退回 HTML。错误提示、限额、帮助等模板消息不变，仍按 Telegram HTML 发送。

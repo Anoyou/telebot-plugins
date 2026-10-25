@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.3.2"
+PLUGIN_VERSION = "0.4.0"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -53,7 +53,14 @@ USAGE_PREVIEW = (
     "说谢谢、收藏、评论或任何 take* 操作；登录失效只提示，不会自动登录。\n"
     "- 问到资源/种子/某作品有没有种、大小、做种数等时，模型会先判断是否需要查站，再基于列表回答；回答只含公共详情页链接"
     "（details.php?id=），passkey、下载链接、磁力链接、Cookie、站点用户名/UID 在送给模型前和发出前都会被过滤。\n"
-    "- 默认仅白名单用户可用、访客模式不可用；带每分钟查询上限与结果缓存。"
+    "- 默认仅白名单用户可用、访客模式不可用；带每分钟查询上限与结果缓存。\n\n"
+    "【Skills 与站点 Wiki（可选）】\n"
+    "- 插件自带两个内置 skill：group-helper（答疑助手能力与群聊礼仪，每次回答都附带）与 qingwa-wiki（青蛙站点 Wiki 页面目录）。"
+    "TelePilot 支持 Agent Skills 时，它们会出现在“助手 → Skills”，可编辑、停用、恢复默认；插件升级不会覆盖你的修改。"
+    "旧版 TelePilot 没有 ctx.skills 时自动使用插件自带版本。\n"
+    "- “使用已安装的 Agent Skills”可多选管理员安装并对插件启用的 skills；回答前模型按名称和用途判断，最多加载 2 个。\n"
+    "- 填写“站点 Wiki 地址”（如 https://wiki.qingwapt.org/docs）后，站点规则、新手、蝌蚪/魔力、保种区、工具配置类问题会先读取"
+    "1–2 个相关 Wiki 页面再回答，并附页面链接；访客模式同样可用；只读、只访问该域名 /docs 下页面，正文缓存 6 小时。"
 )
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -100,6 +107,8 @@ _SECTION_REPLY = "回复与记忆"
 _SECTION_ACCESS = "使用者与限额"
 _SECTION_GUARD = "安全护栏"
 _SECTION_PT = "PT 站点数据源"
+_SECTION_SKILLS = "Skills（技能说明）"
+_SECTION_WIKI = "站点 Wiki"
 
 # PT 站点由用户自填，平台 allowed_hosts 只能静态声明：这里按常见顶级域放行（与 quick_qa 同一做法），
 # 真正的安全边界在插件代码：只 GET、必须与配置站点同源、路径与参数白名单、不跟随跨域重定向。
@@ -708,9 +717,39 @@ CONFIG_SCHEMA = {
             "x-ui-columns": 2,
             "x-ui-order": 93,
         },
+        "skill_names": {
+            "type": "array",
+            "title": "使用已安装的 Agent Skills（可多选，可不选）",
+            "description": (
+                "从管理员在「助手 → Skills」安装并“对插件启用”的 skills 中选择。回答前模型先根据各 skill 的名称和用途判断"
+                "是否需要，只把需要的（最多 2 个）正文加入本次请求；不需要时不加载、不多耗时。skill 只作为说明文本，其中脚本不会执行。"
+                "需要 TelePilot 提供 ctx.skills 能力（较旧版本会自动跳过）。"
+            ),
+            "items": {"type": "string"},
+            "default": [],
+            "maxItems": 10,
+            "x-ui-widget": "agent-skill-multi-select",
+            "x-ui-section": _SECTION_SKILLS,
+            "x-ui-order": 96,
+        },
+        "wiki_base_url": {
+            "type": "string",
+            "title": "站点 Wiki 地址（可选）",
+            "description": (
+                "填写后，群友问站点规则、新手入门、蝌蚪/魔力、保种区、工具配置等问题时，插件按内置 skill「qingwa-wiki」的页面目录"
+                "选 1–2 个相关页面只读读取正文作为依据，回答附页面链接；访客模式同样可用。例如 https://wiki.qingwapt.org/docs。"
+                "只访问该域名 /docs 下的页面（只 GET、不带参数、不跟随跨域重定向），正文缓存 6 小时，含 passkey/RSS 的内容会被剔除。"
+                "留空则不查 Wiki。页面目录可在「助手 → Skills → qingwa-wiki」编辑，停用该 skill 也会停用 Wiki 查询。"
+            ),
+            "default": "",
+            "maxLength": 300,
+            "x-ui-placeholder": "https://wiki.qingwapt.org/docs",
+            "x-ui-section": _SECTION_WIKI,
+            "x-ui-order": 97,
+        },
     },
 }
-# 所有配置项（含 PT 站点数据源 pt_*）都有默认值，运行时按 schema 默认值补齐，因此不声明 required：
+# 所有配置项（含 PT 站点数据源 pt_*、Skills skill_*、站点 Wiki wiki_*）都有默认值，运行时按 schema 默认值补齐，因此不声明 required：
 # App/Web 只给真正必填的字段标“必填”，可选字段留空时使用默认值。
 CONFIG_SCHEMA["required"] = []
 
@@ -783,7 +822,8 @@ MANIFEST = Manifest(
     author="Anoyou",
     description="交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
     # external_http：仅用于 PT 站点只读搜索（ctx.http）；请求白名单见 pt_source.py。
-    permissions=["send_message", "read_chat", "ai_text", "ai_vision", "external_http"],
+    # agent_skills：只读获取管理员已对插件启用的 Agent Skills 文本（ctx.skills），从不执行其中脚本。
+    permissions=["send_message", "read_chat", "ai_text", "ai_vision", "external_http", "agent_skills"],
     allowed_hosts=PT_ALLOWED_HOSTS,
     category="utility",
     interaction_entries=[],
