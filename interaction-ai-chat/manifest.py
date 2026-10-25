@@ -19,12 +19,15 @@ USAGE_PREVIEW = (
     "1. 访客模式：在任意群/私聊输入“@你的交互Bot 你的问题”，或回复 Bot 之前的回答继续追问。\n"
     "2. Bot 已加入的群：@Bot 或回复 Bot 的消息提问（平台会自动识别 Bot 用户名；读取失败时用下方“交互 Bot 用户名”兜底）。\n"
     "3. 与 Bot 私聊：直接发送问题。\n"
+    "3b. 关键词触发（可选）：在下方“触发关键词”填写如“AI”“问问”，Bot 已加入的群里以关键词开头（或包含关键词）的消息"
+    "也会触发，不必 @Bot；需关闭 Bot 的群隐私模式。\n"
     "4. 发送“重置”或 reset：清空你在当前会话的短期记忆。\n"
     "5. 回复别人的消息并 @Bot：被回复消息会作为本轮参考内容；被回复的是图片时（开启识图）会把图片交给模型。\n"
     "6. 发图片并在说明里 @Bot（或私聊直接发图）：开启识图后让模型看图回答。\n\n"
     "【为什么没反应】\n"
     "- 收到提问会立即回复“🤔”占位；连占位都没有，说明这条消息没有触发插件：\n"
-    "  · 交互 Bot 账号配置了“允许会话”时，只有列表里的群/私聊会投递给插件（访客模式不受限）；\n"
+    "  · 交互 Bot 账号配置了“允许会话”时，只有列表里的群/私聊会投递给插件（访客模式不受限）；"
+    "不在列表里的消息由平台直接丢弃、插件收不到，平台日志会记一条 info（账号 + chat_id + 原因）；\n"
     "  · 群里需 @Bot 或回复 Bot，且 Bot 要能收到消息（关闭 Group Privacy 或设为管理员）；\n"
     "  · 会话黑/白名单、仅白名单用户（提示语留空时静默）、/ 开头的指令会被忽略；\n"
     "  · 具体原因可在“运行日志”里按本插件筛选查看。\n"
@@ -38,7 +41,8 @@ USAGE_PREVIEW = (
     "【费用与限制】\n"
     "- 访客模式对任何人开放（guest_all），请务必设置每日上限，必要时改为仅白名单用户。\n"
     "- 平台另有访客限流：每个调用者每分钟 6 次、每个 Bot 每分钟 60 次。\n"
-    "- 交互 Bot 插件单次处理约 15 秒内必须完成，AI 超时上限因此最多 13 秒（含读图与联网搜索）；访客模式每条消息只能回复一次（先回“🤔”占位，再原地编辑为答案）。\n"
+    "- 处理时限默认 45 秒（可在“处理时限”调到 10–85 秒，含读图、联网与模型调用；插件向平台声明 90 秒上限）；"
+    "超时会把“🤔”占位改为超时提示。访客模式每条消息只能回复一次（先回“🤔”占位，再原地编辑为答案）。\n"
     "- 联网搜索只在走 Responses API 的 Provider 上可用（api_format=responses；OpenAI 官方 chat_completions Provider 会临时切到 Responses）；"
     "其它 Provider 自动降级为不联网回答，并按“联网不可用提示”模板说明。\n"
     "- 识图需要支持图片输入的模型；不支持或读图失败时降级为只看文字，并按“识图不可用提示”模板说明。\n"
@@ -125,7 +129,7 @@ CONFIG_SCHEMA = {
         "enable_group": {
             "type": "boolean",
             "title": "已加入的群 @Bot/回复 Bot 触发",
-            "description": "受交互 Bot 账号“允许会话”限制；Bot 用户名由平台自动识别。",
+            "description": "受交互 Bot 账号“允许会话”限制：配置了允许会话列表时，不在列表里的群消息由平台直接丢弃（插件收不到，平台日志记 info）。Bot 用户名由平台自动识别。",
             "default": True,
             "x-ui-section": _SECTION_TRIGGER,
             "x-ui-columns": 2,
@@ -134,7 +138,7 @@ CONFIG_SCHEMA = {
         "enable_private": {
             "type": "boolean",
             "title": "与 Bot 私聊直接回答",
-            "description": "受交互 Bot 账号“允许会话”限制：配置了允许会话列表时，私聊也要在列表里。",
+            "description": "受交互 Bot 账号“允许会话”限制：配置了允许会话列表时，私聊也要在列表里，否则由平台直接丢弃（平台日志记 info）。",
             "default": True,
             "x-ui-section": _SECTION_TRIGGER,
             "x-ui-columns": 2,
@@ -148,6 +152,44 @@ CONFIG_SCHEMA = {
             "x-ui-section": _SECTION_TRIGGER,
             "x-ui-columns": 2,
             "x-ui-order": 13,
+        },
+        "trigger_keywords": {
+            "type": "string",
+            "title": "触发关键词（可选）",
+            "description": (
+                "Bot 已加入的群里，消息以这些关键词开头（或包含，见“关键词匹配方式”）时也触发答疑，不必 @Bot；"
+                "逗号或换行分隔，最多 20 个，留空表示关闭。关键词后必须跟问题内容；Bot 自己和其它 Bot 的消息、"
+                "命令消息（/ . ! 等开头）一律忽略；私聊与访客模式不受影响；仍受会话黑白名单、白名单用户与每日限额约束。"
+                "注意：Telegram 群隐私模式开启时 Bot 收不到普通群消息，关键词触发需要 Bot 在群内，并在 @BotFather "
+                "/setprivacy 选 Disable 关闭隐私模式（或把 Bot 设为群管理员）；改隐私设置后要把 Bot 移出群再拉回才生效。"
+                "平台检测到隐私模式仍开启（can_read_all_group_messages=false）时会在运行日志记一条警告。"
+            ),
+            "default": "",
+            "x-ui-widget": "textarea",
+            "maxLength": 1000,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 1,
+            "x-ui-order": 15,
+        },
+        "keyword_match_mode": {
+            "type": "string",
+            "title": "关键词匹配方式",
+            "description": "开头匹配：消息以关键词开头才触发（推荐，误触发少）；包含：消息任意位置出现关键词都触发。英文/数字关键词按整词匹配。",
+            "default": "开头匹配",
+            "enum": ["开头匹配", "包含"],
+            "x-ui-widget": "list-select",
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 16,
+        },
+        "strip_keyword": {
+            "type": "boolean",
+            "title": "提问时去掉关键词",
+            "description": "开启时把关键词从问题里去掉再交给模型（例如“AI 今天几号”→“今天几号”）；关闭则原样提问。",
+            "default": True,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 17,
         },
         "bot_username": {
             "type": "string",
@@ -184,8 +226,13 @@ CONFIG_SCHEMA = {
         "enable_web_search": {
             "type": "boolean",
             "title": "联网搜索",
-            "description": "让模型用原生 web_search 工具联网后回答，并附来源。仅 Responses API Provider 支持（api_format=responses；OpenAI 官方 chat_completions Provider 会临时切到 Responses）；不支持时自动降级为不联网回答。联网会明显变慢，注意 13 秒超时。",
-            "default": False,
+            "description": (
+                "把原生 web_search 作为工具交给模型，由模型自行判断是否联网（tool_choice=auto，不强制每次搜索）；"
+                "系统提示会引导模型对时效性信息、事实查询、价格/版本/新闻/天气/人物近况先联网，闲聊、推理、改写类不联网，"
+                "并注入服务器当前日期时间。联网后附来源。仅 Responses API Provider 支持（api_format=responses；"
+                "OpenAI 官方 chat_completions Provider 会临时切到 Responses）；不支持时自动降级为不联网回答并提示。联网会变慢，计入处理时限。"
+            ),
+            "default": True,
             "x-ui-section": _SECTION_MODEL,
             "x-ui-columns": 2,
             "x-ui-order": 22,
@@ -211,13 +258,17 @@ CONFIG_SCHEMA = {
             "x-ui-columns": 1,
             "x-ui-order": 24,
         },
-        "timeout_seconds": {
+        "handler_timeout_seconds": {
             "type": "integer",
-            "title": "AI 请求超时（秒）",
-            "description": "交互 Bot 插件单次处理约 15 秒内必须返回，因此最多 13 秒（含读图与联网）；超时会把占位消息改为超时提示。",
-            "default": 12,
-            "minimum": 3,
-            "maximum": 13,
+            "title": "处理时限（秒）",
+            "description": (
+                "从收到提问到给出答案的总时限，读图、联网搜索与模型调用都计入，超时会把“🤔”占位改为超时提示。"
+                "这是本插件唯一的时限（取代 0.2.0 之前最多 13 秒的“AI 请求超时”）；插件向平台声明 90 秒上限，"
+                "这里最多 85 秒，留 5 秒给编辑占位与投递。需要 TelePilot 支持插件声明处理时限，旧版平台仍按 15 秒截断。"
+            ),
+            "default": 45,
+            "minimum": 10,
+            "maximum": 85,
             "x-ui-section": _SECTION_MODEL,
             "x-ui-columns": 2,
             "x-ui-order": 25,
@@ -500,13 +551,16 @@ EVENT_SUBSCRIPTIONS = [
         "events": ["guest_message"],
         "source": ["interaction_bot"],
         "scope": "guest_all",
+        # 平台默认 15 秒；声明平台上限 90 秒，实际时限由配置“处理时限”在插件内控制。
+        "timeout_seconds": 90,
         "description": "访客模式：交互 Bot 在未加入的会话被 @提及/回复时回答一次；任何人可触发，靠插件内白名单与每日上限控费。",
     },
     {
         "events": ["message"],
         "source": ["interaction_bot"],
         "scope": "all_allowed_chats",
-        "description": "Bot 已加入的群里 @Bot/回复 Bot，以及与 Bot 私聊；其余消息直接忽略、不调用 AI。",
+        "timeout_seconds": 90,
+        "description": "Bot 已加入的群里 @Bot/回复 Bot/触发关键词，以及与 Bot 私聊；其余消息直接忽略、不调用 AI。",
     },
 ]
 

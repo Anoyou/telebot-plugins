@@ -62,8 +62,13 @@ except ImportError:  # pragma: no cover - loaded as a flat module
 TELEGRAM_TEXT_LIMIT = 4096
 # 分段时按可见字符留出余量（模板包装、来源列表）。
 SEGMENT_LIMIT = 4000
-# 交互 Bot 插件调用经 worker RPC，约 15 秒内必须返回；留出存储与投递余量。
-MAX_AI_TIMEOUT_SECONDS = 13
+# 平台时限只能由 manifest 静态声明：event_subscriptions 声明平台上限 90 秒（平台默认 15 秒）。
+# 插件内部按配置“处理时限” handler_timeout_seconds（默认 45，10–85 秒）自行超时，把占位改为超时提示；
+# 上限比平台少 5 秒，给占位编辑与投递留余量。读图、联网与模型调用都计入这一个时限。
+PLATFORM_TIMEOUT_SECONDS = 90
+MIN_HANDLER_TIMEOUT_SECONDS = 10
+MAX_HANDLER_TIMEOUT_SECONDS = 85
+DEFAULT_HANDLER_TIMEOUT_SECONDS = 45
 MIN_AI_ATTEMPT_SECONDS = 2.0
 DAY_TZ = timezone(timedelta(hours=8))  # 每日次数按北京时间自然日统计
 QUOTA_KEY_TTL_SECONDS = 2 * 24 * 60 * 60
@@ -181,6 +186,61 @@ def _parse_ids(raw: Any) -> set[int]:
     return ids
 
 
+# 群里回复原消息的触发方式：@Bot/回复 Bot（group）与关键词（keyword）。
+GROUP_KINDS = frozenset({"group", "keyword"})
+KEYWORD_MATCH_PREFIX = "prefix"
+KEYWORD_MATCH_CONTAINS = "contains"
+MAX_TRIGGER_KEYWORDS = 20
+# 去掉关键词后，问题开头/结尾可能残留的分隔符。
+KEYWORD_SEPARATORS = " \t\r\n,，.。:：;；!！?？、~～-—|"
+
+
+def _parse_keywords(raw: Any) -> list[str]:
+    """关键词：列表，或逗号/换行分隔的字符串；去重保序，最长 32 字，最多 20 个。"""
+
+    items = raw if isinstance(raw, (list, tuple)) else re.split(r"[,，\n\r]+", str(raw or ""))
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        word = str(item or "").strip()[:32]
+        if not word or word.casefold() in seen:
+            continue
+        seen.add(word.casefold())
+        out.append(word)
+        if len(out) >= MAX_TRIGGER_KEYWORDS:
+            break
+    return out
+
+
+def match_trigger_keyword(cfg: dict[str, Any], text: str) -> tuple[str, str] | None:
+    """群消息关键词触发：返回 (命中的关键词, 去掉/保留关键词后的问题)；未命中或关键词后没有问题时返回 None。"""
+
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    folded = raw.casefold()
+    contains = cfg.get("keyword_match_mode") == KEYWORD_MATCH_CONTAINS
+    # 长关键词优先，避免“AI”抢先命中“AI 助手”。
+    for keyword in sorted(cfg.get("trigger_keywords") or [], key=len, reverse=True):
+        key = keyword.casefold()
+        start = folded.find(key) if contains else (0 if folded.startswith(key) else -1)
+        if start < 0:
+            continue
+        end = start + len(key)
+        # 英文/数字关键词需要词边界：关键词 "ai" 不应命中 "aim" / "mail"。
+        if key[-1:].isascii() and key[-1:].isalnum() and end < len(raw) and raw[end].isascii() and raw[end].isalnum():
+            continue
+        if key[:1].isascii() and key[:1].isalnum() and start > 0 and raw[start - 1].isascii() and raw[start - 1].isalnum():
+            continue
+        # 只去掉关键词紧邻的分隔符，保留问题本身结尾的“？”等标点。
+        remainder = (raw[:start].rstrip(KEYWORD_SEPARATORS) + " " + raw[end:].lstrip(KEYWORD_SEPARATORS)).strip()
+        if not remainder.strip(KEYWORD_SEPARATORS):
+            return None  # 只发了关键词，没有问题内容：不触发
+        question = remainder if cfg.get("strip_keyword", True) else raw
+        return keyword, question
+    return None
+
+
 def _split_words(raw: Any) -> set[str]:
     return {item.strip() for item in re.split(r"[\s,，;；]+", str(raw or "")) if item.strip()}
 
@@ -220,10 +280,21 @@ def _cfg(ctx: Any) -> dict[str, Any]:
         "bot_username": bot_username.casefold(),
         "telepilot_provider": str(raw.get("telepilot_provider") or "").strip(),
         "telepilot_model": str(raw.get("telepilot_model") or "").strip(),
-        "enable_web_search": _bool(raw.get("enable_web_search"), False),
+        "enable_web_search": _bool(raw.get("enable_web_search"), True),
         "enable_vision": _bool(raw.get("enable_vision"), True),
         "system_prompt": str(raw.get("system_prompt") or "").strip() or DEFAULT_SYSTEM_PROMPT,
-        "timeout_seconds": _int(raw.get("timeout_seconds"), 12, 3, MAX_AI_TIMEOUT_SECONDS),
+        # 唯一的时限：0.2.x 的“AI 请求超时 timeout_seconds”（最多 13 秒）已合并进来，旧值不再生效。
+        "timeout_seconds": _int(
+            raw.get("handler_timeout_seconds"),
+            DEFAULT_HANDLER_TIMEOUT_SECONDS,
+            MIN_HANDLER_TIMEOUT_SECONDS,
+            MAX_HANDLER_TIMEOUT_SECONDS,
+        ),
+        "trigger_keywords": _parse_keywords(raw.get("trigger_keywords")),
+        "keyword_match_mode": KEYWORD_MATCH_CONTAINS
+        if str(raw.get("keyword_match_mode") or "").strip().lower() in {KEYWORD_MATCH_CONTAINS, "包含"}
+        else KEYWORD_MATCH_PREFIX,
+        "strip_keyword": _bool(raw.get("strip_keyword"), True),
         "max_tokens": _int(raw.get("max_tokens"), 800, 128, 4000),
         "rich_text": _bool(raw.get("rich_text"), True),
         "max_output_chars": _int(raw.get("max_output_chars"), 3500, 200, 12000),
@@ -650,6 +721,7 @@ class InteractionAIChatPlugin(Plugin):
             pass
         self._local_store = _LocalStore()
         self._locks: dict[str, asyncio.Lock] = {}
+        self._privacy_warned: set[str] = set()
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         """reset 风格：丢弃进程内兜底缓存与锁；持久记忆由 ctx.storage TTL 自然过期。"""
@@ -662,6 +734,7 @@ class InteractionAIChatPlugin(Plugin):
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
         payload = payload if isinstance(payload, dict) else {}
         cfg = _cfg(ctx)
+        await self._warn_privacy_mode(ctx, cfg, payload)
         trigger, skip_reason = self._resolve_trigger(cfg, payload)
         if trigger is None:
             if skip_reason:
@@ -729,6 +802,9 @@ class InteractionAIChatPlugin(Plugin):
             or (bot_id is not None and _reply_to_user_id(reply) == bot_id)
         )
         if not (mentioned or replied_to_bot):
+            keyword_trigger = self._keyword_trigger(cfg, payload, text, bot_id, username)
+            if keyword_trigger is not None:
+                return _Trigger(kind="keyword", chat_type=chat_type or "group", text=keyword_trigger, reply_text=reply_text, **common), ""
             if not username and "@" in text:
                 return None, "群消息无法识别是否 @Bot：平台未下发 Bot 身份且未填写“交互 Bot 用户名”"
             return None, ""
@@ -739,6 +815,46 @@ class InteractionAIChatPlugin(Plugin):
             reply_text = ""
         clean_text = _mention_pattern(username).sub(" ", text).strip() if username else text
         return _Trigger(kind="group", chat_type=chat_type or "group", text=clean_text, reply_text=reply_text, **common), ""
+
+    async def _warn_privacy_mode(self, ctx: Any, cfg: dict[str, Any], payload: dict[str, Any]) -> None:
+        """填了触发关键词但 getMe 显示 can_read_all_group_messages=false（群隐私模式开启）时，每个 Bot 警告一次。"""
+
+        if not cfg["trigger_keywords"]:
+            return
+        bot = _dict(payload.get("bot"))
+        if bot.get("can_read_all_group_messages") is not False:
+            return
+        marker = str(bot.get("id") or bot.get("username") or "bot")
+        if marker in self._privacy_warned:
+            return
+        self._privacy_warned.add(marker)
+        await _log(
+            ctx,
+            "warning",
+            "AI 答疑关键词触发可能无效：交互 Bot 开启了群隐私模式（can_read_all_group_messages=false），"
+            "群里只能收到 @Bot/回复 Bot/命令。请在 BotFather /setprivacy 选 Disable（或设为群管理员），改完后把 Bot 移出群再拉回。",
+        )
+
+    @staticmethod
+    def _keyword_trigger(cfg: dict[str, Any], payload: dict[str, Any], text: str, bot_id: int | None, username: str) -> str | None:
+        """群里以/含关键词的消息也触发答疑（不必 @Bot）；返回问题文本，未触发返回 None。"""
+
+        if not cfg["trigger_keywords"]:
+            return None
+        sender = _dict(payload.get("sender"))
+        sender_id = _sender_id(payload)
+        sender_username = str(sender.get("username") or payload.get("sender_username") or "").strip().lstrip("@").casefold()
+        # 忽略 Bot 自己与其它 Bot 的消息，避免 Bot 之间互相触发。
+        if _bool(sender.get("is_bot"), False) or (bot_id is not None and sender_id == bot_id):
+            return None
+        if sender_username and (sender_username == username or sender_username.endswith("bot")):
+            return None
+        stripped = str(text or "").strip()
+        # 命令消息（/ . ! 等前缀）交给命令处理，不当作提问。
+        if stripped.startswith(tuple({_command_prefix(), *COMMON_COMMAND_PREFIXES} - {""})):
+            return None
+        matched = match_trigger_keyword(cfg, stripped)
+        return matched[1] if matched else None
 
     # -- 主流程 -------------------------------------------------------------
 
@@ -910,7 +1026,7 @@ class InteractionAIChatPlugin(Plugin):
                 "send_via": ["interaction_bot"],
                 "save_message_id_key": key,
             }
-            if trigger.kind == "group" and trigger.message_id is not None:
+            if trigger.kind in GROUP_KINDS and trigger.message_id is not None:
                 action["reply_to_message_id"] = trigger.message_id
             await apply([action])
             message_id = await reader(key)
@@ -961,7 +1077,7 @@ class InteractionAIChatPlugin(Plugin):
             ]
 
         actions: list[dict[str, Any]] = []
-        reply_to = trigger.message_id if trigger.kind == "group" else None
+        reply_to = trigger.message_id if trigger.kind in GROUP_KINDS else None
         for index, segment in enumerate(segments):
             if index == 0 and placeholder is not None and placeholder.message_id is not None:
                 action = {
@@ -1213,6 +1329,8 @@ class InteractionAIChatPlugin(Plugin):
         if web_search:
             kwargs["web_search"] = True
             kwargs["web_search_context_size"] = "low"
+            # web_search 作为工具交给模型（tool_choice=auto）；这里只做引导，不强制每次搜索。
+            system_prompt = f"{system_prompt}\n\n{WEB_SEARCH_GUIDANCE}"
         return await asyncio.wait_for(complete(system_prompt, user_prompt, **kwargs), timeout=budget + 0.5)
 
     # -- 配置页动作 ---------------------------------------------------------
@@ -1286,11 +1404,29 @@ class InteractionAIChatPlugin(Plugin):
 IMAGE_NOTE = "【用户附带了图片（见本条消息中的图片），请结合图片回答】\n"
 
 
-def build_system_prompt(cfg: dict[str, Any]) -> str:
+WEB_SEARCH_GUIDANCE = (
+    "【联网搜索】你可以使用 web_search 工具。凡涉及时效性信息、事实查询、价格、版本、新闻、天气、人物近况等，"
+    "一律先联网搜索再回答，并以搜索结果为准；闲聊、纯推理、改写、翻译类问题不必联网。"
+)
+WEEKDAYS_CN = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
+
+
+def current_time_line(now: datetime | None = None) -> str:
+    """服务器时区的当前日期时间（含星期），让模型知道“今天”。"""
+
+    moment = (now or datetime.now()).astimezone()
+    offset = moment.strftime("%z")
+    zone = f"UTC{offset[:3]}:{offset[3:]}" if offset else "本地时间"
+    name = moment.tzname() or ""
+    label = f"{zone}，{name}" if name and name not in zone and not name.startswith(("+", "-")) else zone
+    return f"【当前时间】{moment:%Y-%m-%d %H:%M} {WEEKDAYS_CN[moment.weekday()]}（服务器时区 {label}）。“今天”“现在”等以此为准。"
+
+
+def build_system_prompt(cfg: dict[str, Any], now: datetime | None = None) -> str:
     persona = str(cfg.get("system_prompt") or DEFAULT_SYSTEM_PROMPT).strip()
     rule = FORMAT_RULE_RICH if cfg.get("rich_text", True) else FORMAT_RULE_PLAIN
     rules = SAFETY_RULES.format(max_chars=int(cfg.get("max_output_chars") or 3500), format_rule=rule)
-    return f"{persona}\n\n{rules}"
+    return f"{persona}\n\n{current_time_line(now)}\n\n{rules}"
 
 
 def build_user_prompt(question: str, history: list[list[str]], reply_text: str, *, has_images: bool = False) -> str:

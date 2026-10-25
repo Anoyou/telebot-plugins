@@ -132,7 +132,8 @@ class Ctx:
     def __init__(self, config=None, ai=None, storage=None) -> None:
         self.account_id = 1
         self.feature_key = "interaction-ai-chat"
-        self.config = dict(config or {})
+        # 联网搜索默认开启；多数用例用不支持 web_search 的旧版 FakeAI，这里默认关掉，专门的用例再显式开启。
+        self.config = {"enable_web_search": False, **dict(config or {})}
         self.ai = ai if ai is not None else FakeAI()
         self.storage = storage if storage is not None else FakeStorage()
         self.messages = FakeMessages()
@@ -223,7 +224,11 @@ class ManifestTest(_StubbedTestCase):
             set(schema["required"]),
             set(schema["properties"]) - {"usage_preview", "template_placeholders", "deny_reply"},
         )
-        self.assertLessEqual(schema["properties"]["timeout_seconds"]["maximum"], 13)
+        self.assertNotIn("timeout_seconds", schema["properties"])  # 已合并进 handler_timeout_seconds
+        handler = schema["properties"]["handler_timeout_seconds"]
+        self.assertEqual((handler["default"], handler["minimum"], handler["maximum"]), (45, 10, 85))
+        self.assertTrue(schema["properties"]["enable_web_search"]["default"])
+        self.assertIn("/setprivacy", schema["properties"]["trigger_keywords"]["description"])
         self.assertEqual(schema["properties"]["max_history_rounds"]["default"], 6)
         self.assertEqual(schema["properties"]["max_history_rounds"]["maximum"], 20)
         self.assertEqual(schema["properties"]["per_user_daily_limit"]["default"], 20)
@@ -248,18 +253,18 @@ class GuestReplyTest(_StubbedTestCase):
         self.assertIn("不执行", call["system"])
         self.assertNotIn("provider", call)
         self.assertNotIn("provider_tag", call)
-        self.assertEqual(call["timeout_seconds"], 12)
+        self.assertEqual(call["timeout_seconds"], 45)
         # 不把用户 ID 写进提示词
         self.assertNotIn("501", call["user"] + call["system"])
 
     def test_fixed_provider_and_model_are_forwarded(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
-        ctx = Ctx(config={"telepilot_provider": "7", "telepilot_model": "gpt-x", "timeout_seconds": 99})
+        ctx = Ctx(config={"telepilot_provider": "7", "telepilot_model": "gpt-x", "handler_timeout_seconds": 999})
         run(plugin.on_event(ctx, guest_payload("你好")))
         call = ctx.ai.calls[0]
         self.assertEqual(call["provider"], "7")
         self.assertEqual(call["model"], "gpt-x")
-        self.assertEqual(call["timeout_seconds"], 13)
+        self.assertEqual(call["timeout_seconds"], 85)
 
     def test_guest_disabled_returns_nothing(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
@@ -295,7 +300,7 @@ class GuestReplyTest(_StubbedTestCase):
 
     def test_ai_timeout_gives_timeout_reply(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
-        ctx = Ctx(config={"timeout_seconds": 3}, ai=FakeAI(delay=10))
+        ctx = Ctx(config={"handler_timeout_seconds": 10}, ai=FakeAI(delay=30))
         original = PLUGIN.asyncio.wait_for
 
         async def fast_wait_for(awaitable, timeout):
@@ -306,7 +311,7 @@ class GuestReplyTest(_StubbedTestCase):
             actions = run(plugin.on_event(ctx, guest_payload("你好")))
         finally:
             PLUGIN.asyncio.wait_for = original
-        self.assertEqual(actions[0]["text"], "AI 思考超时了（3 秒），换个简短点的问题再试试？")
+        self.assertEqual(actions[0]["text"], "AI 思考超时了（10 秒），换个简短点的问题再试试？")
 
     def test_unexpected_error_still_replies_once(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
@@ -962,7 +967,7 @@ class TemplateTest(_StubbedTestCase):
 
     def test_timeout_template(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
-        ctx = Ctx(config={"timeout_seconds": 3, "error_timeout_template": "超时 {timeout}s"}, ai=FakeAI(delay=10))
+        ctx = Ctx(config={"handler_timeout_seconds": 10, "error_timeout_template": "超时 {timeout}s"}, ai=FakeAI(delay=30))
         original = PLUGIN.asyncio.wait_for
 
         async def fast_wait_for(awaitable, timeout):
@@ -973,7 +978,7 @@ class TemplateTest(_StubbedTestCase):
             actions = run(plugin.on_event(ctx, guest_payload("你好")))
         finally:
             PLUGIN.asyncio.wait_for = original
-        self.assertEqual(actions[0]["text"], "超时 3s")
+        self.assertEqual(actions[0]["text"], "超时 10s")
 
     def test_legacy_deny_reply_is_still_honored(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
@@ -1157,3 +1162,138 @@ class TriggerDiagnosticsTest(_StubbedTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class KeywordTriggerTest(_StubbedTestCase):
+    """群里以/含关键词的消息不必 @Bot 也触发；私聊与访客不受影响。"""
+
+    def _ask(self, text, config=None, **payload_kwargs):
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = Ctx(config={"trigger_keywords": "AI, 问问\n小助手", **(config or {})})
+        actions = run(plugin.on_event(ctx, message_payload(text, **payload_kwargs)))
+        return ctx, actions
+
+    def test_keyword_list_parsing(self) -> None:
+        self.assertEqual(PLUGIN._parse_keywords("AI, 问问\n小助手，ai"), ["AI", "问问", "小助手"])
+        self.assertEqual(PLUGIN._parse_keywords(["AI", " ", "问问"]), ["AI", "问问"])
+        self.assertEqual(PLUGIN._parse_keywords(""), [])
+
+    def test_prefix_keyword_triggers_and_strips_keyword(self) -> None:
+        ctx, actions = self._ask("AI，今天几号？")
+        self.assertEqual(len(ctx.ai.calls), 1)
+        self.assertIn("今天几号？", ctx.ai.calls[0]["user"])
+        self.assertNotIn("AI，今天几号", ctx.ai.calls[0]["user"])
+        self.assertEqual(actions[0]["reply_to_message_id"], 88)
+
+    def test_keyword_can_be_kept_in_question(self) -> None:
+        ctx, _ = self._ask("问问 天气怎么样", config={"strip_keyword": False})
+        self.assertIn("问问 天气怎么样", ctx.ai.calls[0]["user"])
+
+    def test_prefix_mode_ignores_keyword_in_middle(self) -> None:
+        ctx, actions = self._ask("我想问问天气")
+        self.assertEqual((actions, ctx.ai.calls), ([], []))
+
+    def test_contains_mode_matches_anywhere(self) -> None:
+        ctx, _ = self._ask("我想问问天气怎么样", config={"keyword_match_mode": "包含"})
+        self.assertEqual(len(ctx.ai.calls), 1)
+        self.assertIn("我想 天气怎么样", ctx.ai.calls[0]["user"])
+
+    def test_keyword_without_question_is_ignored(self) -> None:
+        for text in ("AI", "AI？", "小助手 ！"):
+            ctx, actions = self._ask(text)
+            self.assertEqual((actions, ctx.ai.calls), ([], []), text)
+
+    def test_ascii_keyword_needs_word_boundary(self) -> None:
+        for text in ("AIM 是什么", "aim high"):
+            ctx, _ = self._ask(text)
+            self.assertEqual(ctx.ai.calls, [], text)
+        ctx, _ = self._ask("ai 是什么")  # 大小写不敏感
+        self.assertEqual(len(ctx.ai.calls), 1)
+
+    def test_commands_and_bot_senders_are_ignored(self) -> None:
+        ctx, _ = self._ask("/AI 今天几号")
+        self.assertEqual(ctx.ai.calls, [])
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        for sender in ({"user_id": 999, "is_bot": True}, {"user_id": 700, "username": "other_bot"}, {"user_id": 4242}):
+            ctx = Ctx(config={"trigger_keywords": "AI"})
+            payload = message_payload("AI 今天几号")
+            payload["sender"] = sender
+            payload["bot"] = {"id": 4242, "username": "helper_bot"}
+            self.assertEqual(run(plugin.on_event(ctx, payload)), [], sender)
+            self.assertEqual(ctx.ai.calls, [], sender)
+
+    def test_keyword_trigger_still_respects_chat_whitelist_and_limits(self) -> None:
+        ctx, actions = self._ask("AI 你好", config={"chat_whitelist": "-100999"})
+        self.assertEqual((actions, ctx.ai.calls), ([], []))
+        ctx, _ = self._ask("AI 你好", config={"per_user_daily_limit": 0, "global_daily_limit": 0})
+        self.assertEqual(len(ctx.ai.calls), 1)  # 0 = 不限制
+
+    def test_keywords_empty_means_disabled(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = Ctx()
+        self.assertEqual(run(plugin.on_event(ctx, message_payload("AI 今天几号"))), [])
+        self.assertEqual(ctx.ai.calls, [])
+
+    def test_private_chat_unaffected(self) -> None:
+        ctx, _ = self._ask("AI 今天几号", chat_id=601, chat_type="private")
+        self.assertIn("AI 今天几号", ctx.ai.calls[0]["user"])  # 私聊原样提问，不去关键词
+
+    def test_privacy_mode_warning_is_logged_once(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = Ctx(config={"trigger_keywords": "AI"})
+        for _ in range(2):
+            payload = message_payload("随便聊聊")
+            payload["bot"] = {"id": 4242, "username": "helper_bot", "can_read_all_group_messages": False}
+            run(plugin.on_event(ctx, payload))
+        warnings = [log for log in ctx.logs if log[0] == "warning" and "隐私模式" in log[1]]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("/setprivacy", warnings[0][1])
+        # 没填关键词、或可读全部消息时不警告
+        for config, flag in (({}, False), ({"trigger_keywords": "AI"}, True)):
+            plugin = PLUGIN.InteractionAIChatPlugin()
+            ctx = Ctx(config=config)
+            payload = message_payload("随便聊聊")
+            payload["bot"] = {"id": 4242, "username": "helper_bot", "can_read_all_group_messages": flag}
+            run(plugin.on_event(ctx, payload))
+            self.assertFalse([log for log in ctx.logs if "隐私模式" in log[1]])
+
+
+class TimeAndSearchPromptTest(_StubbedTestCase):
+    def test_system_prompt_contains_current_date_with_weekday(self) -> None:
+        from datetime import datetime, timedelta, timezone
+
+        fixed = datetime(2026, 10, 25, 23, 6, tzinfo=timezone(timedelta(hours=8)))
+        prompt = PLUGIN.build_system_prompt({"rich_text": True}, now=fixed)
+        self.assertIn("2026-10-25", prompt)
+        self.assertIn("星期", prompt)
+        self.assertIn("服务器时区", prompt)
+
+    def test_web_search_on_by_default_with_guidance_not_forced(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ai = CapAI(text="答")
+        ctx = Ctx(config={}, ai=ai)
+        del ctx.config["enable_web_search"]  # 使用插件默认值
+        run(plugin.on_event(ctx, guest_payload("今天上海天气？")))
+        call = ai.calls[0]
+        self.assertTrue(call["web_search"])
+        self.assertIn("web_search", call["system"])
+        self.assertIn("闲聊", call["system"])
+        self.assertNotIn("tool_choice", call)  # 由模型自行决定（auto）
+        self.assertIn("当前时间", call["system"])
+
+    def test_guidance_only_when_search_enabled(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ai = CapAI(text="答")
+        run(plugin.on_event(Ctx(config={"enable_web_search": False}, ai=ai), guest_payload("你好")))
+        self.assertNotIn("【联网搜索】", ai.calls[0]["system"])
+
+    def test_subscriptions_declare_platform_timeout(self) -> None:
+        for sub in PACKAGE.MANIFEST.event_subscriptions:
+            self.assertEqual(sub["timeout_seconds"], 90)
+        self.assertLess(PLUGIN.MAX_HANDLER_TIMEOUT_SECONDS, PLUGIN.PLATFORM_TIMEOUT_SECONDS)
+
+    def test_legacy_timeout_seconds_is_ignored(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = Ctx(config={"timeout_seconds": 12})
+        run(plugin.on_event(ctx, guest_payload("你好")))
+        self.assertEqual(ctx.ai.calls[0]["timeout_seconds"], 45)
