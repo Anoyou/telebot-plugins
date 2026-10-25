@@ -23,6 +23,7 @@ TelePilot 远程插件仓库。
 | [chatgpt_image](./chatgpt_image/) | 插件配置 | 插件库维护 ChatGPT2API 图片生成/编辑与 token 池 |
 | [codex_image](./codex_image/) | 插件配置 | 插件库维护 Codex 图片生成 |
 | [AI-Chat](./ai-chat/) | `{prefix}ask` | AI-Chat 聊天与消息解释助手，调用 TelePilot 已配置的 AI Provider |
+| [AI 答疑（交互 Bot）](./interaction-ai-chat/) | @交互 Bot / 回复 Bot | 交互 Bot 被 @提及或回复（含访客模式 Guest Mode）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额 |
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
 | [private_chat_assistant](./private_chat_assistant/) | 无 | 监听账号收到的私聊，通过插件专用 Bot 向指定账号发送 60 秒聚合提醒 |
 | [todo_reminder](./todo_reminder/) | `{prefix}todo`、`{prefix}undo ID` | 支持自然语言单次提醒和 `todo 数字 提醒内容` 重复简写；含完成反馈与命令自动删除 |
