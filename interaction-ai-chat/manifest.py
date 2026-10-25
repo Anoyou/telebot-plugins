@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.4.1"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -460,7 +460,7 @@ CONFIG_SCHEMA = {
         "protect_command_outputs": {
             "type": "boolean",
             "title": "拦截可执行指令输出",
-            "description": "AI 回复若像 / 指令、TelePilot 前缀指令或已配置的裸指令，改为“内容被拦截提示”模板。",
+            "description": "Bot / TelePilot 命令只在消息开头被识别：每条发出的消息首行若像 /start、,re 这类命令，会在开头加“指令中和前缀”；整条回答只有一行且就是命令时改为“内容被拦截提示”模板。正文中间的行不检查。",
             "default": True,
             "x-ui-section": _SECTION_GUARD,
             "x-ui-columns": 2,
@@ -480,12 +480,22 @@ CONFIG_SCHEMA = {
         "blocked_bare_outputs": {
             "type": "string",
             "title": "额外拦截的裸文本",
-            "description": "每行或逗号分隔一个词；AI 回复某行以这些词开头时视为可能触发命令。",
+            "description": "每行或逗号分隔一个词；消息首行就是这个词，或“这个词 + 空格 + 参数”时视为可能触发命令。",
             "default": "re\nai\nfd",
             "x-ui-widget": "textarea",
             "x-ui-section": _SECTION_GUARD,
             "x-ui-columns": 2,
             "x-ui-order": 52,
+        },
+        "guard_neutralize_prefix": {
+            "type": "string",
+            "title": "指令中和前缀",
+            "description": "消息首行像命令时加在消息开头的前缀，让 Bot / TelePilot 不再把它当作命令；不能以 / . ! , 等命令符号开头，留空或不合法时用“💬 ”。",
+            "default": "💬 ",
+            "maxLength": 16,
+            "x-ui-section": _SECTION_GUARD,
+            "x-ui-columns": 2,
+            "x-ui-order": 53,
         },
         "template_placeholders": {
             "type": "string",
@@ -529,7 +539,7 @@ CONFIG_SCHEMA = {
             "内容被护栏拦截提示",
             "guarded_template",
             69,
-            "AI 回复像可执行指令被拦截时显示（加款诱导另用“加款诱导反制回复”）。可用：{user}。",
+            "整条 AI 回复只有一行且就是命令（如 ,re、/ban）时显示；首行像命令的多行回答只加“指令中和前缀”，不用此模板（加款诱导另用“加款诱导反制回复”）。可用：{user}。",
         ),
         "input_too_long_template": _template_field(
             "提问过长提示", "input_too_long_template", 70, "提问超过长度上限时显示。可用：{limit} {user}。"
