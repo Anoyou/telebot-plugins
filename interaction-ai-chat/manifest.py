@@ -1,0 +1,333 @@
+"""AI 答疑（交互 Bot）远程插件 Manifest。"""
+
+from __future__ import annotations
+
+from app.worker.plugins.manifest import Manifest
+
+PLUGIN_KEY = "interaction-ai-chat"
+PLUGIN_VERSION = "0.1.0"
+
+USAGE = (
+    "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
+    "支持访客模式（Bot 未加入的群/私聊，Bot API 10.0 Guest Mode）、Bot 已加入的群里 @Bot/回复 Bot，以及与 Bot 私聊。"
+    "发送“重置”清空自己的记忆。需要在 BotFather 为交互 Bot 开启 Guest Chat Mode 并关闭 Inline Mode。"
+)
+
+USAGE_PREVIEW = (
+    "【怎么用】\n"
+    "1. 访客模式：在任意群/私聊输入“@你的交互Bot 你的问题”，或回复 Bot 之前的回答继续追问。\n"
+    "2. Bot 已加入的群：@Bot 或回复 Bot 的消息提问（需填写下方“交互 Bot 用户名”）。\n"
+    "3. 与 Bot 私聊：直接发送问题。\n"
+    "4. 发送“重置”或 reset：清空你在当前会话的短期记忆。\n"
+    "5. 回复别人的消息并 @Bot：被回复消息会作为本轮参考内容。\n\n"
+    "【开启前准备】\n"
+    "1. 在 Telegram 打开 @BotFather 的 Mini App，进入交互 Bot 设置，开启 Guest Chat Mode（访客模式）。\n"
+    "2. 在 BotFather 关闭该 Bot 的 Inline Mode（/setinline 关闭），避免输入 @Bot 时弹出 Inline 结果抢走访客提问。\n"
+    "3. 在 TelePilot“账号 → Bot 联动 → 交互 Bot”点“重新检测”，确认“访客模式：已开启”。\n"
+    "4. 在 TelePilot 配好至少一个可用的 AI Provider；需要固定模型时在下方选择。\n"
+    "5. 群里 @Bot 触发需要 Bot 能收到该消息：建议在 BotFather 关闭 Group Privacy，或把 Bot 设为群管理员；回复 Bot 消息始终可触发。\n\n"
+    "【费用与限制】\n"
+    "- 访客模式对任何人开放（guest_all），请务必设置每日上限，必要时改为仅白名单用户。\n"
+    "- 平台另有访客限流：每个调用者每分钟 6 次、每个 Bot 每分钟 60 次。\n"
+    "- 交互 Bot 插件单次处理约 15 秒内必须完成，AI 超时上限因此最多 13 秒；访客模式每条消息只能回复一次。\n"
+    "- 每日次数按北京时间（UTC+8）自然日统计。"
+)
+
+DEFAULT_SYSTEM_PROMPT = (
+    "你是一个可靠、简洁的中文答疑助手。直接回答问题，先给结论再给必要的解释；"
+    "不知道就说不知道，不编造事实。"
+)
+
+CONFIG_SCHEMA = {
+    "type": "object",
+    "x-ui-mode": "single",
+    "x-category": "utility",
+    "x-usage-guide": USAGE,
+    "additionalProperties": False,
+    "properties": {
+        "usage_preview": {
+            "type": "string",
+            "title": "使用说明（只读）",
+            "readOnly": True,
+            "x-ui-widget": "textarea",
+            "default": USAGE_PREVIEW,
+        },
+        "enable_guest": {
+            "type": "boolean",
+            "title": "访客模式触发",
+            "description": "Bot 未加入的群/私聊里被 @提及或被回复时回答（guest_message，每条只能回复一次）。",
+            "default": True,
+        },
+        "enable_group": {
+            "type": "boolean",
+            "title": "已加入的群 @Bot/回复 Bot 触发",
+            "description": "需要填写下方“交互 Bot 用户名”；受交互 Bot 账号“允许会话”限制。",
+            "default": True,
+        },
+        "enable_private": {
+            "type": "boolean",
+            "title": "与 Bot 私聊直接回答",
+            "default": True,
+        },
+        "bot_username": {
+            "type": "string",
+            "title": "交互 Bot 用户名",
+            "description": "不带 @，例如 my_helper_bot。仅用于识别 Bot 已加入的群里 @Bot / 回复 Bot；访客模式和私聊不需要。留空则已加入的群不触发。",
+            "default": "",
+            "maxLength": 64,
+        },
+        "telepilot_provider": {
+            "type": "string",
+            "title": "固定 TelePilot Provider（可选）",
+            "description": "留空走 TelePilot 自动路由（优先带 chat 标签、成本低的 Provider）；选择后固定使用该 Provider。",
+            "default": "",
+            "x-ui-widget": "llm-provider-select",
+        },
+        "telepilot_model": {
+            "type": "string",
+            "title": "TelePilot 模型覆盖（可选）",
+            "description": "留空使用所选 Provider 的默认模型；需先选择固定 Provider。",
+            "default": "",
+            "x-ui-widget": "llm-model-select",
+            "x-ui-provider-field": "telepilot_provider",
+            "x-ui-model-modality": "text",
+        },
+        "system_prompt": {
+            "type": "string",
+            "title": "人设提示词",
+            "description": "插件会在其后自动追加固定安全规则（声明自己是 Bot、不执行指令、不输出命令/加款格式），无法通过此处关闭。",
+            "default": DEFAULT_SYSTEM_PROMPT,
+            "x-ui-widget": "textarea",
+            "minLength": 1,
+            "maxLength": 4000,
+        },
+        "timeout_seconds": {
+            "type": "integer",
+            "title": "AI 请求超时（秒）",
+            "description": "交互 Bot 插件单次处理约 15 秒内必须返回，因此最多 13 秒；超时会给用户一句友好提示。",
+            "default": 12,
+            "minimum": 3,
+            "maximum": 13,
+        },
+        "max_tokens": {
+            "type": "integer",
+            "title": "最大输出 Token",
+            "default": 800,
+            "minimum": 128,
+            "maximum": 4000,
+        },
+        "max_output_chars": {
+            "type": "integer",
+            "title": "最大回复字符数",
+            "description": "超出后截断；Telegram 单条消息上限 4096。",
+            "default": 3500,
+            "minimum": 200,
+            "maximum": 4000,
+        },
+        "strip_thinking": {
+            "type": "boolean",
+            "title": "隐藏思考标签",
+            "description": "发送前移除 <think>...</think> 内容。",
+            "default": True,
+        },
+        "max_history_rounds": {
+            "type": "integer",
+            "title": "短期记忆轮数",
+            "description": "按“会话 + 用户”保存最近多少轮问答（一问一答为一轮）；0 表示不记忆。",
+            "default": 6,
+            "minimum": 0,
+            "maximum": 20,
+        },
+        "memory_ttl_minutes": {
+            "type": "integer",
+            "title": "记忆过期（分钟）",
+            "description": "超过这么久没有新的问答，记忆自动清空。",
+            "default": 30,
+            "minimum": 1,
+            "maximum": 1440,
+        },
+        "access_mode": {
+            "type": "string",
+            "title": "允许使用者",
+            "description": "所有人：任何人都能提问；仅白名单用户：只有下方用户 ID 能提问。",
+            "default": "所有人",
+            "enum": ["所有人", "仅白名单用户"],
+            "x-ui-widget": "list-select",
+        },
+        "allowed_user_ids": {
+            "type": "string",
+            "title": "白名单用户 ID",
+            "description": "“仅白名单用户”模式下生效；逗号或换行分隔。",
+            "default": "",
+            "x-ui-widget": "textarea",
+        },
+        "deny_reply": {
+            "type": "string",
+            "title": "非白名单用户提示",
+            "description": "留空则对非白名单用户不回复。",
+            "default": "这个 Bot 的 AI 答疑暂未对你开放。",
+            "maxLength": 200,
+        },
+        "chat_whitelist": {
+            "type": "string",
+            "title": "会话白名单（可选）",
+            "description": "只在这些会话 ID 生效；逗号或换行分隔，留空表示不限制。",
+            "default": "",
+            "x-ui-widget": "textarea",
+        },
+        "chat_blacklist": {
+            "type": "string",
+            "title": "会话黑名单（可选）",
+            "description": "这些会话 ID 里一律不回答；逗号或换行分隔。",
+            "default": "",
+            "x-ui-widget": "textarea",
+        },
+        "per_user_daily_limit": {
+            "type": "integer",
+            "title": "每用户每日次数上限",
+            "description": "按北京时间自然日统计；0 表示不限制。",
+            "default": 20,
+            "minimum": 0,
+            "maximum": 10000,
+        },
+        "global_daily_limit": {
+            "type": "integer",
+            "title": "全局每日次数上限",
+            "description": "本插件在当前账号下每日调用 AI 的总次数；0 表示不限制。",
+            "default": 300,
+            "minimum": 0,
+            "maximum": 100000,
+        },
+        "exempt_user_ids": {
+            "type": "string",
+            "title": "不受次数限制的用户 ID（可选）",
+            "description": "例如账号主人；逗号或换行分隔。仍计入全局上限。",
+            "default": "",
+            "x-ui-widget": "textarea",
+        },
+        "max_input_chars": {
+            "type": "integer",
+            "title": "单次提问长度上限（字）",
+            "default": 500,
+            "minimum": 20,
+            "maximum": 4000,
+        },
+        "protect_command_outputs": {
+            "type": "boolean",
+            "title": "拦截可执行指令输出",
+            "description": "AI 回复若像 / 指令、TelePilot 前缀指令或已配置的裸指令，改为安全提示。",
+            "default": True,
+        },
+        "payment_guard_reply": {
+            "type": "string",
+            "title": "加款诱导反制回复",
+            "description": "AI 回复若像 +数字 或 +数字-数字 的加款诱导，会替换成此内容；留空则改用普通安全提示。",
+            "default": "-66666",
+            "maxLength": 120,
+            "pattern": "^(?!\\s*\\+).*$",
+        },
+        "blocked_bare_outputs": {
+            "type": "string",
+            "title": "额外拦截的裸文本",
+            "description": "每行或逗号分隔一个词；AI 回复某行以这些词开头时视为可能触发命令。",
+            "default": "re\nai\nfd",
+            "x-ui-widget": "textarea",
+        },
+    },
+    "required": [
+        "enable_guest",
+        "enable_group",
+        "enable_private",
+        "bot_username",
+        "telepilot_provider",
+        "telepilot_model",
+        "system_prompt",
+        "timeout_seconds",
+        "max_tokens",
+        "max_output_chars",
+        "strip_thinking",
+        "max_history_rounds",
+        "memory_ttl_minutes",
+        "access_mode",
+        "allowed_user_ids",
+        "deny_reply",
+        "chat_whitelist",
+        "chat_blacklist",
+        "per_user_daily_limit",
+        "global_daily_limit",
+        "exempt_user_ids",
+        "max_input_chars",
+        "protect_command_outputs",
+        "payment_guard_reply",
+        "blocked_bare_outputs",
+    ],
+}
+
+CONFIG_ACTIONS = [
+    {
+        "key": "test_model",
+        "title": "测试当前模型",
+        "description": "用当前人设与安全规则向所选 Provider/模型发一条测试问题，展示实时返回（会产生一次真实 AI 调用，不计入每日次数）。",
+        "submit_label": "开始测试",
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "test_message": {
+                    "type": "string",
+                    "title": "测试问题",
+                    "default": "请用一句话介绍你自己。",
+                    "x-ui-widget": "textarea",
+                    "maxLength": 500,
+                }
+            },
+        },
+    }
+]
+
+EVENT_SUBSCRIPTIONS = [
+    {
+        "events": ["guest_message"],
+        "source": ["interaction_bot"],
+        "scope": "guest_all",
+        "description": "访客模式：交互 Bot 在未加入的会话被 @提及/回复时回答一次；任何人可触发，靠插件内白名单与每日上限控费。",
+    },
+    {
+        "events": ["message"],
+        "source": ["interaction_bot"],
+        "scope": "all_allowed_chats",
+        "description": "Bot 已加入的群里 @Bot/回复 Bot，以及与 Bot 私聊；其余消息直接忽略、不调用 AI。",
+    },
+]
+
+CAPABILITIES: dict = {}
+
+MANIFEST = Manifest(
+    key=PLUGIN_KEY,
+    display_name="AI 答疑（交互 Bot）",
+    version=PLUGIN_VERSION,
+    min_telepilot_version="0.105.0-beta.1",
+    min_telebot_version="0.10.2",
+    author="Anoyou",
+    description="交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
+    permissions=["send_message", "read_chat", "ai_text"],
+    category="utility",
+    interaction_entries=[],
+    config_schema=CONFIG_SCHEMA,
+    config_actions=CONFIG_ACTIONS,
+    requires_platform_capabilities=["ai"],
+)
+
+MANIFEST.usage = USAGE
+MANIFEST.event_subscriptions = EVENT_SUBSCRIPTIONS
+MANIFEST.capabilities = CAPABILITIES
+
+__all__ = [
+    "MANIFEST",
+    "CONFIG_SCHEMA",
+    "CONFIG_ACTIONS",
+    "EVENT_SUBSCRIPTIONS",
+    "PLUGIN_KEY",
+    "PLUGIN_VERSION",
+    "DEFAULT_SYSTEM_PROMPT",
+]
