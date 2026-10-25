@@ -5,21 +5,30 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
     "支持访客模式（Bot 未加入的群/私聊，Bot API 10.0 Guest Mode）、Bot 已加入的群里 @Bot/回复 Bot，以及与 Bot 私聊。"
+    "收到提问先回一条“🤔”占位，答案出来后原地编辑为 Telegram 富文本；可选联网搜索与识图。"
     "发送“重置”清空自己的记忆。需要在 BotFather 为交互 Bot 开启 Guest Chat Mode 并关闭 Inline Mode。"
 )
 
 USAGE_PREVIEW = (
     "【怎么用】\n"
     "1. 访客模式：在任意群/私聊输入“@你的交互Bot 你的问题”，或回复 Bot 之前的回答继续追问。\n"
-    "2. Bot 已加入的群：@Bot 或回复 Bot 的消息提问（需填写下方“交互 Bot 用户名”）。\n"
+    "2. Bot 已加入的群：@Bot 或回复 Bot 的消息提问（平台会自动识别 Bot 用户名；读取失败时用下方“交互 Bot 用户名”兜底）。\n"
     "3. 与 Bot 私聊：直接发送问题。\n"
     "4. 发送“重置”或 reset：清空你在当前会话的短期记忆。\n"
-    "5. 回复别人的消息并 @Bot：被回复消息会作为本轮参考内容。\n\n"
+    "5. 回复别人的消息并 @Bot：被回复消息会作为本轮参考内容；被回复的是图片时（开启识图）会把图片交给模型。\n"
+    "6. 发图片并在说明里 @Bot（或私聊直接发图）：开启识图后让模型看图回答。\n\n"
+    "【为什么没反应】\n"
+    "- 收到提问会立即回复“🤔”占位；连占位都没有，说明这条消息没有触发插件：\n"
+    "  · 交互 Bot 账号配置了“允许会话”时，只有列表里的群/私聊会投递给插件（访客模式不受限）；\n"
+    "  · 群里需 @Bot 或回复 Bot，且 Bot 要能收到消息（关闭 Group Privacy 或设为管理员）；\n"
+    "  · 会话黑/白名单、仅白名单用户（提示语留空时静默）、/ 开头的指令会被忽略；\n"
+    "  · 具体原因可在“运行日志”里按本插件筛选查看。\n"
+    "- “隐藏思考标签”只影响回复里是否去掉 <think>…</think>，不影响速度或是否触发。\n\n"
     "【开启前准备】\n"
     "1. 在 Telegram 打开 @BotFather 的 Mini App，进入交互 Bot 设置，开启 Guest Chat Mode（访客模式）。\n"
     "2. 在 BotFather 关闭该 Bot 的 Inline Mode（/setinline 关闭），避免输入 @Bot 时弹出 Inline 结果抢走访客提问。\n"
@@ -29,7 +38,10 @@ USAGE_PREVIEW = (
     "【费用与限制】\n"
     "- 访客模式对任何人开放（guest_all），请务必设置每日上限，必要时改为仅白名单用户。\n"
     "- 平台另有访客限流：每个调用者每分钟 6 次、每个 Bot 每分钟 60 次。\n"
-    "- 交互 Bot 插件单次处理约 15 秒内必须完成，AI 超时上限因此最多 13 秒；访客模式每条消息只能回复一次。\n"
+    "- 交互 Bot 插件单次处理约 15 秒内必须完成，AI 超时上限因此最多 13 秒（含读图与联网搜索）；访客模式每条消息只能回复一次（先回“🤔”占位，再原地编辑为答案）。\n"
+    "- 联网搜索只在走 Responses API 的 Provider 上可用（api_format=responses；OpenAI 官方 chat_completions Provider 会临时切到 Responses）；"
+    "其它 Provider 自动降级为不联网回答，并按“联网不可用提示”模板说明。\n"
+    "- 识图需要支持图片输入的模型；不支持或读图失败时降级为只看文字，并按“识图不可用提示”模板说明。\n"
     "- 每日次数按北京时间（UTC+8）自然日统计。"
 )
 
@@ -37,6 +49,54 @@ DEFAULT_SYSTEM_PROMPT = (
     "你是一个可靠、简洁的中文答疑助手。直接回答问题，先给结论再给必要的解释；"
     "不知道就说不知道，不编造事实。"
 )
+
+DEFAULT_TEMPLATES = {
+    "thinking_template": "🤔",
+    "answer_template": "{notices}{answer}{sources}",
+    "error_ai_template": "AI 暂时不可用，请稍后再试。",
+    "error_timeout_template": "AI 思考超时了（{timeout} 秒），换个简短点的问题再试试？",
+    "error_empty_template": "AI 这次没有给出内容，换个说法再问一次吧。",
+    "limit_user_template": "你今天的提问次数已用完（每日 {limit} 次），明天再来吧。",
+    "limit_global_template": "今天的 AI 答疑额度已用完，明天再来吧。",
+    "deny_template": "这个 Bot 的 AI 答疑暂未对你开放。",
+    "guarded_template": "我只能用文字回答问题，不能输出可能触发 Bot 或 TelePilot 的指令。",
+    "input_too_long_template": "问题太长了（上限 {limit} 字），请精简后再问。",
+    "vision_unavailable_template": "当前模型暂不支持识图（或图片读取失败），以下回答只参考了文字。",
+    "search_unavailable_template": "当前模型不支持联网搜索，以下回答未联网，可能不是最新信息。",
+    "help_template": "我是 AI 答疑 Bot：@我 + 你的问题即可提问；回复我的回答可以继续追问；发送“重置”清空你的对话记忆。",
+    "reset_template": "好的，已清空你在这里的对话记忆。",
+}
+
+TEMPLATE_PLACEHOLDERS = (
+    "所有模板都按 Telegram HTML 发送：支持 <b> <i> <u> <s> <code> <pre> <a href> <blockquote> <tg-spoiler>，"
+    "其它尖括号会按原文显示；留空的错误提示会改为删除“🤔”占位（访客模式改用默认文案）。\n"
+    "占位符写法为 {名称}，未知或缺失的占位符原样保留、不会报错：\n"
+    "- 所有模板：{user} 提问者显示名\n"
+    "- 回复包装 answer_template：{answer} 模型回答（已转为富文本）、{sources} 联网来源列表（无来源时为空）、"
+    "{model} 实际模型、{provider} 实际 Provider、{notices} 降级说明（识图/联网不可用时的提示，无则为空）\n"
+    "- 超时 error_timeout_template：{timeout} 超时秒数\n"
+    "- 限额 limit_user_template / limit_global_template、长度 input_too_long_template：{limit} 上限\n"
+    "- 调用失败 error_ai_template：{reason} 简短原因（额度不足 / 请求过于频繁 / 鉴权失败 / 服务不可用）"
+)
+
+_SECTION_TRIGGER = "触发方式"
+_SECTION_MODEL = "模型与能力"
+_SECTION_REPLY = "回复与记忆"
+_SECTION_ACCESS = "使用者与限额"
+_SECTION_GUARD = "安全护栏"
+
+
+def _template_field(title: str, key: str, order: int, description: str) -> dict:
+    return {
+        "type": "string",
+        "title": title,
+        "description": description,
+        "default": DEFAULT_TEMPLATES[key],
+        "x-ui-widget": "textarea",
+        "maxLength": 1000,
+        "x-ui-order": order,
+    }
+
 
 CONFIG_SCHEMA = {
     "type": "object",
@@ -51,46 +111,93 @@ CONFIG_SCHEMA = {
             "readOnly": True,
             "x-ui-widget": "textarea",
             "default": USAGE_PREVIEW,
+            "x-ui-order": 0,
         },
         "enable_guest": {
             "type": "boolean",
             "title": "访客模式触发",
             "description": "Bot 未加入的群/私聊里被 @提及或被回复时回答（guest_message，每条只能回复一次）。",
             "default": True,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 10,
         },
         "enable_group": {
             "type": "boolean",
             "title": "已加入的群 @Bot/回复 Bot 触发",
-            "description": "需要填写下方“交互 Bot 用户名”；受交互 Bot 账号“允许会话”限制。",
+            "description": "受交互 Bot 账号“允许会话”限制；Bot 用户名由平台自动识别。",
             "default": True,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 11,
         },
         "enable_private": {
             "type": "boolean",
             "title": "与 Bot 私聊直接回答",
+            "description": "受交互 Bot 账号“允许会话”限制：配置了允许会话列表时，私聊也要在列表里。",
             "default": True,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 12,
+        },
+        "thinking_placeholder": {
+            "type": "boolean",
+            "title": "先回复“🤔”占位",
+            "description": "收到提问立即回复占位消息（文案见消息模板），答案出来后原地编辑；关闭则等答案出来再一次性回复。",
+            "default": True,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 13,
         },
         "bot_username": {
             "type": "string",
-            "title": "交互 Bot 用户名",
-            "description": "不带 @，例如 my_helper_bot。仅用于识别 Bot 已加入的群里 @Bot / 回复 Bot；访客模式和私聊不需要。留空则已加入的群不触发。",
+            "title": "交互 Bot 用户名（兜底，可选）",
+            "description": "不带 @，例如 my_helper_bot。平台能读取 Bot 身份时自动使用，无需填写；只在自动识别失败时用于识别 @Bot / 回复 Bot。",
             "default": "",
             "maxLength": 64,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 14,
         },
         "telepilot_provider": {
             "type": "string",
-            "title": "固定 TelePilot Provider（可选）",
-            "description": "留空走 TelePilot 自动路由（优先带 chat 标签、成本低的 Provider）；选择后固定使用该 Provider。",
+            "title": "固定 TelePilot Provider（自动填写）",
+            "description": "选择下方“模型”时自动填写对应 Provider；都留空走 TelePilot 自动路由（优先带 chat 标签、成本低的 Provider）。",
             "default": "",
             "x-ui-widget": "llm-provider-select",
+            "x-ui-section": _SECTION_MODEL,
+            "x-ui-columns": 2,
+            "x-ui-order": 20,
         },
         "telepilot_model": {
             "type": "string",
-            "title": "TelePilot 模型覆盖（可选）",
-            "description": "留空使用所选 Provider 的默认模型；需先选择固定 Provider。",
+            "title": "模型",
+            "description": "列出所有已配置 Provider 下已启用的文本模型；选择后自动固定对应 Provider。选“自动路由（不指定）”则由平台选择。",
             "default": "",
             "x-ui-widget": "llm-model-select",
             "x-ui-provider-field": "telepilot_provider",
             "x-ui-model-modality": "text",
+            "x-ui-section": _SECTION_MODEL,
+            "x-ui-columns": 2,
+            "x-ui-order": 21,
+        },
+        "enable_web_search": {
+            "type": "boolean",
+            "title": "联网搜索",
+            "description": "让模型用原生 web_search 工具联网后回答，并附来源。仅 Responses API Provider 支持（api_format=responses；OpenAI 官方 chat_completions Provider 会临时切到 Responses）；不支持时自动降级为不联网回答。联网会明显变慢，注意 13 秒超时。",
+            "default": False,
+            "x-ui-section": _SECTION_MODEL,
+            "x-ui-columns": 2,
+            "x-ui-order": 22,
+        },
+        "enable_vision": {
+            "type": "boolean",
+            "title": "识图",
+            "description": "用户发图片（或回复一张图片）并 @Bot 时，把图片交给模型理解。需要支持图片输入的模型与平台 ai_vision 能力；不支持时降级为只看文字。",
+            "default": True,
+            "x-ui-section": _SECTION_MODEL,
+            "x-ui-columns": 2,
+            "x-ui-order": 23,
         },
         "system_prompt": {
             "type": "string",
@@ -100,14 +207,20 @@ CONFIG_SCHEMA = {
             "x-ui-widget": "textarea",
             "minLength": 1,
             "maxLength": 4000,
+            "x-ui-section": _SECTION_MODEL,
+            "x-ui-columns": 1,
+            "x-ui-order": 24,
         },
         "timeout_seconds": {
             "type": "integer",
             "title": "AI 请求超时（秒）",
-            "description": "交互 Bot 插件单次处理约 15 秒内必须返回，因此最多 13 秒；超时会给用户一句友好提示。",
+            "description": "交互 Bot 插件单次处理约 15 秒内必须返回，因此最多 13 秒（含读图与联网）；超时会把占位消息改为超时提示。",
             "default": 12,
             "minimum": 3,
             "maximum": 13,
+            "x-ui-section": _SECTION_MODEL,
+            "x-ui-columns": 2,
+            "x-ui-order": 25,
         },
         "max_tokens": {
             "type": "integer",
@@ -115,20 +228,38 @@ CONFIG_SCHEMA = {
             "default": 800,
             "minimum": 128,
             "maximum": 4000,
+            "x-ui-section": _SECTION_MODEL,
+            "x-ui-columns": 2,
+            "x-ui-order": 26,
+        },
+        "rich_text": {
+            "type": "boolean",
+            "title": "Telegram 富文本",
+            "description": "把模型的 Markdown（粗体、斜体、代码、代码块、链接、引用等）转成 Telegram HTML；Telegram 拒绝时自动退回纯文本。关闭则按纯文本发送模型原文。",
+            "default": True,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 30,
         },
         "max_output_chars": {
             "type": "integer",
             "title": "最大回复字符数",
-            "description": "超出后截断；Telegram 单条消息上限 4096。",
+            "description": "模型原文超出后截断；超过 Telegram 单条上限（4096）时自动分段续发（访客模式只能一条，超出部分截断）。",
             "default": 3500,
             "minimum": 200,
-            "maximum": 4000,
+            "maximum": 12000,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 31,
         },
         "strip_thinking": {
             "type": "boolean",
             "title": "隐藏思考标签",
-            "description": "发送前移除 <think>...</think> 内容。",
+            "description": "发送前移除模型正文里的 <think>...</think> 内容；只影响回复内容，不影响速度或是否触发。",
             "default": True,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 32,
         },
         "max_history_rounds": {
             "type": "integer",
@@ -137,6 +268,9 @@ CONFIG_SCHEMA = {
             "default": 6,
             "minimum": 0,
             "maximum": 20,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 33,
         },
         "memory_ttl_minutes": {
             "type": "integer",
@@ -145,6 +279,9 @@ CONFIG_SCHEMA = {
             "default": 30,
             "minimum": 1,
             "maximum": 1440,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 34,
         },
         "access_mode": {
             "type": "string",
@@ -153,6 +290,9 @@ CONFIG_SCHEMA = {
             "default": "所有人",
             "enum": ["所有人", "仅白名单用户"],
             "x-ui-widget": "list-select",
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 40,
         },
         "allowed_user_ids": {
             "type": "string",
@@ -160,13 +300,17 @@ CONFIG_SCHEMA = {
             "description": "“仅白名单用户”模式下生效；逗号或换行分隔。",
             "default": "",
             "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 41,
         },
         "deny_reply": {
             "type": "string",
-            "title": "非白名单用户提示",
-            "description": "留空则对非白名单用户不回复。",
+            "title": "非白名单用户提示（旧版，已并入消息模板）",
+            "description": "0.2.0 起改用消息模板里的“无权限提示”；仅为兼容旧配置保留。",
             "default": "这个 Bot 的 AI 答疑暂未对你开放。",
             "maxLength": 200,
+            "x-ui-hidden": True,
         },
         "chat_whitelist": {
             "type": "string",
@@ -174,6 +318,9 @@ CONFIG_SCHEMA = {
             "description": "只在这些会话 ID 生效；逗号或换行分隔，留空表示不限制。",
             "default": "",
             "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 42,
         },
         "chat_blacklist": {
             "type": "string",
@@ -181,6 +328,9 @@ CONFIG_SCHEMA = {
             "description": "这些会话 ID 里一律不回答；逗号或换行分隔。",
             "default": "",
             "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 43,
         },
         "per_user_daily_limit": {
             "type": "integer",
@@ -189,6 +339,9 @@ CONFIG_SCHEMA = {
             "default": 20,
             "minimum": 0,
             "maximum": 10000,
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 44,
         },
         "global_daily_limit": {
             "type": "integer",
@@ -197,6 +350,9 @@ CONFIG_SCHEMA = {
             "default": 300,
             "minimum": 0,
             "maximum": 100000,
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 45,
         },
         "exempt_user_ids": {
             "type": "string",
@@ -204,6 +360,9 @@ CONFIG_SCHEMA = {
             "description": "例如账号主人；逗号或换行分隔。仍计入全局上限。",
             "default": "",
             "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 46,
         },
         "max_input_chars": {
             "type": "integer",
@@ -211,20 +370,29 @@ CONFIG_SCHEMA = {
             "default": 500,
             "minimum": 20,
             "maximum": 4000,
+            "x-ui-section": _SECTION_ACCESS,
+            "x-ui-columns": 2,
+            "x-ui-order": 47,
         },
         "protect_command_outputs": {
             "type": "boolean",
             "title": "拦截可执行指令输出",
-            "description": "AI 回复若像 / 指令、TelePilot 前缀指令或已配置的裸指令，改为安全提示。",
+            "description": "AI 回复若像 / 指令、TelePilot 前缀指令或已配置的裸指令，改为“内容被拦截提示”模板。",
             "default": True,
+            "x-ui-section": _SECTION_GUARD,
+            "x-ui-columns": 2,
+            "x-ui-order": 50,
         },
         "payment_guard_reply": {
             "type": "string",
             "title": "加款诱导反制回复",
-            "description": "AI 回复若像 +数字 或 +数字-数字 的加款诱导，会替换成此内容；留空则改用普通安全提示。",
+            "description": "AI 回复若像 +数字 或 +数字-数字 的加款诱导，会替换成此内容；留空则改用“内容被拦截提示”模板。",
             "default": "-66666",
             "maxLength": 120,
             "pattern": "^(?!\\s*\\+).*$",
+            "x-ui-section": _SECTION_GUARD,
+            "x-ui-columns": 2,
+            "x-ui-order": 51,
         },
         "blocked_bare_outputs": {
             "type": "string",
@@ -232,36 +400,78 @@ CONFIG_SCHEMA = {
             "description": "每行或逗号分隔一个词；AI 回复某行以这些词开头时视为可能触发命令。",
             "default": "re\nai\nfd",
             "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_GUARD,
+            "x-ui-columns": 2,
+            "x-ui-order": 52,
         },
+        "template_placeholders": {
+            "type": "string",
+            "title": "模板占位符说明（只读）",
+            "readOnly": True,
+            "x-ui-widget": "textarea",
+            "default": TEMPLATE_PLACEHOLDERS,
+            "x-ui-order": 60,
+        },
+        "thinking_template": _template_field(
+            "思考中占位", "thinking_template", 61, "收到提问后立即回复的占位消息，答案出来后会被原地编辑替换。可用：{user}。"
+        ),
+        "answer_template": _template_field(
+            "最终回复包装",
+            "answer_template",
+            62,
+            "包装模型回答。可用：{answer} {sources} {model} {provider} {notices} {user}；必须包含 {answer}，否则会自动把回答追加在末尾。",
+        ),
+        "error_ai_template": _template_field(
+            "模型调用失败提示", "error_ai_template", 63, "AI 调用报错（额度、鉴权、服务不可用等）时显示。可用：{reason} {user}。"
+        ),
+        "error_timeout_template": _template_field(
+            "模型超时提示", "error_timeout_template", 64, "超过“AI 请求超时”仍未返回时显示。可用：{timeout} {user}。"
+        ),
+        "error_empty_template": _template_field(
+            "模型返回为空提示", "error_empty_template", 65, "模型没有给出任何内容时显示。可用：{user}。"
+        ),
+        "limit_user_template": _template_field(
+            "每用户限额用尽提示", "limit_user_template", 66, "触发者当日次数用完时显示。可用：{limit} {user}。"
+        ),
+        "limit_global_template": _template_field(
+            "全局限额用尽提示", "limit_global_template", 67, "本插件当日总次数用完时显示。可用：{limit} {user}。"
+        ),
+        "deny_template": _template_field(
+            "无权限提示",
+            "deny_template",
+            68,
+            "“仅白名单用户”模式下非白名单用户提问时显示；留空则静默不回复。可用：{user}。",
+        ),
+        "guarded_template": _template_field(
+            "内容被护栏拦截提示",
+            "guarded_template",
+            69,
+            "AI 回复像可执行指令被拦截时显示（加款诱导另用“加款诱导反制回复”）。可用：{user}。",
+        ),
+        "input_too_long_template": _template_field(
+            "提问过长提示", "input_too_long_template", 70, "提问超过长度上限时显示。可用：{limit} {user}。"
+        ),
+        "vision_unavailable_template": _template_field(
+            "识图不可用提示",
+            "vision_unavailable_template",
+            71,
+            "开启识图但模型不支持图片或读图失败时：有文字问题则作为 {notices} 附在回答前，只有图片时单独回复。可用：{user}。",
+        ),
+        "search_unavailable_template": _template_field(
+            "联网不可用提示",
+            "search_unavailable_template",
+            72,
+            "开启联网搜索但模型不支持时，作为 {notices} 附在回答前；留空则不提示。可用：{user}。",
+        ),
+        "help_template": _template_field("帮助提示", "help_template", 73, "只 @Bot 没写问题时显示。可用：{user}。"),
+        "reset_template": _template_field("重置记忆确认", "reset_template", 74, "发送“重置”后显示。可用：{user}。"),
     },
-    "required": [
-        "enable_guest",
-        "enable_group",
-        "enable_private",
-        "bot_username",
-        "telepilot_provider",
-        "telepilot_model",
-        "system_prompt",
-        "timeout_seconds",
-        "max_tokens",
-        "max_output_chars",
-        "strip_thinking",
-        "max_history_rounds",
-        "memory_ttl_minutes",
-        "access_mode",
-        "allowed_user_ids",
-        "deny_reply",
-        "chat_whitelist",
-        "chat_blacklist",
-        "per_user_daily_limit",
-        "global_daily_limit",
-        "exempt_user_ids",
-        "max_input_chars",
-        "protect_command_outputs",
-        "payment_guard_reply",
-        "blocked_bare_outputs",
-    ],
 }
+CONFIG_SCHEMA["required"] = [
+    key
+    for key, field in CONFIG_SCHEMA["properties"].items()
+    if not field.get("readOnly") and key != "deny_reply"
+]
 
 CONFIG_ACTIONS = [
     {
@@ -310,7 +520,7 @@ MANIFEST = Manifest(
     min_telebot_version="0.10.2",
     author="Anoyou",
     description="交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
-    permissions=["send_message", "read_chat", "ai_text"],
+    permissions=["send_message", "read_chat", "ai_text", "ai_vision"],
     category="utility",
     interaction_entries=[],
     config_schema=CONFIG_SCHEMA,
@@ -330,4 +540,6 @@ __all__ = [
     "PLUGIN_KEY",
     "PLUGIN_VERSION",
     "DEFAULT_SYSTEM_PROMPT",
+    "DEFAULT_TEMPLATES",
+    "TEMPLATE_PLACEHOLDERS",
 ]
