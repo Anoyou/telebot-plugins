@@ -213,6 +213,22 @@ class RichDeliveryTest(base._StubbedTestCase):
             },
         )
 
+    def test_rich_table_is_not_affected_by_guard(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        table = "| 命令 | 说明 |\n|---|---|\n| /start | 开始 |\n| ,re | 复读 |\n| ... | 省略 |"
+        ctx = base.live_ctx(ai=CapAI(text=table), messages=RichMessages())
+        run(plugin.on_event(ctx, message_payload("问", chat_id=601, chat_type="private")))
+        self.assertEqual(ctx.messages.applied[-1]["rich_message"], {"markdown": table})
+        self.assertFalse(any("拦截" in item[1] or "中和" in item[1] for item in ctx.logs))
+
+    def test_rich_first_line_command_is_neutralized(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = base.live_ctx(ai=CapAI(text="/start xx\n\n| a | b |\n|---|---|\n| 1 | 2 |"), messages=RichMessages())
+        run(plugin.on_event(ctx, message_payload("问", chat_id=601, chat_type="private")))
+        markdown = ctx.messages.applied[-1]["rich_message"]["markdown"]
+        self.assertTrue(markdown.startswith("💬 /start xx"), markdown)
+        self.assertIn("| 1 | 2 |", markdown)
+
     def test_rejected_rich_edit_falls_back_to_html(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
         messages = RichMessages(rich_result={"ok": False, "executed": 0, "failed": 1})

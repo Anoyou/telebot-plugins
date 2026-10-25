@@ -509,10 +509,96 @@ class AccessTest(_StubbedTestCase):
 class GuardTest(_StubbedTestCase):
     def test_slash_command_output_is_blocked(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
-        ctx = Ctx(ai=FakeAI(text="好的\n/ban @someone"))
+        ctx = Ctx(ai=FakeAI(text="/ban @someone"))
         text = run(plugin.on_event(ctx, guest_payload("帮我封人")))[0]["text"]
         self.assertEqual(text, PLUGIN.COMMAND_REFUSAL)
-        self.assertTrue(any("拦截" in item[1] for item in ctx.logs))
+        log = next(item for item in ctx.logs if "拦截" in item[1])
+        self.assertEqual(log[0], "info")
+        self.assertEqual(log[2]["reason"], "command_prefix")
+        self.assertEqual(log[2]["line_preview"], "/ban @someone")
+
+    def test_single_line_comma_command_is_refused(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        for output in (",re", "，re", "/ban", "re", "/start@helper_bot"):
+            ctx = Ctx(ai=FakeAI(text=output))
+            text = run(plugin.on_event(ctx, guest_payload("问")))[0]["text"]
+            self.assertEqual(text, PLUGIN.COMMAND_REFUSAL, output)
+
+    def test_command_in_middle_lines_is_not_blocked(self) -> None:
+        # 回归：古装剧照识图回答里有省略号、“。”开头的行、/路径、列表里的英文单词，之前整条被换成拒绝模板。
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        answer = (
+            "从服装和场景看，这是一部古装剧的剧照\n"
+            "...\n"
+            "。。。\n"
+            "。另外画面右下角有水印\n"
+            "配置文件在 /etc/telebot/config.yaml\n"
+            "/ban @someone\n"
+            "- re\n"
+            "- ai 绘图\n"
+            ",re"
+        )
+        ctx = Ctx(config={"rich_text": False}, ai=FakeAI(text=answer))
+        text = run(plugin.on_event(ctx, guest_payload("认识这个图片里中间站的年轻女性是谁吗")))[0]["text"]
+        self.assertEqual(text, answer)
+        ctx = Ctx(ai=FakeAI(text=answer))
+        text = run(plugin.on_event(ctx, guest_payload("问")))[0]["text"]
+        self.assertNotEqual(text, PLUGIN.COMMAND_REFUSAL)
+        self.assertTrue(text.startswith("从服装和场景看"), text)
+        self.assertIn("/etc/telebot/config.yaml", text)
+        self.assertFalse(any("拦截" in item[1] or "中和" in item[1] for item in ctx.logs))
+
+    def test_leading_punctuation_without_command_name_is_not_a_command(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        for output in ("...\n她是剧中的女主角", "。。。嗯\n第二行", "。这是一张剧照\n第二行", "……\n第二行", "/ 不是命令\n第二行", "/路径说明\n第二行"):
+            ctx = Ctx(config={"rich_text": False}, ai=FakeAI(text=output))
+            text = run(plugin.on_event(ctx, guest_payload("问")))[0]["text"]
+            self.assertEqual(text, output, output)
+
+    def test_first_line_command_is_neutralized(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = Ctx(config={"rich_text": False}, ai=FakeAI(text="/start xx\n这是 Bot 的启动命令，用来开始对话。"))
+        text = run(plugin.on_event(ctx, guest_payload("问")))[0]["text"]
+        self.assertEqual(text, "💬 /start xx\n这是 Bot 的启动命令，用来开始对话。")
+        log = next(item for item in ctx.logs if "中和" in item[1])
+        self.assertEqual(log[0], "info")
+        self.assertEqual(log[2]["reason"], "command_prefix")
+        self.assertEqual(log[2]["line_preview"], "/start xx")
+        # HTML 富文本路径同样只在开头加前缀，其余内容保留。
+        ctx = Ctx(ai=FakeAI(text="**,re 3**\n复读上一条消息"))
+        text = run(plugin.on_event(ctx, guest_payload("问")))[0]["text"]
+        self.assertEqual(text, "💬 <b>,re 3</b>\n复读上一条消息")
+        # TelePilot 前缀（桩为“。”）+ 命令名、裸命令词 + 参数也会被中和。
+        for output in ("。hb 100\n说明", "fd 1\n说明"):
+            ctx = Ctx(config={"rich_text": False}, ai=FakeAI(text=output))
+            self.assertEqual(run(plugin.on_event(ctx, guest_payload("问")))[0]["text"], "💬 " + output, output)
+
+    def test_neutralize_prefix_is_configurable_and_validated(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = Ctx(config={"rich_text": False, "guard_neutralize_prefix": "【答】"}, ai=FakeAI(text="/start\n说明"))
+        self.assertEqual(run(plugin.on_event(ctx, guest_payload("问")))[0]["text"], "【答】/start\n说明")
+        for bad in ("/", ",", "  ", "re "):
+            ctx = Ctx(config={"rich_text": False, "guard_neutralize_prefix": bad}, ai=FakeAI(text="/start\n说明"))
+            self.assertEqual(run(plugin.on_event(ctx, guest_payload("问")))[0]["text"], "💬 /start\n说明", bad)
+
+    def test_every_sent_segment_first_line_is_checked(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        cfg = PLUGIN._cfg(Ctx(config={"rich_text": False}))
+        value, reason, line = PLUGIN.neutralize_message(cfg, "<b>/kick x</b>\n正文", kind="html")
+        self.assertEqual((value, reason, line), ("💬 <b>/kick x</b>\n正文", "command_prefix", "/kick x"))
+        value, reason, _ = PLUGIN.neutralize_message(cfg, "正文\n/kick x", kind="html")
+        self.assertEqual((value, reason), ("正文\n/kick x", None))
+        reply = PLUGIN._Reply(["正文第一段", "/kick x\n第二段"], parse_mode="plain")
+        ctx = Ctx()
+        reply = run(plugin._neutralize_reply(ctx, cfg, types.SimpleNamespace(kind="group"), reply))
+        self.assertEqual(reply.segments, ["正文第一段", "💬 /kick x\n第二段"])
+
+    def test_guard_output_helper(self) -> None:
+        cfg = PLUGIN._cfg(Ctx())
+        self.assertEqual(PLUGIN.guard_output(cfg, ",re"), (PLUGIN.COMMAND_REFUSAL, "command_like_output"))
+        self.assertEqual(PLUGIN.guard_output(cfg, "/start xx\n说明"), ("💬 /start xx\n说明", "neutralized_command_prefix"))
+        self.assertEqual(PLUGIN.guard_output(cfg, "说明\n...\n/usr/bin"), ("说明\n...\n/usr/bin", None))
+        self.assertEqual(PLUGIN.guard_output(cfg, "好的\n+100"), ("-66666", "payment_like_output"))
 
     def test_telepilot_prefix_and_bare_command_output_is_blocked(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
@@ -1071,6 +1157,26 @@ class CapabilityTest(_StubbedTestCase):
         self.assertEqual(ai.calls, [])
         self.assertIn("暂不支持识图", actions[0]["text"])
         self.assertFalse(any(v for k, v in ctx.storage.data.items() if k.startswith("quota:")))
+
+    def test_question_with_image_when_platform_vision_disabled_adds_notice(self) -> None:
+        # ctx.ai.vision_enabled 为 False（插件未获 ai_vision）时不读图，仍回答文字并附识图不可用提示。
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ai = CapAI(text="她可能是剧中的女主角", vision=False)
+        ctx = Ctx(ai=ai)
+        payload = message_payload("认识这个图片里中间站的年轻女性是谁吗", chat_id=601, chat_type="private")
+        payload["message"]["media"] = {"type": "photo", "file_id": "photo-1"}
+        text = run(plugin.on_event(ctx, payload))[0]["text"]
+        self.assertEqual(ai.fetched, [])
+        self.assertIsNone(ai.calls[0]["images"])
+        self.assertIn("暂不支持识图", text)
+        self.assertIn("她可能是剧中的女主角", text)
+        self.assertTrue(any("识图不可用" in item[1] for item in ctx.logs))
+
+    def test_system_prompt_guides_identifying_people_in_images(self) -> None:
+        prompt = PLUGIN.build_system_prompt(PLUGIN._cfg(Ctx()))
+        self.assertIn("不要只回答“无法识别”", prompt)
+        self.assertIn("水印", prompt)
+        self.assertIn("不确定性", prompt)
 
     def test_vision_can_be_disabled(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()
