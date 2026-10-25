@@ -229,22 +229,7 @@ CONFIG_SCHEMA = {
             "readOnly": True,
         },
     },
-    "required": [
-        "command",
-        "timeout",
-        "auto_next",
-        "next_delay",
-        "guess_cooldown",
-        "round_message_template",
-        "in_progress_message_template",
-        "success_message_template",
-        "timeout_message_template",
-        "cancel_message_template",
-        "invalid_prize_message_template",
-        "prize_message_template",
-        "delete_after_round",
-        "force_stop_command",
-    ],
+    "required": [],
 }
 
 
@@ -267,7 +252,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.36",
+    version="1.1.37",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

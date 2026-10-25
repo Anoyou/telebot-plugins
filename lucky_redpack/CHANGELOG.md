@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.4.13 (2026-10-26)
+- 配置表单：触发指令名（`command`）、默认总额（`default_amount`）、默认人数（`default_count`）、最低单包金额（`min_share_amount`）、随机码位数（`suffix_length`）、红包有效期（秒）（`ttl_seconds`）、默认使用图片财富密码（`image_password_enabled`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 1.4.12 (2026-08-15)
 - 修复 TelePilot 0.97.0 常驻事件 MessageOps 缺少 `send_photo` facade 时红包图片发送失败，改用标准媒体 action 与平台执行链。
 

@@ -3,7 +3,7 @@
   "display_name": "九宫格骰子竞猜",
   "description": "发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
   "author": "Anoyou",
-  "version": "1.1.36",
+  "version": "1.1.37",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -192,22 +192,7 @@
         "readOnly": true
       }
     },
-    "required": [
-      "command",
-      "timeout",
-      "auto_next",
-      "next_delay",
-      "guess_cooldown",
-      "round_message_template",
-      "in_progress_message_template",
-      "success_message_template",
-      "timeout_message_template",
-      "cancel_message_template",
-      "invalid_prize_message_template",
-      "prize_message_template",
-      "delete_after_round",
-      "force_stop_command"
-    ],
+    "required": [],
     "x-usage-guide": "管理员发送 {prefix}{command} 奖励金额 开启九宫格骰子竞猜；群友回复 1-9 抢答，配置页可调整题面、进行中、答对、超时和奖励模板，并在插件预览里查看最终消息。"
   },
   "license": "MIT",

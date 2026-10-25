@@ -20,7 +20,7 @@ CONFIG_SCHEMA = {
             "pattern": "^\\S+$",
         },
     },
-    "required": ["command"],
+    "required": [],
 }
 
 
@@ -40,7 +40,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="chatter_challenge",
     display_name="话痨挑战",
-    version="1.0.10",
+    version="1.0.11",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

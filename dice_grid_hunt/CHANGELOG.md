@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.37 (2026-10-26)
+- 配置表单：触发指令名（`command`）、答题限时（秒）（`timeout`）、结束后自动下一轮（`auto_next`）、下一轮延迟（秒）（`next_delay`）、同一用户答题冷却（秒）（`guess_cooldown`）、开局消息模板（`round_message_template`）、进行中提示模板（`in_progress_message_template`）、答对结果模板（`success_message_template`）、超时结果模板（`timeout_message_template`）、强制结束结果模板（`cancel_message_template`）、奖励参数错误模板（`invalid_prize_message_template`）、奖励入账消息模板（`prize_message_template`）、回合结束后删除消息延迟（秒；0 表示不删除）（`delete_after_round`）、强制结束游戏参数（`force_stop_command`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 1.1.36 (2026-10-03)
 - 补全交互入口 `no_session` 结果动作声明，消除缺少群聊上下文时返回该动作触发的 Contract Guard 告警；不改变题图、会话或结算行为。
 

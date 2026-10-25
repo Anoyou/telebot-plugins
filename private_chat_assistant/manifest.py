@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 USAGE = (
     "在需要监听私聊的账号上安装并启用插件，填写本插件专用的 Telegram Bot Token 和通知接收 Chat ID。"
     "接收人必须先私聊该 Bot 并点击开始。插件只监听该账号收到的 incoming 私聊，不处理群聊或账号自己发出的消息；"
@@ -60,7 +60,7 @@ CONFIG_SCHEMA = {
             "level": "account",
         },
     },
-    "required": ["bot_token", "recipient_chat_id", "aggregation_seconds"],
+    "required": ["bot_token", "recipient_chat_id"],
 }
 
 MANIFEST = Manifest(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.4.7"
+PLUGIN_VERSION = "1.4.8"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -389,27 +389,7 @@ CONFIG_SCHEMA = {
             "x-ui-hidden": True,
         },
     },
-    "required": [
-        "command",
-        "entry_fee",
-        "initial_points",
-        "correct_points",
-        "wrong_points",
-        "min_players",
-        "max_players",
-        "max_questions_per_game",
-        "question_timeout_seconds",
-        "selection_timeout_seconds",
-        "reward_ratio",
-        "payout_mode",
-        "start_keyword",
-        "allowed_source_hosts",
-        "ai_question_count",
-        "ai_timeout_seconds",
-        "max_source_chars",
-        "question_generation_prompt",
-        "knowledge_bases",
-    ],
+    "required": [],
 }
 
 CONFIG_ACTIONS = [

@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.4"
+PLUGIN_VERSION = "1.5.5"
 
 REPLY_TEMPLATE_DEFAULT = "+1-6666"
 TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
@@ -106,17 +106,7 @@ CONFIG_SCHEMA = {
             "description": "使用示例上下文渲染后的最终消息。仅用于配置预览，不会保存或发送。",
         },
     },
-    "required": [
-        "start_command",
-        "stop_command",
-        "status_command",
-        "allowed_chat_ids",
-        "reply_template",
-        "trigger_probability",
-        "chat_cooldown_seconds",
-        "user_cooldown_seconds",
-        "default_enabled",
-    ],
+    "required": [],
 }
 
 USAGE = "从配置页的已允许会话选择器中选择要纳入随机福利作用范围的群组。选中群组默认监听普通群友发言，并按概率随机引用其中一条消息回复自定义福利语；当前账号自己的消息和 Bot 账号消息会被排除。账号主人或授权管理员可发送独立配置的开启、暂停和状态指令控制当前群组。为防刷屏，命中回复后会进入全群冷却和同一用户冷却，冷却秒数设为 0 可关闭。"

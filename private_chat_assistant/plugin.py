@@ -10,7 +10,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 PENDING_PREFIX = "pending:"
 MAX_PENDING_MESSAGES = 50
 MAX_MESSAGE_LENGTH = 1200

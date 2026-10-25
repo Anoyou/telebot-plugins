@@ -27,7 +27,7 @@ CONFIG_SCHEMA = {
             "maximum": 86400,
         },
     },
-    "required": ["command", "timeout"],
+    "required": [],
 }
 
 
@@ -50,7 +50,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.30",
+    version="1.0.31",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_VERSION = "0.3.1"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -679,12 +679,9 @@ CONFIG_SCHEMA = {
         },
     },
 }
-CONFIG_SCHEMA["required"] = [
-    key
-    for key, field in CONFIG_SCHEMA["properties"].items()
-    if not field.get("readOnly") and key != "deny_reply" and not key.startswith("pt_")
-]
-# PT 站点数据源（pt_*）全部是可选字段，不进 required。
+# 所有配置项（含 PT 站点数据源 pt_*）都有默认值，运行时按 schema 默认值补齐，因此不声明 required：
+# App/Web 只给真正必填的字段标“必填”，可选字段留空时使用默认值。
+CONFIG_SCHEMA["required"] = []
 
 CONFIG_ACTIONS = [
     {

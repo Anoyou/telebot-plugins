@@ -451,8 +451,8 @@ class ManifestPTTest(_Case):
         raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
         self.assertIn("external_http", manifest.permissions)
         self.assertEqual(raw["allowed_hosts"], manifest.allowed_hosts)
-        self.assertEqual(raw["version"], "0.3.0")
-        self.assertEqual(manifest.version, "0.3.0")
+        self.assertEqual(raw["version"], "0.3.1")
+        self.assertEqual(manifest.version, "0.3.1")
         self.assertIn("test_pt", [action["key"] for action in manifest.config_actions])
 
 

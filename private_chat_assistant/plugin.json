@@ -3,7 +3,7 @@
   "display_name": "私聊助理",
   "description": "监听账号收到的私聊消息，并通过插件专用 Bot 向指定账号发送聚合提醒",
   "author": "Anoyou",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "entry": "plugin.py",
   "min_telepilot_version": "0.97.0-beta.1",
   "category": "automation",
@@ -59,7 +59,7 @@
         "level": "account"
       }
     },
-    "required": ["bot_token", "recipient_chat_id", "aggregation_seconds"]
+    "required": ["bot_token", "recipient_chat_id"]
   },
   "tags": ["private-chat", "notification", "automation"],
   "license": "MIT"

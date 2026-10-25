@@ -220,13 +220,10 @@ class ManifestTest(_StubbedTestCase):
         self.assertTrue(usage["readOnly"])
         self.assertIn("Guest Chat Mode", usage["default"])
         self.assertIn("Inline Mode", usage["default"])
-        self.assertEqual(
-            set(schema["required"]),
-            {key for key in schema["properties"] if not key.startswith("pt_")}
-            - {"usage_preview", "template_placeholders", "deny_reply"},
-        )
-        # PT 站点数据源字段全部可选，不进 required。
-        self.assertFalse([key for key in schema["required"] if key.startswith("pt_")])
+        # 所有字段（含 PT 站点数据源 pt_*）都有默认值：不声明 required，App/Web 不应把可选字段标成“必填”。
+        self.assertEqual(schema["required"], [])
+        for key, field in schema["properties"].items():
+            self.assertIn("default", field, key)
         self.assertNotIn("timeout_seconds", schema["properties"])  # 已合并进 handler_timeout_seconds
         handler = schema["properties"]["handler_timeout_seconds"]
         self.assertEqual((handler["default"], handler["minimum"], handler["maximum"]), (45, 10, 85))
