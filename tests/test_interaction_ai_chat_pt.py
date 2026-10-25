@@ -16,6 +16,7 @@ import test_interaction_ai_chat as base
 PACKAGE = base.PACKAGE
 PLUGIN = base.PLUGIN
 PT = __import__(f"{PLUGIN.__name__.rsplit('.', 1)[0]}.pt_source", fromlist=["pt_source"])
+TH = base.TH
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "interaction_ai_chat"
 LIST_HTML = (FIXTURES / "nexusphp_torrents.html").read_text(encoding="utf-8")
@@ -451,8 +452,8 @@ class ManifestPTTest(_Case):
         raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
         self.assertIn("external_http", manifest.permissions)
         self.assertEqual(raw["allowed_hosts"], manifest.allowed_hosts)
-        self.assertEqual(raw["version"], "0.4.2")
-        self.assertEqual(manifest.version, "0.4.2")
+        self.assertEqual(raw["version"], "0.4.3")
+        self.assertEqual(manifest.version, "0.4.3")
         self.assertIn("test_pt", [action["key"] for action in manifest.config_actions])
 
 
@@ -700,7 +701,10 @@ class PTChatScopeAndFormatTest(_Case):
         base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("沙丘有种吗")))
         user = ai.answer_calls[0]["user"]
         self.assertIn("已按做种数从高到低排序", user)
-        self.assertIn("标题、大小、做种/下载、优惠、发布时间、详情页", user)
+        self.assertIn("列依次为：标题、大小、做种/下载、优惠、发布时间。", user)
+        self.assertIn(f"标题链接：**[Dune Part Two 2024 2160p UHD BluRay HEVC-]({SITE}/details.php?id=1001)**", user)
+        self.assertNotIn("详情页：", user)
+        self.assertNotIn("[详情](链接)；", user)
         self.assertLess(user.index("details.php?id=1001"), user.index("details.php?id=1002"))  # 128 > 45
         items = [{"id": 1, "seeders": 3}, {"id": 2, "seeders": None}, {"id": 3, "seeders": 10}]
         self.assertEqual([item["id"] for item in PT.sort_by_seeders(items)], [3, 1, 2])
@@ -739,3 +743,43 @@ class PTChatScopeAndFormatTest(_Case):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class BoldTitleLinkTest(_Case):
+    """0.4.3：PT 结果标题加粗且本身就是详情页链接，不再单独放“详情页”列。"""
+
+    def test_title_link_markdown_escapes_breaking_characters(self) -> None:
+        out = PT.title_link_markdown("[Kong Qiang] 2026 | 2160p `WEB-DL` *HDR*", f"{SITE}/details.php?id=123")
+        self.assertEqual(out, f"**[（Kong Qiang） 2026 / 2160p 'WEB-DL' ＊HDR＊]({SITE}/details.php?id=123)**")
+
+    def test_bold_title_link_renders_in_html_fallback_and_rich(self) -> None:
+        md = (
+            "站里有 1 条。\n\n| 标题 | 大小 | 做种/下载 | 优惠 | 发布时间 |\n|---|---|---|---|---|\n"
+            f"| **[Kong Qiang 2026 2160p WEB-DL `x264`]({SITE}/details.php?id=123)** | 20 GB | 50/2 | Free | 2026-10-20 |\n"
+        )
+        html_out = TH.markdown_to_telegram_html(md)
+        self.assertIn(f'• <b><a href="{SITE}/details.php?id=123">Kong Qiang 2026 2160p WEB-DL x264</a></b> — 大小：20 GB', html_out)
+        self.assertNotIn("<b><b>", html_out)
+        self.assertNotIn("<code>", html_out)  # 链接文字里的行内代码降级为普通文字（code 与链接互不包含）
+        rich = TH.markdown_to_rich_markdown(md)
+        self.assertIn(f"| **[Kong Qiang 2026 2160p WEB-DL `x264`]({SITE}/details.php?id=123)** | 20 GB |", rich)
+        para = TH.markdown_to_telegram_html(f"推荐 **[沙丘2]({SITE}/details.php?id=1001)**")
+        self.assertIn(f'<b><a href="{SITE}/details.php?id=1001">沙丘2</a></b>', para)
+
+    def test_output_sanitizer_keeps_only_details_links_in_bold_titles(self) -> None:
+        answer = (
+            "| 标题 | 大小 |\n|---|---|\n"
+            f"| **[沙丘2]({SITE}/details.php?id=1001)** | 61 GB |\n"
+            f"| **[沙丘1]({SITE}/download.php?id=1000&passkey=0123456789abcdef0123456789abcdef)** | 40 GB |\n"
+            f"| **[沙丘列表]({SITE}/torrents.php?search=dune)** | - |\n"
+        )
+        ai = RouterAI(answer=answer)
+        ctx = make_ctx(ai=ai, config={"rich_text": True})
+        actions = base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("沙丘有种吗")))
+        text = reply_text(actions)
+        self.assertIn(f'<b><a href="{SITE}/details.php?id=1001">沙丘2</a></b>', text)
+        self.assertNotIn("download.php", text)
+        self.assertNotIn("passkey", text)
+        self.assertNotIn("torrents.php", text)
+        self.assertIn("<b>沙丘1</b>", text)  # 非详情页链接被去掉，只留加粗标题文字
+

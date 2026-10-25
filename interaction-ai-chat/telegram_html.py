@@ -200,6 +200,13 @@ def _table_rows(rows: list[str]) -> list[list[str]]:
     return parsed
 
 
+def _is_wholly_bold(fragment: str) -> bool:
+    if not (fragment.startswith("<b>") and fragment.endswith("</b>")):
+        return False
+    inner = fragment[3:-4]
+    return "<b>" not in inner and "</b>" not in inner
+
+
 def _table_to_lines(table: list[str]) -> list[str]:
     """Telegram 普通消息没有表格：表头 + 每行转成 “• 首列 — 列名：值；…”。"""
 
@@ -219,7 +226,8 @@ def _table_to_lines(table: list[str]) -> list[str]:
                 continue
             name = header[index] if index < len(header) else ""
             rest.append(f"{_inline(name)}：{_inline(cell)}" if name else _inline(cell))
-        head = f"<b>{first}</b>" if first else ""
+        # 首列本身已整体加粗（如 PT 标题 **[标题](详情页)**）时不再套一层 <b>
+        head = (first if _is_wholly_bold(first) else f"<b>{first}</b>") if first else ""
         lines.append("• " + head + (" — " if head and rest else "") + "；".join(rest))
     return lines
 
