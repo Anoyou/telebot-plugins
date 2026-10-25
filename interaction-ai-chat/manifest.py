@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.3.1"
+PLUGIN_VERSION = "0.3.2"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -309,7 +309,7 @@ CONFIG_SCHEMA = {
         "rich_text": {
             "type": "boolean",
             "title": "Telegram 富文本",
-            "description": "把模型的 Markdown（粗体、斜体、代码、代码块、链接、引用等）转成 Telegram HTML；Telegram 拒绝时自动退回纯文本。关闭则按纯文本发送模型原文。",
+            "description": "优先用 Telegram 原生 Rich Message（Bot API 10.2+，标题、列表、任务列表、表格、折叠详情、公式原生渲染）发送/编辑答案；失败或访客模式占位编辑时改用 Telegram HTML（粗体、斜体、下划线、删除线、剧透、代码、代码块、链接、引用），Telegram 再拒绝时由平台退回纯文本。关闭则按纯文本发送模型原文。",
             "default": True,
             "x-ui-section": _SECTION_REPLY,
             "x-ui-columns": 2,
@@ -676,6 +676,37 @@ CONFIG_SCHEMA = {
             "x-ui-section": _SECTION_PT,
             "x-ui-columns": 2,
             "x-ui-order": 90,
+        },
+        "pt_site_name": {
+            "type": "string",
+            "title": "站点别名（可选）",
+            "description": "站点的名称或简称，多个用逗号分隔，例如“空枪”。用户说“空枪站里有哪些资源”“我配置的 PT 站点”时，模型据此识别是在查这个站点（站点名本身不当作搜索关键词）。留空时自动从站点域名与页面标题推断。",
+            "default": "",
+            "maxLength": 80,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 91,
+        },
+        "pt_allowed_chat_ids": {
+            "type": "string",
+            "title": "允许 PT 搜索的群 ID（可选）",
+            "description": "只在这些会话里查站（群 ID 通常以 -100 开头；私聊填对方用户 ID）；逗号或换行分隔，留空表示不限群。不在列表里的会话不会请求站点，回答会说明“当前群未开启 PT 搜索”。仍受上面的可用范围与访客模式开关约束。",
+            "default": "",
+            "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 92,
+        },
+        "pt_hide_categories": {
+            "type": "string",
+            "title": "隐藏的分类关键词（可选）",
+            "description": "分类（或标题/副标题）包含这些关键词的种子不交给模型、也不会出现在回答里，例如成人类分类名；逗号或换行分隔，默认空。",
+            "default": "",
+            "x-ui-widget": "textarea",
+            "maxLength": 500,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 93,
         },
     },
 }

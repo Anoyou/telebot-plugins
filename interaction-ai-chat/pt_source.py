@@ -736,10 +736,24 @@ class Sanitizer:
         return out
 
 
-def format_items_for_model(items: list[dict[str, Any]], *, keyword: str, area: str) -> str:
+def _seeders_key(item: dict[str, Any]) -> int:
+    value = item.get("seeders")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def sort_by_seeders(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按做种数降序（稳定排序，做种数未知的排在最后）。"""
+
+    return sorted(items, key=_seeders_key, reverse=True)
+
+
+def format_items_for_model(items: list[dict[str, Any]], *, keyword: str, area: str, order: str = "按站点默认排序") -> str:
     if not items:
         return f"站点{area}搜索“{keyword}”没有找到种子。"
-    lines = [f"站点{area}搜索“{keyword}”找到 {len(items)} 条（按站点默认排序，仅列表信息）："]
+    lines = [f"站点{area}搜索“{keyword}”找到 {len(items)} 条（{order}，仅列表信息）："]
     for index, item in enumerate(items, 1):
         parts = [f"{index}. {item.get('title') or '（无标题）'}"]
         if item.get("subtitle"):

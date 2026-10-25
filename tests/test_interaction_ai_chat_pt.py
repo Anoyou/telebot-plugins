@@ -451,9 +451,208 @@ class ManifestPTTest(_Case):
         raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
         self.assertIn("external_http", manifest.permissions)
         self.assertEqual(raw["allowed_hosts"], manifest.allowed_hosts)
-        self.assertEqual(raw["version"], "0.3.1")
-        self.assertEqual(manifest.version, "0.3.1")
+        self.assertEqual(raw["version"], "0.3.2")
+        self.assertEqual(manifest.version, "0.3.2")
         self.assertIn("test_pt", [action["key"] for action in manifest.config_actions])
+
+
+class PTAccessDiagnosticsTest(_Case):
+    """0.3.0 实测问题：访客模式里问“在我配置的站点里搜索…”时 PT 被静默跳过，模型回答“没有访问站点的能力”。"""
+
+    QUESTION = "在我配置的站点里搜索『空枪』有哪些资源"
+
+    def test_guest_without_permission_explains_reason_instead_of_denying_capability(self) -> None:
+        ai = RouterAI(answer="当前不能查站。")
+        ctx = make_ctx({"pt_access_scope": "所有可用答疑的人"}, ai=ai)
+        actions = base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.guest_payload(self.QUESTION, user_id=601)))
+        self.assertEqual(ctx.http.requests, [])  # 不允许就不请求站点
+        system = ai.answer_calls[0]["system"]
+        self.assertIn("管理员已配置 PT 站点数据源，但当前因访客模式下未开启 PT 查询", system)
+        self.assertIn("不要说自己没有这个能力", system)
+        self.assertNotIn("PT 站点只读搜索结果", ai.answer_calls[0]["user"])
+        text = reply_text(actions)
+        self.assertIn("PT 站点暂时无法查询（访客模式下未开启 PT 查询", text)
+        logs = json.dumps(ctx.logs, ensure_ascii=False, default=str)
+        self.assertIn("PT 查询已跳过：访客模式下未开启 PT 查询", logs)
+        self.assertNotIn("CookieSecretValue9876", logs)
+        self.assertNotIn(SITE, logs)
+
+    def test_reasons_distinguish_whitelists(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        cases = [
+            ({"allowed_user_ids": "", "pt_allowed_user_ids": ""}, 601, "都为空"),
+            ({"pt_allowed_user_ids": "999"}, 601, "提问者不在PT 白名单中"),
+            ({}, 999, "提问者不在答疑白名单（PT 白名单留空时沿用）中"),
+            ({"pt_enabled": False}, 601, "PT 站点数据源未启用"),
+            ({"pt_cookie": ""}, 601, "未填写站点 Cookie"),
+            ({"pt_site_url": "http://pt.example.com"}, 601, "站点地址未填写或不合法"),
+        ]
+        for extra, user_id, reason in cases:
+            cfg = PLUGIN._cfg(make_ctx(extra))
+            trigger = PLUGIN._Trigger(kind="private", user_id=user_id)
+            allowed, why = plugin._pt_permitted(cfg, trigger)
+            self.assertFalse(allowed, extra)
+            self.assertIn(reason, why, extra)
+        cfg = PLUGIN._cfg(make_ctx())
+        self.assertEqual(plugin._pt_permitted(cfg, PLUGIN._Trigger(kind="private", user_id=601)), (True, ""))
+        # 开关关闭且没填站点：PT 根本没在用，不记录原因，避免日志刷屏。
+        cfg = PLUGIN._cfg(make_ctx({"pt_enabled": False, "pt_site_url": ""}))
+        self.assertEqual(plugin._pt_permitted(cfg, PLUGIN._Trigger(kind="private", user_id=601)), (False, ""))
+
+    def test_blocked_non_pt_question_runs_router_but_adds_nothing(self) -> None:
+        ai = RouterAI(route={"pt_search": False})
+        ctx = make_ctx({"allowed_user_ids": "", "pt_allowed_user_ids": "", "access_mode": "所有人"}, ai=ai)
+        actions = base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("1+1 等于几")))
+        self.assertEqual(len(ai.router_calls), 1)  # ready 时路由照常跑
+        self.assertNotIn("【PT 站点数据源】", ai.answer_calls[0]["system"])
+        self.assertNotIn("PT 站点暂时无法查询", reply_text(actions))
+        self.assertTrue(any("都为空" in item[1] for item in ctx.logs))
+
+    def test_blocked_router_positive_injects_reason(self) -> None:
+        ai = RouterAI(route={"pt_search": True, "keyword": "Dune"})
+        ctx = make_ctx({"pt_allowed_user_ids": "999"}, ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("沙丘第二部怎么样")))
+        self.assertEqual(ctx.http.requests, [])
+        self.assertIn("当前因提问者不在PT 白名单中", ai.answer_calls[0]["system"])
+
+    def test_allowed_prompt_states_capability_and_zero_results(self) -> None:
+        ai = RouterAI(route={"pt_search": True, "keyword": "不存在的作品"})
+        ctx = make_ctx(ai=ai, http=FakeHTTP([FakeResponse(200, EMPTY_HTML)]))
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("不存在的作品有种吗")))
+        call = ai.answer_calls[0]
+        self.assertIn("你可以访问管理员配置的 PT 站点", call["system"])
+        self.assertIn("不要说自己没有访问该站点的能力", call["system"])
+        self.assertIn("0 条时明确告诉用户站内没有搜到", call["system"])
+        self.assertIn("没有找到种子", call["user"])
+
+    def test_site_alias_is_recognised_and_not_used_as_keyword(self) -> None:
+        ai = RouterAI(route={"pt_search": True, "keyword": "空枪"})
+        ctx = make_ctx({"pt_site_name": "空枪, KQ"}, ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private(self.QUESTION)))
+        router_system = ai.router_calls[0]["system"]
+        self.assertIn("“空枪”", router_system)
+        self.assertIn("“KQ”", router_system)
+        self.assertIn("站点名本身不是搜索关键词", router_system)
+        url = ctx.http.requests[0][0]
+        self.assertTrue(url.startswith(f"{SITE}/torrents.php?search=&"), url)  # 站点名不当关键词，返回最新列表
+        self.assertIn("最新种子列表", ai.answer_calls[0]["user"])
+        self.assertIn("（空枪、KQ", ai.answer_calls[0]["system"])
+
+    def test_site_reference_without_router_keyword_searches_latest(self) -> None:
+        ai = RouterAI(route={"pt_search": False})
+        ctx = make_ctx({"pt_site_name": "空枪"}, ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("空枪站里有哪些资源")))
+        self.assertEqual(len(ctx.http.requests), 1)
+        ai = RouterAI(route={"pt_search": False})
+        ctx = make_ctx(ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("我配置的 PT 站点最近有什么")))
+        self.assertEqual(len(ctx.http.requests), 1)
+
+    def test_site_names_from_domain_and_title(self) -> None:
+        self.assertEqual(PLUGIN._pt_site_names("", "https://pt.kamept.com"), ["kamept"])
+        self.assertEqual(PLUGIN._pt_site_names("空枪，KQ", "https://www.example.org"), ["空枪", "KQ", "example"])
+        self.assertEqual(PLUGIN.pt_site_title("<title>空枪 :: 种子 - Powered by NexusPHP</title>"), "空枪")
+        self.assertEqual(PLUGIN.pt_site_title("<title>NexusPHP</title>"), "")
+        self.assertTrue(PLUGIN.refers_to_configured_site("空枪站里有哪些资源", ["空枪"]))
+        self.assertTrue(PLUGIN.refers_to_configured_site("在我配置的站点里搜索", []))
+        self.assertFalse(PLUGIN.refers_to_configured_site("今天天气", ["空枪"]))
+        self.assertTrue(PLUGIN.looks_like_pt_question("PT 上有沙丘吗"))
+        self.assertFalse(PLUGIN.looks_like_pt_question("帮我写首诗"))
+        self.assertEqual(PLUGIN.parse_pt_route('{"pt_search": true, "keyword": "空枪站"}', site_names=["空枪"]), ("", "", False))
+
+    def test_config_action_shows_scope_diagnostics(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = make_ctx()
+        result = base.run(plugin.on_config_action(ctx, "test_pt", {"config": {}, "input": {}}))
+        self.assertIn("访客模式：不允许查站", result["message"])
+        self.assertIn("答疑白名单（PT 白名单留空时沿用）（1 人：601）", result["message"])
+        scope = result["result"]["scope"]
+        self.assertEqual(scope["whitelist"], [601])
+        self.assertFalse(scope["allow_guest"])
+        assert_clean(self, json.dumps(result, ensure_ascii=False))
+        ctx = make_ctx({"allowed_user_ids": "", "pt_allow_guest": True, "access_mode": "所有人"})
+        result = base.run(plugin.on_config_action(ctx, "test_pt", {"config": {}, "input": {}}))
+        self.assertIn("都为空——目前没有任何人能触发查站", result["message"])
+        self.assertIn("访客模式：允许查站", result["message"])
+        ctx = make_ctx(http=FakeHTTP([FakeResponse(200, LOGIN_HTML)]))
+        result = base.run(plugin.on_config_action(ctx, "test_pt", {"config": {}, "input": {}}))
+        self.assertIn("可用范围", result["message"])
+
+    def test_site_name_field_is_optional(self) -> None:
+        for schema in (PACKAGE.MANIFEST.config_schema, json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))["config_schema"]):
+            self.assertIn("pt_site_name", schema["properties"])
+            self.assertNotIn("pt_site_name", schema.get("required", []))
+            self.assertEqual(schema["properties"]["pt_site_name"]["x-ui-section"], "PT 站点数据源")
+
+
+class PTChatScopeAndFormatTest(_Case):
+    def test_allowed_chat_ids_limit_search_to_specific_groups(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        cfg = PLUGIN._cfg(make_ctx({"pt_allowed_chat_ids": "-100777\n-100888", "pt_access_scope": "所有可用答疑的人"}))
+        self.assertEqual(plugin._pt_permitted(cfg, PLUGIN._Trigger(kind="group", chat_id=-100777, user_id=1)), (True, ""))
+        allowed, why = plugin._pt_permitted(cfg, PLUGIN._Trigger(kind="group", chat_id=-100999, user_id=1))
+        self.assertFalse(allowed)
+        self.assertIn("当前群未开启 PT 搜索", why)
+        allowed, why = plugin._pt_permitted(cfg, PLUGIN._Trigger(kind="private", chat_id=601, user_id=601))
+        self.assertIn("当前私聊未开启 PT 搜索", why)
+        # 留空 = 不限群。
+        cfg = PLUGIN._cfg(make_ctx({"pt_access_scope": "所有可用答疑的人"}))
+        self.assertTrue(plugin._pt_permitted(cfg, PLUGIN._Trigger(kind="group", chat_id=-100999, user_id=1))[0])
+
+    def test_group_not_in_list_does_not_request_and_explains(self) -> None:
+        ai = RouterAI()
+        ctx = make_ctx({"pt_allowed_chat_ids": "-100888", "bot_username": "helper_bot"}, ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.message_payload("@helper_bot 沙丘有种吗", user_id=601)))
+        self.assertEqual(ctx.http.requests, [])
+        self.assertIn("当前因当前群未开启 PT 搜索", ai.answer_calls[0]["system"])
+        self.assertTrue(any("PT 查询已跳过：当前群未开启 PT 搜索" in item[1] for item in ctx.logs))
+        ai = RouterAI()
+        ctx = make_ctx({"pt_allowed_chat_ids": "-100777", "bot_username": "helper_bot"}, ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.message_payload("@helper_bot 沙丘有种吗", user_id=601)))
+        self.assertEqual(len(ctx.http.requests), 1)
+
+    def test_results_sorted_by_seeders_with_table_format_hint(self) -> None:
+        swapped = LIST_HTML
+        ai = RouterAI()
+        ctx = make_ctx(ai=ai, http=FakeHTTP([FakeResponse(200, swapped)]))
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("沙丘有种吗")))
+        user = ai.answer_calls[0]["user"]
+        self.assertIn("已按做种数从高到低排序", user)
+        self.assertIn("标题、大小、做种/下载、优惠、发布时间、详情页", user)
+        self.assertLess(user.index("details.php?id=1001"), user.index("details.php?id=1002"))  # 128 > 45
+        items = [{"id": 1, "seeders": 3}, {"id": 2, "seeders": None}, {"id": 3, "seeders": 10}]
+        self.assertEqual([item["id"] for item in PT.sort_by_seeders(items)], [3, 1, 2])
+
+    def test_zero_results_have_no_table_hint(self) -> None:
+        ai = RouterAI()
+        ctx = make_ctx(ai=ai, http=FakeHTTP([FakeResponse(200, EMPTY_HTML)]))
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("沙丘有种吗")))
+        self.assertNotIn("建议回答格式", ai.answer_calls[0]["user"])
+
+    def test_hide_categories_filters_items(self) -> None:
+        ai = RouterAI()
+        ctx = make_ctx({"pt_hide_categories": "电影, 成人"}, ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("沙丘有种吗")))
+        user = ai.answer_calls[0]["user"]
+        self.assertNotIn("details.php?id=1001", user)  # 分类“电影/Movies”被隐藏
+        self.assertTrue(any("隐藏分类" in item[1] for item in ctx.logs))
+        self.assertEqual(PLUGIN.pt_filter_hidden([{"category": "成人/XXX"}, {"category": "剧集"}], ["成人"]), [{"category": "剧集"}])
+        self.assertEqual(PLUGIN._cfg(make_ctx())["pt"]["hide_categories"], [])
+
+    def test_diagnostics_include_chats_and_hidden_categories(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        ctx = make_ctx({"pt_allowed_chat_ids": "-100777", "pt_hide_categories": "成人"})
+        result = base.run(plugin.on_config_action(ctx, "test_pt", {"config": {}, "input": {}}))
+        self.assertIn("允许的群：1 个（-100777）", result["message"])
+        self.assertIn("隐藏分类：成人", result["message"])
+        self.assertEqual(result["result"]["scope"]["allowed_chat_ids"], [-100777])
+
+    def test_new_fields_are_optional_and_grouped(self) -> None:
+        for schema in (PACKAGE.MANIFEST.config_schema, json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))["config_schema"]):
+            for key in ("pt_allowed_chat_ids", "pt_hide_categories"):
+                self.assertEqual(schema["properties"][key]["x-ui-section"], "PT 站点数据源")
+                self.assertEqual(schema["properties"][key]["default"], "")
+                self.assertNotIn(key, schema.get("required", []))
 
 
 if __name__ == "__main__":  # pragma: no cover
