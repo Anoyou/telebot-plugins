@@ -755,7 +755,11 @@ def format_items_for_model(items: list[dict[str, Any]], *, keyword: str, area: s
         return f"站点{area}搜索“{keyword}”没有找到种子。"
     lines = [f"站点{area}搜索“{keyword}”找到 {len(items)} 条（{order}，仅列表信息）："]
     for index, item in enumerate(items, 1):
-        parts = [f"{index}. {item.get('title') or '（无标题）'}"]
+        title = item.get("title") or "（无标题）"
+        parts = [f"{index}. {title}"]
+        if item.get("url"):
+            # 标题与详情页链接合并成加粗链接，回答表格的“标题”列直接照抄。
+            parts.append(f"标题链接：{title_link_markdown(title, item['url'])}")
         if item.get("subtitle"):
             parts.append(f"副标题：{item['subtitle']}")
         if item.get("category"):
@@ -772,10 +776,22 @@ def format_items_for_model(items: list[dict[str, Any]], *, keyword: str, area: s
             parts.append(f"优惠：{item['promotion']}")
         if item.get("added"):
             parts.append(f"发布：{item['added']}")
-        if item.get("url"):
-            parts.append(f"详情页：{item['url']}")
         lines.append("；".join(parts))
     return "\n".join(lines)
+
+
+_LINK_LABEL_TRANS = str.maketrans({"[": "（", "]": "）", "|": "/", "`": "'", "*": "＊", "\n": " ", "\r": " "})
+
+
+def title_link_markdown(title: str, url: str) -> str:
+    """把种子标题与详情页链接合并为加粗 Markdown 链接：``**[标题](详情页)**``。
+
+    标题里的 ``[ ] | ` *`` 会破坏链接/表格/加粗语法，替换成全角或安全字符；``url`` 必须是代码拼接的
+    ``details.php?id=`` 公共详情页（调用方保证），这里不放行任何别的链接。
+    """
+
+    label = " ".join(str(title or "").translate(_LINK_LABEL_TRANS).split()) or "（无标题）"
+    return f"**[{label[:200]}]({url})**"
 
 
 def cache_key(site: str, keyword: str, category: str, special: bool) -> str:
@@ -784,6 +800,7 @@ def cache_key(site: str, keyword: str, category: str, special: bool) -> str:
 
 
 __all__ = [
+    "title_link_markdown",
     "PTError",
     "PTLoginExpired",
     "PTPolicyError",

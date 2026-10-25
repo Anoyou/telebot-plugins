@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.4.3 (2026-10-26)
+- 紧急修复：推理模型的“思考过程”被当作答案发进群里（GLM-5.3-Flash / Z.ai 始终开启推理，群里问空枪资源，Bot 发出截断的英文推理草稿 “The user is asking again whether "空枪" ... Let me organize the data into a table ...”，没有最终答案、没有表格、不是中文）。根因在平台：输出额度（插件默认最大输出 800 Token）被推理耗尽、content 为空时，旧版 TelePilot 用 reasoning_content 兜底正文；TelePilot 0.106.0-beta.2 起 `ctx.ai.complete` 只返回最终 content 并在没有最终答案时抛 `AIResponseTruncated`。
+- 插件侧防护（新旧平台都生效）：只用最终答案；答案若是推理草稿——以 “The user is asking / Okay, so / Let me think …” 等英文推理句开头、含未闭合的 `<think>`、或中文提问但答案以 “Let me / I should …” 开头或几乎全英文且像计划——一律不发送，改为重试一次：追加系统指令“直接输出给用户的最终中文回答，不要输出思考过程”，最大输出 Token 放宽到 max(配置×2, 2000)（上限 4000），平台 `ctx.ai.complete` 支持 `thinking` 参数时传 `thinking="disabled"`（智谱/Z.ai、DeepSeek、Qwen 等关闭思考；旧平台没有该参数时不传）。平台抛 `AIResponseTruncated`（输出被推理耗尽）时同样重试一次。
+- 重试仍失败时按新模板“模型未给出最终答案提示” `error_no_answer_template`（默认“模型没有给出最终答案，请稍后再试或换模型。”）回复，退还当次次数、不写入记忆；丢弃草稿、重试、重试成功/失败各记一条 info 日志（原因 reasoning_draft / no_final_answer、finish_reason、输出与推理 Token、字数，不记录草稿内容）。
+- 系统提示固定规则新增第 7 条：始终用简体中文回答（除非用户用其他语言提问），只输出给用户看的最终答案，不要输出思考过程、计划、草稿或自言自语。
+- PT 种子结果默认格式：标题加粗且本身就是详情页链接 `**[种子标题](https://站点/details.php?id=N)**`，不再单独放“详情页”列或“[详情](链接)”。建议回答格式改为表格列：标题（加粗链接）、大小、做种/下载、优惠、发布时间；送给模型的搜索结果每条附“标题链接”（标题里的 `[ ] | ` *` 换成安全字符，避免破坏链接/表格/加粗语法），内置 skill `group-helper` 同步。Rich Message 原样渲染加粗链接；HTML 兜底输出 `<b><a href>标题</a></b>`（表格首列已整体加粗时不再套第二层 `<b>`，链接文字里的行内代码降级为普通文字，遵守 code 与链接互不包含的规则）。输出脱敏不变：站内链接仍只放行 `details.php?id=` 公共详情页，下载/passkey/列表页链接被去掉、只留加粗标题文字。
+- 访客模式占位编辑支持原生 Rich Message：平台声明 `ctx.messages.inline_rich_edit`（TelePilot 0.106.0-beta.2+，editMessageText 的 rich_message 同样适用于 inline 消息）时，“🤔”占位优先用 `edit_message(inline_message_id, rich_message)` 原地编辑，表格等由 Telegram 原生渲染；被拒绝时退回 Telegram HTML；旧平台没有该能力时保持原行为（直接 HTML）。
+- 兼容性：`min_telepilot_version` 保持 0.105.0-beta.1。推理草稿防护与重试不依赖新平台；`thinking` 关闭思考、`AIResponseTruncated` 明确报错、推理模型自动放宽输出 Token 与访客 Rich 占位编辑需要 TelePilot 0.106.0-beta.2+，旧平台上自动跳过。
 ## 0.4.2 (2026-10-26)
 - 修正对“站点叫法”的误解：之前把群友说的「空枪」当成站点别名示例，实际群里是用「站点」「站里」「站内」「站上」「本站」「咱站」「我们站」「PT 站」「种子站」这类泛称指代配置的站点（青蛙 qingwapt）。
 - 内置泛称 `PT_GENERIC_SITE_TERMS`：无需配置即识别为在查配置站点。PT 查询判断器的提示列出这些泛称，并明确它们不是搜索关键词（“站里有没有 沙丘3”→ 关键词“沙丘3”；“站里最近有啥新资源”→ 关键词留空查最新列表）；关键词粗判（“不允许查站”时是否解释原因）与“明确指向配置站点”的兜底查询也使用它们。

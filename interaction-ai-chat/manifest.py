@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.2"
+PLUGIN_VERSION = "0.4.3"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -31,7 +31,10 @@ USAGE_PREVIEW = (
     "  · 群里需 @Bot 或回复 Bot，且 Bot 要能收到消息（关闭 Group Privacy 或设为管理员）；\n"
     "  · 会话黑/白名单、仅白名单用户（提示语留空时静默）、/ 开头的指令会被忽略；\n"
     "  · 具体原因可在“运行日志”里按本插件筛选查看。\n"
-    "- “隐藏思考标签”只影响回复里是否去掉 <think>…</think>，不影响速度或是否触发。\n\n"
+    "- “隐藏思考标签”只影响回复里是否去掉 <think>…</think>，不影响速度或是否触发。\n"
+    "- 推理模型（如 GLM-5、DeepSeek-R1）只输出思考过程、没有最终答案时，插件不会把思考过程发出去：会丢弃并重试一次"
+    "（要求直接给最终中文回答，平台支持时关闭思考），仍失败则按“模型未给出最终答案提示”模板回复；"
+    "建议给推理模型把“最大输出 Token”调到 2000 以上。\n\n"
     "【开启前准备】\n"
     "1. 在 Telegram 打开 @BotFather 的 Mini App，进入交互 Bot 设置，开启 Guest Chat Mode（访客模式）。\n"
     "2. 在 BotFather 关闭该 Bot 的 Inline Mode（/setinline 关闭），避免输入 @Bot 时弹出 Inline 结果抢走访客提问。\n"
@@ -74,6 +77,7 @@ DEFAULT_TEMPLATES = {
     "error_ai_template": "AI 暂时不可用，请稍后再试。",
     "error_timeout_template": "AI 思考超时了（{timeout} 秒），换个简短点的问题再试试？",
     "error_empty_template": "AI 这次没有给出内容，换个说法再问一次吧。",
+    "error_no_answer_template": "模型没有给出最终答案，请稍后再试或换模型。",
     "limit_user_template": "你今天的提问次数已用完（每日 {limit} 次），明天再来吧。",
     "limit_global_template": "今天的 AI 答疑额度已用完，明天再来吧。",
     "deny_template": "这个 Bot 的 AI 答疑暂未对你开放。",
@@ -523,57 +527,63 @@ CONFIG_SCHEMA = {
         "error_empty_template": _template_field(
             "模型返回为空提示", "error_empty_template", 65, "模型没有给出任何内容时显示。可用：{user}。"
         ),
+        "error_no_answer_template": _template_field(
+            "模型未给出最终答案提示",
+            "error_no_answer_template",
+            66,
+            "模型只输出了思考过程（推理草稿）或输出额度被推理耗尽、重试一次后仍没有最终答案时显示。可用：{user}。",
+        ),
         "limit_user_template": _template_field(
-            "每用户限额用尽提示", "limit_user_template", 66, "触发者当日次数用完时显示。可用：{limit} {user}。"
+            "每用户限额用尽提示", "limit_user_template", 67, "触发者当日次数用完时显示。可用：{limit} {user}。"
         ),
         "limit_global_template": _template_field(
-            "全局限额用尽提示", "limit_global_template", 67, "本插件当日总次数用完时显示。可用：{limit} {user}。"
+            "全局限额用尽提示", "limit_global_template", 68, "本插件当日总次数用完时显示。可用：{limit} {user}。"
         ),
         "deny_template": _template_field(
             "无权限提示",
             "deny_template",
-            68,
+            69,
             "“仅白名单用户”模式下非白名单用户提问时显示；留空则静默不回复。可用：{user}。",
         ),
         "guarded_template": _template_field(
             "内容被护栏拦截提示",
             "guarded_template",
-            69,
+            70,
             "整条 AI 回复只有一行且就是命令（如 ,re、/ban）时显示；首行像命令的多行回答只加“指令中和前缀”，不用此模板（加款诱导另用“加款诱导反制回复”）。可用：{user}。",
         ),
         "input_too_long_template": _template_field(
-            "提问过长提示", "input_too_long_template", 70, "提问超过长度上限时显示。可用：{limit} {user}。"
+            "提问过长提示", "input_too_long_template", 71, "提问超过长度上限时显示。可用：{limit} {user}。"
         ),
         "vision_unavailable_template": _template_field(
             "识图不可用提示",
             "vision_unavailable_template",
-            71,
+            72,
             "开启识图但模型不支持图片或读图失败时：有文字问题则作为 {notices} 附在回答前，只有图片时单独回复。可用：{user}。",
         ),
         "search_unavailable_template": _template_field(
             "联网不可用提示",
             "search_unavailable_template",
-            72,
+            73,
             "开启联网搜索但模型不支持时，作为 {notices} 附在回答前；留空则不提示。可用：{user}。",
         ),
-        "help_template": _template_field("帮助提示", "help_template", 73, "只 @Bot 没写问题时显示。可用：{user}。"),
-        "reset_template": _template_field("重置记忆确认", "reset_template", 74, "发送“重置”后显示。可用：{user}。"),
+        "help_template": _template_field("帮助提示", "help_template", 74, "只 @Bot 没写问题时显示。可用：{user}。"),
+        "reset_template": _template_field("重置记忆确认", "reset_template", 75, "发送“重置”后显示。可用：{user}。"),
         "pt_unavailable_template": _template_field(
             "PT 站点不可用提示",
             "pt_unavailable_template",
-            75,
+            76,
             "PT 查询失败（站点无法访问、超时、被只读白名单拒绝等）时作为 {notices} 附在回答前；留空则不提示。可用：{reason} {user}。",
         ),
         "pt_login_expired_template": _template_field(
             "PT 登录失效提示",
             "pt_login_expired_template",
-            76,
+            77,
             "站点 Cookie 失效（被重定向到登录页）时作为 {notices} 附在回答前；插件不会自动登录。可用：{user}。",
         ),
         "pt_rate_limited_template": _template_field(
             "PT 查询限速提示",
             "pt_rate_limited_template",
-            77,
+            78,
             "超过“PT 每分钟最多查询次数”时作为 {notices} 附在回答前。可用：{limit} {user}。",
         ),
         "pt_enabled": {
