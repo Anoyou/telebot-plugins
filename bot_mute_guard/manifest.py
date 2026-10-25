@@ -86,18 +86,7 @@ CONFIG_SCHEMA = {
             "default": False,
         },
     },
-    "required": [
-        "target_chats",
-        "allowed_bots",
-        "delete_untrusted_bot_mentions",
-        "delete_inline_bot_messages",
-        "delete_bot_sender_messages",
-        "delete_join_messages_for_known_bots",
-        "announce",
-        "violation_action",
-        "mute_duration_seconds",
-        "dry_run",
-    ],
+    "required": [],
 }
 
 
@@ -113,7 +102,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.10",
+    version="1.1.11",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",

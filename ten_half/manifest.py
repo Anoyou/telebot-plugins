@@ -70,7 +70,7 @@ CONFIG_SCHEMA = {
             },
         },
     },
-    "required": ["timeout", "lobby_timeout", "max_players", "settlement_cleanup_delay"],
+    "required": [],
 }
 
 
@@ -97,7 +97,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="ten_half",
     display_name="十点半",
-    version="0.4.20",
+    version="0.4.21",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

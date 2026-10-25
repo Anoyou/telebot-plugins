@@ -3,7 +3,7 @@
   "display_name": "猜数字",
   "description": "群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
   "author": "Anoyou",
-  "version": "1.0.19",
+  "version": "1.0.20",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -44,10 +44,7 @@
         "maximum": 86400
       }
     },
-    "required": [
-      "command",
-      "timeout"
-    ],
+    "required": [],
     "x-usage-guide": "管理员发送 {prefix}{command} 奖励金额 开启猜数字；群友在同一群内回复数字抢答，插件提示大了/小了并在答对、超时或关闭时结束会话。"
   },
   "license": "MIT",

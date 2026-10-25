@@ -122,7 +122,7 @@ CONFIG_SCHEMA = {
         "name_aliases": {"type": "string", "title": "name 别名", "default": "name 昵称 名称"},
         "reset_aliases": {"type": "string", "title": "reset 别名", "default": "reset 重置"}
     },
-    "required": ["command"]
+    "required": []
 }
 
 # TelePilot 0.41 Event Bus metadata.
@@ -140,7 +140,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="redpack-byRBQ",
     display_name="红包",
-    version="1.1.29",
+    version="1.1.30",
     min_telepilot_version="0.59.1",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="口令红包插件，支持文字红包与图片数学题红包，并通过平台 payout 完成可审计派奖与结算",

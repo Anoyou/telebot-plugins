@@ -3,7 +3,7 @@
   "display_name": "快问快答",
   "description": "支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
   "author": "Anoyou",
-  "version": "1.4.7",
+  "version": "1.4.8",
   "entry": "plugin.py",
   "min_telepilot_version": "0.59.1",
   "category": "interactive",
@@ -563,27 +563,7 @@
         "x-ui-hidden": true
       }
     },
-    "required": [
-      "command",
-      "entry_fee",
-      "initial_points",
-      "correct_points",
-      "wrong_points",
-      "min_players",
-      "max_players",
-      "max_questions_per_game",
-      "question_timeout_seconds",
-      "selection_timeout_seconds",
-      "reward_ratio",
-      "payout_mode",
-      "start_keyword",
-      "allowed_source_hosts",
-      "ai_question_count",
-      "ai_timeout_seconds",
-      "max_source_chars",
-      "question_generation_prompt",
-      "knowledge_bases"
-    ]
+    "required": []
   },
   "license": "MIT"
 }

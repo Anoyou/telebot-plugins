@@ -3,7 +3,7 @@
   "display_name": "红包",
   "description": "口令红包插件，支持文字红包与图片数学题红包，并通过平台 payout 完成可审计派奖与结算",
   "author": "RBQ (migrated from zhiluop/pagermaid_plugins)",
-  "version": "1.1.29",
+  "version": "1.1.30",
   "entry": "plugin.py",
   "min_telepilot_version": "0.59.1",
   "commands": [
@@ -163,9 +163,7 @@
         "default": "reset 重置"
       }
     },
-    "required": [
-      "command"
-    ],
+    "required": [],
     "x-usage-guide": "管理员发送 {prefix}{command} 口令 总额 个数 创建文字或图片口令红包；群友发送正确口令后由平台 payout/ledger 审计派奖，成功后写入领取记录并在领完后发送结算榜单。"
   },
   "category": "interactive",

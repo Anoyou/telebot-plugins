@@ -89,15 +89,7 @@ CONFIG_SCHEMA = {
             "description": "兼容旧配置；当前创建红包后固定删除原指令。",
         },
     },
-    "required": [
-        "command",
-        "default_amount",
-        "default_count",
-        "min_share_amount",
-        "suffix_length",
-        "ttl_seconds",
-        "image_password_enabled",
-    ],
+    "required": [],
 }
 
 USAGE = '管理员发送 {prefix}{command} 发财 88888 10 创建红包，同一聊天可并行多个红包；发送 {prefix}{command} img 发财 88888 10 可用图片显示财富密码；使用 {prefix}{command} list 查询红包列表，使用 {prefix}{command} off 红包代码关闭指定红包。群友发送财富密码领取，插件返回 `payout`，由平台 userbot 执行；财富密码每被领一次会随机刷新。本插件不使用裸直通。'
@@ -121,7 +113,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lucky_redpack",
     display_name="拼手气口令红包",
-    version="1.4.12",
+    version="1.4.13",
     min_telepilot_version="0.59.1",
     min_telebot_version="0.10.0",
     author="Anoyou",

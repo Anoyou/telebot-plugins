@@ -20,7 +20,7 @@ CONFIG_SCHEMA = {
             "default": True
         }
     },
-    "required": ["command", "enabled"]
+    "required": []
 }
 
 # TelePilot 0.41 Event Bus metadata.
@@ -35,7 +35,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="pixivshow-byRBQ",
     display_name="pixivshow-byRBQ",
-    version="1.0.8",
+    version="1.0.9",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",

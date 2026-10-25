@@ -20,7 +20,7 @@ DEFAULT_MESSAGE_TEMPLATE = """<b>ChatGPT2API</b>
 MANIFEST = Manifest(
     key="chatgpt_image",
     display_name="ChatGPT2API",
-    version="0.1.7",
+    version="0.1.8",
     min_telepilot_version="0.33.0",
     author="TelePilot Official",
     description="实验性：按 chatgpt2api 的核心思路在 Telegram 内完成 ChatGPT 图片生成、编辑与 token 池管理。",
@@ -347,15 +347,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
         },
-        "required": [
-            "command",
-            "edit_command",
-            "admin_command",
-            "default_model",
-            "default_count",
-            "max_count",
-            "timeout",
-        ],
+        "required": [],
     },
 )
 

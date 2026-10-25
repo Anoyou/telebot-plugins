@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.5.5 (2026-10-26)
+- 配置表单：开启指令名（`start_command`）、暂停指令名（`stop_command`）、状态指令名（`status_command`）、目标群组（`allowed_chat_ids`）、随机回复语（`reply_template`）、随机回复概率（`trigger_probability`）、全群回复冷却（秒）（`chat_cooldown_seconds`）、同一用户回复冷却（秒）（`user_cooldown_seconds`）、选中群组默认开启（`default_enabled`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 1.5.4 (2026-08-15)
 - Event Bus 主路径读取标准事件类型，裸直通回复改走 MessageOps 并保留回复锚点。
 

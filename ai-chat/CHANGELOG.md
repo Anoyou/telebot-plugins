@@ -1,5 +1,8 @@
 # 更新日志
 
+## 0.1.13 (2026-10-26)
+- 配置表单：触发指令名（`command`）、固定 TelePilot Provider（可选）（`telepilot_provider`）、TelePilot 模型覆盖（可选）（`telepilot_model`）、模型测试语（`model_test_prompt`）、模型测试客户端标识（`model_test_client_identity`）、模型测试结果（`model_test_result`）、AI 请求超时（秒）（`timeout_seconds`）、最大输出 Token（`max_tokens`）、最大输出字符数（`max_output_chars`）、拦截可执行指令输出（`protect_command_outputs`）、加款诱导反制回复（`payment_guard_reply`）、安全回复前缀（可选）（`safe_reply_prefix`）、额外拦截的裸文本（`blocked_bare_outputs`）、私聊直接回复（`enable_private_chat`）、群聊 @/回复触发（`enable_group_chat`）、引用触发消息回复（`reply_to_trigger_message`）、群聊生效群组（可选）（`group_chat_ids`）、会话白名单（可选）（`white_list_chats`）、陪聊人设提示词（`system_prompt`）、短期记忆消息数（`max_history`）、命令使用解释模板（`enable_explain_prompt`）、命令解释模板（`explain_prompt`）、隐藏思考标签（`strip_thinking`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 0.1.12 (2026-08-15)
 - 聊天回复与命令状态编辑统一改走 TelePilot MessageOps；保留 UserBot 消息入口用于群聊提及、回复实体和原消息存在性读取。
 

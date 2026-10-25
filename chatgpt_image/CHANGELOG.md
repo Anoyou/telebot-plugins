@@ -1,5 +1,8 @@
 # 更新日志
 
+## 0.1.8 (2026-10-26)
+- 配置表单：文生图命令（`command`）、图片编辑命令（`edit_command`）、管理命令（`admin_command`）、默认图片模型（`default_model`）、默认生成张数（`default_count`）、单次最多张数（`max_count`）、请求超时（秒）（`timeout`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 0.1.7 (2026-08-15)
 - 修复 TelePilot 0.97.0 常驻事件 MessageOps 缺少 `send_photo` / `send_file` facade 时的图片发送失败；现在通过标准媒体 action 与 `apply()` 执行，继续保留平台权限校验和审计。
 

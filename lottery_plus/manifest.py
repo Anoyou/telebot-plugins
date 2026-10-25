@@ -220,7 +220,7 @@ CONFIG_SCHEMA = {
             "default": _render(DRAW_TEMPLATE_DEFAULT),
         },
     },
-    "required": ["command", "price_base", "service_fee_rate", "draw_numbers", "draw_hour", "draw_minute"],
+    "required": [],
 }
 
 
@@ -243,7 +243,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="lottery_plus",
     display_name="彩票系统 Plus",
-    version="1.0.17",
+    version="1.0.18",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

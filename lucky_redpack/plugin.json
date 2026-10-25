@@ -3,7 +3,7 @@
   "display_name": "拼手气口令红包",
   "description": "纯 UserBot 口令红包插件，支持多红包并行、红包代码管理和图片财富密码",
   "author": "Anoyou",
-  "version": "1.4.12",
+  "version": "1.4.13",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -111,15 +111,7 @@
         "description": "兼容旧配置；当前创建红包后固定删除原指令。"
       }
     },
-    "required": [
-      "command",
-      "default_amount",
-      "default_count",
-      "min_share_amount",
-      "suffix_length",
-      "ttl_seconds",
-      "image_password_enabled"
-    ],
+    "required": [],
     "x-usage-guide": "管理员发送 {prefix}{command} 发财 88888 10 创建文字财富密码红包；发送 {prefix}{command} img 发财 88888 10 创建图片财富密码红包；使用 {prefix}{command} list 查询红包列表，使用 {prefix}{command} off 红包代码关闭指定红包；群友发送财富密码领取，插件返回 payout，由平台 userbot 执行；财富密码每被领一次会随机刷新。"
   },
   "license": "MIT",

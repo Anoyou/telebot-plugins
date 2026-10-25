@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.12"
+PLUGIN_VERSION = "0.1.13"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -201,31 +201,7 @@ CONFIG_SCHEMA = {
             "default": True,
         },
     },
-    "required": [
-        "command",
-        "telepilot_provider",
-        "telepilot_model",
-        "model_test_prompt",
-        "model_test_client_identity",
-        "model_test_result",
-        "timeout_seconds",
-        "max_tokens",
-        "max_output_chars",
-        "protect_command_outputs",
-        "payment_guard_reply",
-        "safe_reply_prefix",
-        "blocked_bare_outputs",
-        "enable_private_chat",
-        "enable_group_chat",
-        "reply_to_trigger_message",
-        "group_chat_ids",
-        "white_list_chats",
-        "system_prompt",
-        "max_history",
-        "enable_explain_prompt",
-        "explain_prompt",
-        "strip_thinking",
-    ],
+    "required": [],
 }
 
 CONFIG_ACTIONS = [
