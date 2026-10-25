@@ -451,15 +451,15 @@ class ManifestPTTest(_Case):
         raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
         self.assertIn("external_http", manifest.permissions)
         self.assertEqual(raw["allowed_hosts"], manifest.allowed_hosts)
-        self.assertEqual(raw["version"], "0.4.1")
-        self.assertEqual(manifest.version, "0.4.1")
+        self.assertEqual(raw["version"], "0.4.2")
+        self.assertEqual(manifest.version, "0.4.2")
         self.assertIn("test_pt", [action["key"] for action in manifest.config_actions])
 
 
 class PTAccessDiagnosticsTest(_Case):
     """0.3.0 实测问题：访客模式里问“在我配置的站点里搜索…”时 PT 被静默跳过，模型回答“没有访问站点的能力”。"""
 
-    QUESTION = "在我配置的站点里搜索『空枪』有哪些资源"
+    QUESTION = "在我配置的站点里搜索『青蛙』有哪些资源"
 
     def test_guest_without_permission_explains_reason_instead_of_denying_capability(self) -> None:
         ai = RouterAI(answer="当前不能查站。")
@@ -526,22 +526,22 @@ class PTAccessDiagnosticsTest(_Case):
         self.assertIn("没有找到种子", call["user"])
 
     def test_site_alias_is_recognised_and_not_used_as_keyword(self) -> None:
-        ai = RouterAI(route={"pt_search": True, "keyword": "空枪"})
-        ctx = make_ctx({"pt_site_name": "空枪, KQ"}, ai=ai)
+        ai = RouterAI(route={"pt_search": True, "keyword": "青蛙"})
+        ctx = make_ctx({"pt_site_name": "青蛙, 蛙站"}, ai=ai)
         base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private(self.QUESTION)))
         router_system = ai.router_calls[0]["system"]
-        self.assertIn("“空枪”", router_system)
-        self.assertIn("“KQ”", router_system)
+        self.assertIn("“青蛙”", router_system)
+        self.assertIn("“蛙站”", router_system)
         self.assertIn("站点名本身不是搜索关键词", router_system)
         url = ctx.http.requests[0][0]
         self.assertTrue(url.startswith(f"{SITE}/torrents.php?search=&"), url)  # 站点名不当关键词，返回最新列表
         self.assertIn("最新种子列表", ai.answer_calls[0]["user"])
-        self.assertIn("（空枪、KQ", ai.answer_calls[0]["system"])
+        self.assertIn("（青蛙、蛙站", ai.answer_calls[0]["system"])
 
     def test_site_reference_without_router_keyword_searches_latest(self) -> None:
         ai = RouterAI(route={"pt_search": False})
-        ctx = make_ctx({"pt_site_name": "空枪"}, ai=ai)
-        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("空枪站里有哪些资源")))
+        ctx = make_ctx({"pt_site_name": "青蛙"}, ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("青蛙站里有哪些资源")))
         self.assertEqual(len(ctx.http.requests), 1)
         ai = RouterAI(route={"pt_search": False})
         ctx = make_ctx(ai=ai)
@@ -550,15 +550,97 @@ class PTAccessDiagnosticsTest(_Case):
 
     def test_site_names_from_domain_and_title(self) -> None:
         self.assertEqual(PLUGIN._pt_site_names("", "https://pt.kamept.com"), ["kamept"])
-        self.assertEqual(PLUGIN._pt_site_names("空枪，KQ", "https://www.example.org"), ["空枪", "KQ", "example"])
-        self.assertEqual(PLUGIN.pt_site_title("<title>空枪 :: 种子 - Powered by NexusPHP</title>"), "空枪")
+        self.assertEqual(PLUGIN._pt_site_names("青蛙，蛙站", "https://www.example.org"), ["青蛙", "蛙站", "example"])
+        self.assertEqual(PLUGIN.pt_site_title("<title>青蛙 :: 种子 - Powered by NexusPHP</title>"), "青蛙")
         self.assertEqual(PLUGIN.pt_site_title("<title>NexusPHP</title>"), "")
-        self.assertTrue(PLUGIN.refers_to_configured_site("空枪站里有哪些资源", ["空枪"]))
+        self.assertTrue(PLUGIN.refers_to_configured_site("青蛙站里有哪些资源", ["青蛙"]))
         self.assertTrue(PLUGIN.refers_to_configured_site("在我配置的站点里搜索", []))
-        self.assertFalse(PLUGIN.refers_to_configured_site("今天天气", ["空枪"]))
+        self.assertFalse(PLUGIN.refers_to_configured_site("今天天气", ["青蛙"]))
         self.assertTrue(PLUGIN.looks_like_pt_question("PT 上有沙丘吗"))
         self.assertFalse(PLUGIN.looks_like_pt_question("帮我写首诗"))
-        self.assertEqual(PLUGIN.parse_pt_route('{"pt_search": true, "keyword": "空枪站"}', site_names=["空枪"]), ("", "", False))
+        self.assertEqual(PLUGIN.parse_pt_route('{"pt_search": true, "keyword": "青蛙站"}', site_names=["青蛙"]), ("", "", False))
+
+    def test_generic_site_terms_recognised_without_config(self) -> None:
+        # 群里用“站点 / 站里 / 本站 / PT 站”等泛称指代配置的站点（青蛙），不需要填写 pt_site_name。
+        for term in ("站点", "站里", "站内", "站上", "本站", "咱站", "我们站", "PT站", "PT 站", "种子站"):
+            self.assertIn(term, PLUGIN.PT_GENERIC_SITE_TERMS)
+            question = f"{term}有没有 沙丘3"
+            self.assertTrue(PLUGIN.looks_like_pt_question(question), question)
+            self.assertTrue(PLUGIN.refers_to_configured_site(question), question)
+        self.assertTrue(PLUGIN.refers_to_configured_site("站里最近有啥新资源"))
+        self.assertTrue(PLUGIN.refers_to_configured_site("站上有沙丘吗"))
+        self.assertFalse(PLUGIN.refers_to_configured_site("本站的 logo 挺好看"))
+        self.assertFalse(PLUGIN.looks_like_pt_question("帮我写首诗"))
+
+    def test_generic_terms_never_become_keyword(self) -> None:
+        cases = {
+            "站里 沙丘3": "沙丘3",
+            "站里有没有 沙丘3": "沙丘3",
+            "站里有没有沙丘3的资源吗": "沙丘3",
+            "本站的沙丘3": "沙丘3",
+            "PT 站 Dune 2021": "Dune 2021",
+            "种子站": "",
+            "站里": "",
+            "咱站": "",
+            "我配置的站点": "",
+            "蛙站": "",
+            "青蛙 PT": "",
+            "在路上": "在路上",
+            "热恋中": "热恋中",
+        }
+        for raw, expected in cases.items():
+            route = json.dumps({"pt_search": True, "keyword": raw}, ensure_ascii=False)
+            self.assertEqual(PLUGIN.parse_pt_route(route, site_names=["青蛙", "蛙站"]), (expected, "", False), raw)
+
+    def test_router_prompt_lists_generic_terms_and_wiki_exclusion(self) -> None:
+        rule = PLUGIN.pt_router_site_rule([])
+        for term in ("“站点”", "“站里”", "“站内”", "“本站”", "“咱站”", "“PT站”", "“种子站”"):
+            self.assertIn(term, rule)
+        self.assertIn("keyword 是“沙丘3”", rule)
+        self.assertIn("keyword 留空", rule)
+        self.assertIn("站务问题时不要调用", rule)
+        self.assertIn("由 PT 搜索处理，不选", PLUGIN.WIKI_ROUTER_PROMPT)
+
+    def test_generic_term_search_end_to_end(self) -> None:
+        ai = RouterAI(route={"pt_search": True, "keyword": "站里 沙丘3"})
+        ctx = make_ctx(ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("站里有没有 沙丘3")))
+        self.assertIn("“站里”", ai.router_calls[0]["system"])
+        url = ctx.http.requests[0][0]
+        self.assertIn("search=%E6%B2%99%E4%B8%983&", url)  # 只搜“沙丘3”
+        # 判断器漏判时，“站里最近有啥新资源”按最新列表兜底查一次。
+        ai = RouterAI(route={"pt_search": False})
+        ctx = make_ctx(ai=ai)
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("站里最近有啥新资源")))
+        self.assertEqual(len(ctx.http.requests), 1)
+        self.assertTrue(ctx.http.requests[0][0].startswith(f"{SITE}/torrents.php?search=&"))
+
+    def test_site_rule_questions_go_to_wiki_not_pt(self) -> None:
+        for question in ("站点规则是什么", "站里规定能不能用盒子", "本站魔力怎么算", "咱站保种区怎么进", "站内新手要注意什么", "站里 H&R 考核怎么算", "PT 站怎么发种"):
+            self.assertTrue(PLUGIN.is_site_wiki_question(question), question)
+            self.assertFalse(PLUGIN.looks_like_pt_question(question), question)
+            self.assertFalse(PLUGIN.refers_to_configured_site(question), question)
+            # 判断器即使误判为要查，也不请求站点、不调用判断器。
+            ai = RouterAI(route={"pt_search": True, "keyword": "规则"})
+            ctx = make_ctx(ai=ai)
+            base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private(question)))
+            self.assertEqual(ai.router_calls, [], question)
+            self.assertEqual(ctx.http.requests, [], question)
+        # 带明确资源意图的仍走 PT。
+        for question in ("站里有什么保种的资源", "站里有没有 沙丘3", "本站最新的 4K 电影", "种子站有没有新番"):
+            self.assertFalse(PLUGIN.is_site_wiki_question(question), question)
+            self.assertTrue(PLUGIN.looks_like_pt_question(question), question)
+
+    def test_site_name_field_wording(self) -> None:
+        props = PACKAGE.MANIFEST.config_schema["properties"]
+        field = props["pt_site_name"]
+        self.assertEqual(field["title"], "站点叫法（可选）")
+        self.assertIn("青蛙, 蛙站", field["description"])
+        self.assertIn("已默认识别", field["description"])
+        self.assertIn("无需填写", field["description"])
+        self.assertNotIn("空枪", field["description"])
+        raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
+        self.assertEqual(raw["config_schema"]["properties"]["pt_site_name"], {k: v for k, v in field.items()})
 
     def test_config_action_shows_scope_diagnostics(self) -> None:
         plugin = PLUGIN.InteractionAIChatPlugin()

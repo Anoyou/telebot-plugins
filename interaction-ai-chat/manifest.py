@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.1"
+PLUGIN_VERSION = "0.4.2"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -698,8 +698,8 @@ CONFIG_SCHEMA = {
         },
         "pt_site_name": {
             "type": "string",
-            "title": "站点别名（可选）",
-            "description": "站点的名称或简称，多个用逗号分隔，例如“空枪”。用户说“空枪站里有哪些资源”“我配置的 PT 站点”时，模型据此识别是在查这个站点（站点名本身不当作搜索关键词）。留空时自动从站点域名与页面标题推断。",
+            "title": "站点叫法（可选）",
+            "description": "群里对这个站点的自定义叫法，多个用逗号分隔，例如“青蛙, 蛙站”。「站点」「站里」「站内」「站上」「本站」「咱站」「我们站」「PT 站」「种子站」等泛称已默认识别为在查配置的站点，无需填写；这里只补充站名、昵称等额外叫法。这些叫法与泛称都不会被当作搜索关键词。留空时自动从站点域名与页面标题推断站名。",
             "default": "",
             "maxLength": 80,
             "x-ui-section": _SECTION_PT,

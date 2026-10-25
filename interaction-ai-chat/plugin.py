@@ -428,7 +428,10 @@ _PT_DOMAIN_NOISE = {"www", "pt", "tracker", "bt", "m", "com", "net", "org", "cn"
 
 
 def _pt_site_names(raw: Any, site: str) -> list[str]:
-    """站点别名：配置的 pt_site_name（逗号分隔）+ 从域名推断的主名称，用于让路由认出“X 站”。"""
+    """站点叫法：配置的 pt_site_name（逗号分隔，补充自定义叫法）+ 从域名推断的主名称，用于让路由认出“X 站”。
+
+    “站点 / 站里 / 本站”等泛称由 PT_GENERIC_SITE_TERMS 默认识别，不需要放在这里。
+    """
 
     names: list[str] = []
     for part in re.split(r"[,，、;；\n]+", str(raw or "")):
@@ -2132,8 +2135,13 @@ class InteractionAIChatPlugin(Plugin):
         *,
         timeout: float,
     ) -> tuple[str, str, bool] | None:
-        """让模型决定是否调用 pt_search(keyword, category?)；返回 (关键词, 分类, 是否特别区) 或 None。"""
+        """让模型决定是否调用 pt_search(keyword, category?)；返回 (关键词, 分类, 是否特别区) 或 None。
 
+        站务类问题（站点规则/规定、新手、魔力、保种…且没在找资源）直接不查，交给站点 Wiki。
+        """
+
+        if is_site_wiki_question(question):
+            return None
         lines: list[str] = []
         for role, content in history[-4:]:
             lines.append(f"{'用户' if role == 'u' else '助手'}：{_clip(content, 200)}")
@@ -2472,7 +2480,8 @@ WIKI_GUIDANCE = (
 WIKI_ROUTER_PROMPT = (
     "你是 Wiki 页面选择器，不直接回答问题。下面是站点 Wiki 页面目录（路径 标题 · 涵盖内容）：\n{pages}\n"
     "当用户问题涉及站点规则、新手入门、蝌蚪/魔力、等级考核、保种/H&R、发种转种字幕、邀请账号、BT 客户端或媒体服务器配置等，"
-    "且目录里有相关页面时，选出最相关的 1–{limit} 个；与站点无关的问题（闲聊、时事、通用知识）不选。\n"
+    "且目录里有相关页面时，选出最相关的 1–{limit} 个；与站点无关的问题（闲聊、时事、通用知识）不选；"
+    "问站里有没有某部作品、有哪些资源/种子/新资源、怎么下载某个资源的，由 PT 搜索处理，不选。\n"
     '只输出一行 JSON，不要任何解释：{{"pages": ["/docs/..."]}}'
 )
 
@@ -2531,11 +2540,47 @@ def parse_skill_route(text: str, allowed: set[str]) -> list[str]:
     return result[:SKILL_MAX_SELECTED]
 
 
-_PT_HINT_RE = re.compile(
-    r"(?<![A-Za-z])(?:PT|BT)(?![A-Za-z])|种子|做种|有种|资源|站点|站里|站内|本站|这个站|蓝光|原盘|remux|1080p|2160p|4k|free|免费种|优惠",
+# 群里对“配置的这个站点”的泛称：无需配置即识别为在查配置站点，且绝不当作搜索关键词。
+PT_GENERIC_SITE_TERMS = ("站点", "站里", "站内", "站上", "本站", "咱站", "咱们站", "我们站", "这个站", "PT站", "PT 站", "种子站")
+_PT_GENERIC_SITE_RE = re.compile(
+    r"我(?:们)?(?:配置|设置|填)的\s*(?:PT\s*)?站点?|配置的站点|(?<![A-Za-z])PT\s*站点?|种子站|(?:咱们?|我们|本|这个)站|站(?:点|里|内|上)",
     re.IGNORECASE,
 )
-_PT_SITE_REF_RE = re.compile(r"我(?:配置|设置|填)的(?:PT\s*)?站|(?<![A-Za-z])PT\s*站|配置的站点", re.IGNORECASE)
+_PT_HINT_RE = re.compile(
+    r"(?<![A-Za-z])(?:PT|BT)(?![A-Za-z])|种子|做种|有种|资源|蓝光|原盘|remux|1080p|2160p|4k|free|免费种|优惠",
+    re.IGNORECASE,
+)
+_PT_SITE_REF_RE = re.compile(r"我(?:们)?(?:配置|设置|填)的\s*(?:PT\s*)?站|(?<![A-Za-z])PT\s*站|配置的站点", re.IGNORECASE)
+# 站务类话题（规则、新手、魔力、保种等）优先交给站点 Wiki，不触发 PT 搜索。
+_SITE_WIKI_TOPIC_RE = re.compile(
+    r"规则|规定|守则|条例|规矩|规范|新手|入门|魔力|蝌蚪|积分|保种|H\s*&\s*R|(?<![A-Za-z])HR(?![A-Za-z])|考核|等级|升级|降级|"
+    r"邀请|发种|转种|字幕要求|签到|封禁|封号|禁止|违规|警告|捐赠|分享率|上传量|做种率|客户端|盒子|辅种|账号|注册",
+    re.IGNORECASE,
+)
+# 明确在找资源的词：命中时即使带站务词也走 PT（例如“站里有什么保种的资源”）。
+_PT_RESOURCE_RE = re.compile(
+    r"资源|种子(?!站)|片源|下载|电影|影片|剧集|美剧|日剧|韩剧|国产剧|动画|动漫|新番|纪录片|综艺|演唱会|音乐|专辑|游戏|软件|电子书|"
+    r"蓝光|原盘|remux|1080p|2160p|4k|有种|免费种|新片|上新|最新|新资源|有哪些新",
+    re.IGNORECASE,
+)
+_PT_ASK_RE = re.compile(r"有没有|有无|有啥|有什么|有哪些|有[^，。,.？?！!]{1,30}[吗么嘛][？?]?\s*$|搜一?下|搜索|找一?下|查一?下")
+
+
+def strip_generic_site_terms(text: str) -> str:
+    """去掉“站点 / 站里 / 本站 / PT 站 / 我配置的站点”等泛称（只用于判断，不改用户原话）。"""
+
+    return _PT_GENERIC_SITE_RE.sub(" ", str(text or ""))
+
+
+def mentions_generic_site(question: str) -> bool:
+    return bool(_PT_GENERIC_SITE_RE.search(str(question or "")))
+
+
+def is_site_wiki_question(question: str) -> bool:
+    """站点规则/规定、新手、魔力、保种等站务问题，且没有明确在找资源：交给 Wiki，不查 PT。"""
+
+    text = strip_generic_site_terms(question)
+    return bool(_SITE_WIKI_TOPIC_RE.search(text)) and not _PT_RESOURCE_RE.search(text)
 
 
 def _mentions_site_name(question: str, names: list[str]) -> bool:
@@ -2544,26 +2589,44 @@ def _mentions_site_name(question: str, names: list[str]) -> bool:
 
 
 def looks_like_pt_question(question: str, names: list[str] | None = None) -> bool:
-    """粗判断问题是不是在查 PT（只用于“不允许查站”时决定是否向模型解释原因）。"""
+    """粗判断问题是不是在查 PT（只用于“不允许查站”时决定是否向模型解释原因）。
 
-    return bool(_PT_HINT_RE.search(str(question or ""))) or _mentions_site_name(question, names or [])
+    “站点 / 站里 / 本站”等泛称默认算作在说配置的站点；站务类（规则、新手、魔力、保种…）问题除外，那是 Wiki 的事。
+    """
+
+    text = str(question or "")
+    if is_site_wiki_question(text):
+        return False
+    return bool(_PT_HINT_RE.search(text)) or mentions_generic_site(text) or _mentions_site_name(text, names or [])
 
 
 def refers_to_configured_site(question: str, names: list[str] | None = None) -> bool:
-    """问题明确指向用户配置的站点（“我配置的站点”“PT 站”“空枪站”）。"""
+    """问题明确指向用户配置的站点并在找资源（“我配置的站点”“PT 站”“站里有没有…”“青蛙站里…”）。
+
+    判断器没给出搜索决定时据此按最新列表兜底查一次；站务类问题不算。
+    """
 
     text = str(question or "")
+    if is_site_wiki_question(text):
+        return False
     if _PT_SITE_REF_RE.search(text):
         return True
+    if mentions_generic_site(text):
+        rest = strip_generic_site_terms(text)
+        return bool(_PT_RESOURCE_RE.search(rest) or _PT_ASK_RE.search(rest))
     return any(len(name) >= 2 and re.search(re.escape(name) + r"\s*(?:站|PT|上|里)", text, re.IGNORECASE) for name in names or [])
 
 
 def pt_router_site_rule(names: list[str]) -> str:
+    generic = "、".join(f"“{term}”" for term in PT_GENERIC_SITE_TERMS if term != "PT 站")
     label = "、".join(f"“{name}”" for name in names) if names else ""
     alias = f"这个站点也叫 {label}；" if label else ""
     return (
-        f"\n用户说“我配置的站点”“PT 站”“站里”等都指这个站点；{alias}站点名本身不是搜索关键词，不要放进 keyword。"
-        "用户只问站里有哪些资源/最新种子而没有具体作品名时，pt_search 为 true、keyword 留空（返回最新列表）。"
+        f"\n用户说“我配置的站点”以及 {generic} 等泛称时都指这个站点；{alias}"
+        "这些泛称和站点名本身不是搜索关键词，不要放进 keyword（例如“站里有没有 沙丘3”的 keyword 是“沙丘3”）。"
+        "用户只问站里有哪些资源/最新种子/新资源而没有具体作品名时，pt_search 为 true、keyword 留空（返回最新列表）。"
+        "问站点规则、规定、新手入门、魔力/蝌蚪、等级考核、保种/H&R、发种转种、邀请、签到等站务问题时不要调用（由站点 Wiki 回答），"
+        "即使问题里有“站点”“站里”“本站”等词。"
     )
 
 
@@ -2573,7 +2636,7 @@ def pt_capability_prompt(names: list[str]) -> str:
 
 
 def pt_site_title(page: str) -> str:
-    """从 NexusPHP 页面 <title> 推断站点名，例如“空枪 :: 种子 - Powered by NexusPHP”→“空枪”。"""
+    """从 NexusPHP 页面 <title> 推断站点名，例如“青蛙 :: 种子 - Powered by NexusPHP”→“青蛙”。"""
 
     match = re.search(r"<title[^>]*>([\s\S]*?)</title>", str(page or ""), re.IGNORECASE)
     if not match:
@@ -2619,6 +2682,7 @@ def pt_scope_diagnostics(cfg: dict[str, Any], names: list[str]) -> dict[str, Any
         lines.append("隐藏分类：" + "、".join(pt_cfg["hide_categories"]))
     if names:
         lines.append("站点名识别：" + "、".join(names))
+    lines.append("默认识别的泛称：" + "、".join(term for term in PT_GENERIC_SITE_TERMS if term != "PT 站"))
     return {
         "scope": scope,
         "whitelist_source": source,
@@ -2634,7 +2698,8 @@ def pt_scope_diagnostics(cfg: dict[str, Any], names: list[str]) -> dict[str, Any
 def parse_pt_route(text: str, *, site_names: list[str] | None = None) -> tuple[str, str, bool] | None:
     """解析判断步骤的 JSON：需要搜索时返回 (关键词, 分类, 是否特别区)，否则 None。
 
-    关键词可以为空（只问“站里有哪些资源”时返回最新列表）；关键词恰好是站点名/别名时视为空。
+    关键词可以为空（只问“站里有哪些资源”时返回最新列表）；“站里/本站/PT 站”等泛称从关键词里去掉，
+    关键词恰好是站点名/叫法时视为空。
     """
 
     raw = strip_thinking(str(text or ""))
@@ -2647,15 +2712,26 @@ def parse_pt_route(text: str, *, site_names: list[str] | None = None) -> tuple[s
         return None
     if not isinstance(data, dict) or not _bool(data.get("pt_search"), False):
         return None
-    keyword = ptsrc.clean_keyword(data.get("keyword"))
-    for name in site_names or []:
-        if keyword.casefold() in {name.casefold(), f"{name}站".casefold(), f"{name} pt".casefold()}:
-            keyword = ""
-            break
+    keyword = clean_route_keyword(data.get("keyword"), site_names or [])
     category = str(data.get("category") or "").strip()
     category = category if category.isdigit() else ""
     special = str(data.get("area") or "").strip().lower() in {"special", "特别区"}
     return keyword, category, special
+
+
+def clean_route_keyword(raw: Any, site_names: list[str]) -> str:
+    """判断器给出的关键词：去掉站点泛称及“有没有”等口头词（“站里有没有 沙丘3”→“沙丘3”），恰好是站点名/叫法（含“X站”“X PT”）时视为空。"""
+
+    keyword = ptsrc.clean_keyword(raw)
+    stripped = strip_generic_site_terms(keyword)
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    stripped = re.sub(r"^(?:[\s的，,、:：]|有没有|有无|有啥|有什么|有哪些)+", "", stripped)
+    stripped = re.sub(r"(?:[\s，,、:：？?]|的?(?:资源|种子)|吗)+$", "", stripped).strip()
+    keyword = ptsrc.clean_keyword(stripped)
+    for name in site_names or []:
+        if keyword.casefold() in {name.casefold(), f"{name}站".casefold(), f"{name} pt".casefold(), f"{name}pt".casefold()}:
+            return ""
+    return keyword
 
 
 WEEKDAYS_CN = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
