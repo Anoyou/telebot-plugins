@@ -13,7 +13,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "1.1.8"
+VERSION = "1.1.12"
 TOKEN_SPLIT_RE = re.compile(r"[\s,，;；]+")
 ACTION_DELETE_ONLY = "delete_only"
 ACTION_MUTE_SENDER = "mute_sender"
@@ -36,6 +36,25 @@ BOT_MENTION_RE = re.compile(
 class ParsedTargets:
     ids: set[int]
     names: set[str]
+
+
+@dataclass(frozen=True)
+class _InlineBotIdentity:
+    username: str = ""
+    bot_id: int = 0
+
+    @classmethod
+    def from_refs(cls, *, via_bot: Any = None, via_bot_id: Any = None) -> "_InlineBotIdentity":
+        return cls(
+            username=_entity_username(via_bot) or _entity_username(via_bot_id),
+            bot_id=_entity_id(via_bot_id) or _entity_id(via_bot),
+        )
+
+    @property
+    def label(self) -> str:
+        if self.username:
+            return f"@{self.username}"
+        return f"id:{self.bot_id}" if self.bot_id else "unknown"
 
 
 def _split_tokens(value: Any) -> list[str]:
@@ -378,14 +397,45 @@ class BotMuteGuardPlugin(Plugin):
         chat_id: int,
     ) -> bool:
         msg = getattr(event, "message", event)
-        via_ref = getattr(msg, "via_bot_id", None) or getattr(msg, "via_bot", None)
-        if not via_ref or self._is_allowed_bot_ref(via_ref):
+        via_bot = getattr(msg, "via_bot", None)
+        via_bot_id = getattr(msg, "via_bot_id", None)
+        if not via_bot and not via_bot_id:
             return False
 
-        label = self._bot_label(via_ref)
+        identity = _InlineBotIdentity.from_refs(via_bot=via_bot, via_bot_id=via_bot_id)
+        if not identity.username and identity.bot_id:
+            identity = await self._resolve_inline_bot_identity(ctx, identity)
+        if self._is_allowed_inline_bot(identity):
+            return False
+
+        label = identity.label
         reason = f"使用非白名单 inline Bot：{label}"
         await self._handle_violation(ctx, chat_id, _message_id(event), reason, event)
         return True
+
+    async def _resolve_inline_bot_identity(
+        self,
+        ctx: PluginContext,
+        identity: "_InlineBotIdentity",
+    ) -> "_InlineBotIdentity":
+        get_entity = getattr(ctx.client, "get_entity", None)
+        if not callable(get_entity):
+            return identity
+        try:
+            entity = await _maybe_await(get_entity(identity.bot_id))
+        except Exception:  # noqa: BLE001
+            return identity
+        username = _entity_username(entity)
+        if not username:
+            return identity
+        return _InlineBotIdentity(username=username, bot_id=identity.bot_id)
+
+    def _is_allowed_inline_bot(self, identity: "_InlineBotIdentity") -> bool:
+        """Inline refs may expose username and ID separately; username wins."""
+        username = identity.username
+        if username and username in self._allowed_bots.names:
+            return True
+        return bool(identity.bot_id and identity.bot_id in self._allowed_bots.ids)
 
     async def _handle_bot_sender(
         self,
@@ -563,11 +613,16 @@ class BotMuteGuardPlugin(Plugin):
     ) -> bool:
         messages = getattr(ctx, "messages", None)
         delete = getattr(messages, "delete", None)
-        if not callable(delete):
+        client = getattr(ctx, "client", None)
+        delete_messages = getattr(client, "delete_messages", None)
+        if not callable(delete) and not callable(delete_messages):
             await self._log(ctx, "error", "平台 MessageOps 不可用，无法删除消息", chat_id, message_id, sender_id)
             return False
         try:
-            await delete(chat_id=chat_id, message_id=message_id)
+            if callable(delete):
+                await delete(chat_id=chat_id, message_id=message_id)
+            else:
+                await delete_messages(chat_id, message_id)
         except PermissionError as exc:
             await self._log(
                 ctx,

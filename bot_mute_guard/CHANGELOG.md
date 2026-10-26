@@ -1,5 +1,11 @@
 # 更新日志
 
+## 1.1.12 (2026-10-26)
+- 修复 inline Bot 白名单只按 `via_bot_id` 判断、导致已配置的 Bot username 无法命中的问题。
+- inline 消息现在优先按 Bot username 判断白名单；事件未携带 username 时，会通过平台受控实体解析补全，解析失败再回退到 Bot ID。无需为每个 Bot 额外查询数字 ID。
+- 新增 `resolve_entity` 权限声明，用于按 `via_bot_id` 读取 Bot username。
+- 补充白名单 username、Bot ID 回退和非白名单 inline Bot 的冒烟测试。
+
 ## 1.1.10 (2026-08-15)
 - 将违规消息删除和群内提示统一改为平台 MessageOps，缺少受控动作时拒绝发送。
 

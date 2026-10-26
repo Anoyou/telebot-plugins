@@ -69,12 +69,20 @@ class Chat:
 
 
 class Message:
-    def __init__(self, message_id: int, text: str, *, via_bot_id: int | None = None) -> None:
+    def __init__(
+        self,
+        message_id: int,
+        text: str,
+        *,
+        via_bot_id: int | None = None,
+        via_bot: User | None = None,
+    ) -> None:
         self.id = message_id
         self.message = text
         self.raw_text = text
         self.action = None
         self.via_bot_id = via_bot_id
+        self.via_bot = via_bot
 
 
 class FakeClient:
@@ -99,6 +107,22 @@ class FakeClient:
 
     async def ban_user(self, chat_id: int, user_id: int) -> None:
         self.banned.append((chat_id, user_id))
+
+    async def get_entity(self, user_id: int) -> User:
+        if user_id == 6000000003:
+            return User(user_id, "pteebot", bot=True)
+        raise ValueError("entity unavailable")
+
+
+class FakeMessages:
+    def __init__(self, client: FakeClient) -> None:
+        self._client = client
+
+    async def delete(self, *, chat_id: int, message_id: int) -> None:
+        await self._client.delete_messages(chat_id, message_id)
+
+    async def send(self, *, chat_id: int, text: str) -> None:
+        await self._client.send_message(chat_id, text)
 
 
 class Event:
@@ -137,10 +161,14 @@ async def main() -> None:
 
     client = FakeClient()
     ctx = sys.modules["app.worker.plugins.base"].PluginContext(
-        config={"target_chats": "-1001234567890", "allowed_bots": "@qqqbot 99"},
+        config={
+            "target_chats": "-1001234567890",
+            "allowed_bots": "@qqqbot 99 pteebot",
+        },
         client=client,
         log=log,
     )
+    ctx.messages = FakeMessages(client)
     plugin = plugin_mod.BotMuteGuardPlugin()
     await plugin.on_startup(ctx)
 
@@ -171,6 +199,49 @@ async def main() -> None:
     await plugin.on_message(ctx, Event(client, Message(6, "", via_bot_id=100), sender_f))
     assert client.deleted[-1] == (-1001234567890, 6)
 
+    inline_bot = User(5033067733, "pteebot", bot=True)
+    await plugin.on_message(
+        ctx,
+        Event(
+            client,
+            Message(6_1, "inline by username", via_bot_id=5033067733, via_bot=inline_bot),
+            sender_f,
+        ),
+    )
+    assert client.deleted[-1] == (-1001234567890, 6)
+
+    inline_bot_by_name_only = User(6000000001, "pteebot", bot=True)
+    await plugin.on_message(
+        ctx,
+        Event(
+            client,
+            Message(6_2, "inline username without configured id", via_bot=inline_bot_by_name_only),
+            sender_f,
+        ),
+    )
+    assert client.deleted[-1] == (-1001234567890, 6)
+
+    await plugin.on_message(
+        ctx,
+        Event(
+            client,
+            Message(6_2_1, "inline id resolved to username", via_bot_id=6000000003),
+            sender_f,
+        ),
+    )
+    assert client.deleted[-1] == (-1001234567890, 6)
+
+    unknown_inline_bot = User(6000000002, "notallowedbot", bot=True)
+    await plugin.on_message(
+        ctx,
+        Event(
+            client,
+            Message(6_3, "inline by unknown bot", via_bot_id=6000000002, via_bot=unknown_inline_bot),
+            sender_f,
+        ),
+    )
+    assert client.deleted[-1] == (-1001234567890, 6_3)
+
     bot_sender = User(783, "not_allowed_bot", bot=True)
     await plugin.on_message(
         ctx,
@@ -195,6 +266,7 @@ async def main() -> None:
         client=dry_client,
         log=log,
     )
+    dry_ctx.messages = FakeMessages(dry_client)
     dry_plugin = plugin_mod.BotMuteGuardPlugin()
     await dry_plugin.on_startup(dry_ctx)
     await dry_plugin.on_message(dry_ctx, Event(dry_client, Message(9, "@dryrunbot"), sender_f))
@@ -210,6 +282,7 @@ async def main() -> None:
         client=false_string_client,
         log=log,
     )
+    false_string_ctx.messages = FakeMessages(false_string_client)
     false_string_plugin = plugin_mod.BotMuteGuardPlugin()
     await false_string_plugin.on_startup(false_string_ctx)
     await false_string_plugin.on_message(
@@ -228,6 +301,7 @@ async def main() -> None:
         client=hot_reload_client,
         log=log,
     )
+    hot_reload_ctx.messages = FakeMessages(hot_reload_client)
     hot_reload_plugin = plugin_mod.BotMuteGuardPlugin()
     await hot_reload_plugin.on_startup(hot_reload_ctx)
     await hot_reload_plugin.on_message(
@@ -255,6 +329,7 @@ async def main() -> None:
         client=mute_client,
         log=log,
     )
+    mute_ctx.messages = FakeMessages(mute_client)
     mute_plugin = plugin_mod.BotMuteGuardPlugin()
     await mute_plugin.on_startup(mute_ctx)
     await mute_plugin.on_message(
@@ -274,6 +349,7 @@ async def main() -> None:
         client=kick_client,
         log=log,
     )
+    kick_ctx.messages = FakeMessages(kick_client)
     kick_plugin = plugin_mod.BotMuteGuardPlugin()
     await kick_plugin.on_startup(kick_ctx)
     await kick_plugin.on_message(
@@ -293,6 +369,7 @@ async def main() -> None:
         client=disabled_rule_client,
         log=log,
     )
+    disabled_rule_ctx.messages = FakeMessages(disabled_rule_client)
     disabled_rule_plugin = plugin_mod.BotMuteGuardPlugin()
     await disabled_rule_plugin.on_startup(disabled_rule_ctx)
     await disabled_rule_plugin.on_message(
@@ -307,6 +384,7 @@ async def main() -> None:
         client=name_target_client,
         log=log,
     )
+    name_target_ctx.messages = FakeMessages(name_target_client)
     name_target_plugin = plugin_mod.BotMuteGuardPlugin()
     await name_target_plugin.on_startup(name_target_ctx)
     await name_target_plugin.on_message(
