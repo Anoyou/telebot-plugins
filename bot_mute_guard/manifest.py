@@ -86,18 +86,7 @@ CONFIG_SCHEMA = {
             "default": False,
         },
     },
-    "required": [
-        "target_chats",
-        "allowed_bots",
-        "delete_untrusted_bot_mentions",
-        "delete_inline_bot_messages",
-        "delete_bot_sender_messages",
-        "delete_join_messages_for_known_bots",
-        "announce",
-        "violation_action",
-        "mute_duration_seconds",
-        "dry_run",
-    ],
+    "required": [],
 }
 
 

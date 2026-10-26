@@ -6,6 +6,9 @@
 - 新增 `resolve_entity` 权限声明，用于按 `via_bot_id` 读取 Bot username。
 - 补充白名单 username、Bot ID 回退和非白名单 inline Bot 的冒烟测试。
 
+## 1.1.11 (2026-10-26)
+- 配置表单：目标群组（`target_chats`）、Bot 白名单（`allowed_bots`）、删除非白名单 @bot 提及消息（`delete_untrusted_bot_mentions`）、删除非白名单 inline Bot 消息（`delete_inline_bot_messages`）、删除非白名单 Bot 发言（`delete_bot_sender_messages`）、删除可识别 Bot 入群服务消息（`delete_join_messages_for_known_bots`）、群内提示（`announce`）、违规处理动作（`violation_action`）、禁言时长（秒）（`mute_duration_seconds`）、演练模式（`dry_run`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 1.1.10 (2026-08-15)
 - 将违规消息删除和群内提示统一改为平台 MessageOps，缺少受控动作时拒绝发送。
 

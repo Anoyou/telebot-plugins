@@ -141,19 +141,7 @@ CONFIG_SCHEMA = {
             "x-ui-widget": "textarea",
         },
     },
-    "required": [
-        "command",
-        "default_count",
-        "max_fetch_count",
-        "message_template",
-        "default_prompt",
-        "default_spoiler",
-        "timeout_seconds",
-        "reply_mode",
-        "max_output_length",
-        "default_push_target",
-        "scheduled_tasks_json",
-    ],
+    "required": [],
 }
 
 
@@ -170,7 +158,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="sum",
     display_name="群消息总结",
-    version="1.1.35",
+    version="1.1.36",
     min_telepilot_version="0.59.1",
     author="Anoyou",
     description="调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",

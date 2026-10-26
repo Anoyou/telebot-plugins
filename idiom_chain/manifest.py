@@ -37,7 +37,7 @@ CONFIG_SCHEMA = {
             },
         },
     },
-    "required": ["command", "timeout", "forbidden_words"],
+    "required": [],
 }
 
 
@@ -60,7 +60,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="idiom_chain",
     display_name="成语接龙",
-    version="1.0.18",
+    version="1.0.19",
     min_telepilot_version="0.33.0",
     min_telebot_version="0.10.0",
     author="Anoyou",

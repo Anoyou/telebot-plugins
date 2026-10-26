@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.4.8 (2026-10-26)
+- 配置表单：触发指令名（`command`）、默认门槛金额（`entry_fee`）、初始积分（`initial_points`）、答对加分（`correct_points`）、答错扣分（`wrong_points`）、最低开局人数（`min_players`）、最高报名人数（`max_players`）、每局最多题数（`max_questions_per_game`）、每题限时（秒）（`question_timeout_seconds`）、题库选择限时（秒）（`selection_timeout_seconds`）、可发奖金比例（`reward_ratio`）、结算模式（`payout_mode`）、开局关键词（`start_keyword`）、题库来源域名白名单（可选）（`allowed_source_hosts`）、单个 URL 生成题数（`ai_question_count`）、AI 请求超时（秒）（`ai_timeout_seconds`）、网页正文最大字符数（`max_source_chars`）、题库生成系统提示词（`question_generation_prompt`）、题库（`knowledge_bases`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 1.4.7 (2026-08-15)
 - 补充 TelePilot 0.97.0 平台能力声明，并同步 plugin.json 与 manifest.py。
 

@@ -57,7 +57,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.27",
+    version="1.0.28",
     min_telepilot_version="0.33.0",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
@@ -245,7 +245,7 @@ MANIFEST = Manifest(
                 ),
             },
         },
-        "required": ["command", "cookie", "torrent_cooldown_seconds"],
+        "required": ["cookie"],
     },
     requires_platform_capabilities=['interaction_bot'],
 )

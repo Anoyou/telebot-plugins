@@ -3,7 +3,7 @@
   "display_name": "群消息总结",
   "description": "调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
   "author": "Anoyou",
-  "version": "1.1.35",
+  "version": "1.1.36",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -147,19 +147,7 @@
         "x-ui-widget": "textarea"
       }
     },
-    "required": [
-      "command",
-      "default_count",
-      "max_fetch_count",
-      "message_template",
-      "default_prompt",
-      "default_spoiler",
-      "timeout_seconds",
-      "reply_mode",
-      "max_output_length",
-      "default_push_target",
-      "scheduled_tasks_json"
-    ],
+    "required": [],
     "x-usage-guide": "发送 {prefix}{command} 数量 总结最近群消息；也可配置快捷总结和定时任务。AI Provider、消息模板、词云和输出格式都可在配置页调整，并可通过插件预览查看摘要消息。"
   },
   "license": "MIT",

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.36 (2026-10-26)
+- 配置表单：触发指令名（`command`）、默认总结消息数（`default_count`）、单次最多读取消息数（`max_fetch_count`）、结果输出模板（`message_template`）、默认总结提示词（`default_prompt`）、默认折叠显示（`default_spoiler`）、AI 请求超时（秒）（`timeout_seconds`）、回复模式（`reply_mode`）、最大输出字符数（`max_output_length`）、定时总结默认推送目标（`default_push_target`）、定时总结任务 JSON（可选）（`scheduled_tasks_json`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
+
 ## 1.1.35 (2026-08-15)
 - 将总结推送、命令编辑和删除统一改为平台 MessageOps，AI 仍通过 ctx.ai 路由。
 

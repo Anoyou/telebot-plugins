@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - isolated unit-test stubs
 from .storage import AIStorage, StorageError, migrate_database
 
 
-PLUGIN_VERSION = "0.1.43"
+PLUGIN_VERSION = "0.1.44"
 DEFAULT_COMMAND = "airp"
 DEFAULT_TOTAL_AMOUNT = 150_000
 FAILED_MESSAGE_DELETE_SECONDS = 60

@@ -151,13 +151,7 @@ CONFIG_SCHEMA = {
             "maxLength": 2000,
         },
     },
-    "required": [
-        "command",
-        "ticket_price",
-        "total_rounds",
-        "round_timeout",
-        "option_word_pool",
-    ],
+    "required": [],
 }
 
 
@@ -182,7 +176,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="mindreader_survival",
     display_name="读心生存赛",
-    version="1.1.12",
+    version="1.1.13",
     min_telepilot_version="0.33.0",
     author="Anoyou",
     description="多人读心生存赛游戏。玩家转账加入，通过读心（猜庄家答案）逐轮淘汰，最终存活者瓜分奖池。",

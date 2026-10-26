@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -95,12 +95,7 @@
         }
       }
     },
-    "required": [
-      "timeout",
-      "lobby_timeout",
-      "max_players",
-      "settlement_cleanup_delay"
-    ],
+    "required": [],
     "x-usage-guide": "在交互中心配置关键词后，由交互 Bot 先让触发者选择本局底注额度，再进入对应额度的开局大厅。当前规则为每人起手 1 张，庄家首牌暗牌，五小最大；按钮里可点击“规则”快速查看。转账模式下普通玩家精确转账底注给账号 userbot 后由平台投递 payment_confirmed 入局；无感模式下玩家点击开局消息按钮，由 userbot 回复玩家近期发言 -底注 完成扣款并入局，已有 2 张牌后加倍会再次扣除底注并补 1 张停牌。账号本人可在群内发送“10d模式”切换入局模式，也可在等待大厅发送“入局”免转账加入；这些普通消息由交互 Bot 通道处理，userbot 只负责收付款。庄家制结算下，闲家倍率奖金由庄家出，若倍率奖金毛额超过庄家已入局金额，会先向庄家补扣差额；刷屏费从赢家倍率奖金里抽取。发奖始终返回 payout 并由 userbot 执行，结算后的本局消息默认 60 秒自动清理。"
   },
   "license": "MIT",
