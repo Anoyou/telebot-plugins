@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.3"
+PLUGIN_VERSION = "0.4.4"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -322,7 +322,7 @@ CONFIG_SCHEMA = {
         "rich_text": {
             "type": "boolean",
             "title": "Telegram 富文本",
-            "description": "优先用 Telegram 原生 Rich Message（Bot API 10.2+，标题、列表、任务列表、表格、折叠详情、公式原生渲染）发送/编辑答案；失败或访客模式占位编辑时改用 Telegram HTML（粗体、斜体、下划线、删除线、剧透、代码、代码块、链接、引用），Telegram 再拒绝时由平台退回纯文本。关闭则按纯文本发送模型原文。",
+            "description": "优先用 Telegram 原生 Rich Message（Bot API 10.2+，标题、列表、任务列表、表格、折叠详情、公式原生渲染）发送/编辑答案；失败时（以及 TelePilot 低于 0.106.0-beta.3 时的访客模式占位编辑）改用 Telegram HTML（粗体、斜体、下划线、删除线、剧透、代码、代码块、链接、引用），Telegram 再拒绝时由平台退回纯文本。关闭则按纯文本发送模型原文。",
             "default": True,
             "x-ui-section": _SECTION_REPLY,
             "x-ui-columns": 2,

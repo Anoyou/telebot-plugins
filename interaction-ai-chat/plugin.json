@@ -3,7 +3,7 @@
   "display_name": "AI 答疑（交互 Bot）",
   "description": "交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
   "author": "Anoyou",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.105.0-beta.1",
@@ -298,7 +298,7 @@
       "rich_text": {
         "type": "boolean",
         "title": "Telegram 富文本",
-        "description": "优先用 Telegram 原生 Rich Message（Bot API 10.2+，标题、列表、任务列表、表格、折叠详情、公式原生渲染）发送/编辑答案；失败或访客模式占位编辑时改用 Telegram HTML（粗体、斜体、下划线、删除线、剧透、代码、代码块、链接、引用），Telegram 再拒绝时由平台退回纯文本。关闭则按纯文本发送模型原文。",
+        "description": "优先用 Telegram 原生 Rich Message（Bot API 10.2+，标题、列表、任务列表、表格、折叠详情、公式原生渲染）发送/编辑答案；失败时（以及 TelePilot 低于 0.106.0-beta.3 时的访客模式占位编辑）改用 Telegram HTML（粗体、斜体、下划线、删除线、剧透、代码、代码块、链接、引用），Telegram 再拒绝时由平台退回纯文本。关闭则按纯文本发送模型原文。",
         "default": true,
         "x-ui-section": "回复与记忆",
         "x-ui-columns": 2,
