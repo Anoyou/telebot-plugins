@@ -452,8 +452,8 @@ class ManifestPTTest(_Case):
         raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
         self.assertIn("external_http", manifest.permissions)
         self.assertEqual(raw["allowed_hosts"], manifest.allowed_hosts)
-        self.assertEqual(raw["version"], "0.4.4")
-        self.assertEqual(manifest.version, "0.4.4")
+        self.assertEqual(raw["version"], "0.4.5")
+        self.assertEqual(manifest.version, "0.4.5")
         self.assertIn("test_pt", [action["key"] for action in manifest.config_actions])
 
 
@@ -701,7 +701,7 @@ class PTChatScopeAndFormatTest(_Case):
         base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("沙丘有种吗")))
         user = ai.answer_calls[0]["user"]
         self.assertIn("已按做种数从高到低排序", user)
-        self.assertIn("列依次为：标题、大小、做种/下载、优惠、发布时间。", user)
+        self.assertIn("表格固定三列，依次为：标题、大小、发布时间，", user)
         self.assertIn(f"标题链接：**[Dune Part Two 2024 2160p UHD BluRay HEVC-]({SITE}/details.php?id=1001)**", user)
         self.assertNotIn("详情页：", user)
         self.assertNotIn("[详情](链接)；", user)
