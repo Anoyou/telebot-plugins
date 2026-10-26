@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.4.5 (2026-10-26)
+- 内置 skill `group-helper` 按管理员修改更新：新增官种规则——标题末尾发布组为 FROGWeb/FROGE/FROG 的是官种，其余为转种；开头报「官种 x 条、转种 y 条」，先列官种表再列转种表，各按做种数排序、合计最多 8 条。
+- PT 结果表格固定三列：标题（加粗详情页链接）、大小、发布时间，不再有做种/下载、优惠列；做种数只用于排序，优惠写在表格后的推荐里。插件内置的 PT 回答格式提示同步改为三列，并说明 skill 另有官种分组规定时按 skill。
+- 站点登录失效、限速时统一提示「站点搜索暂时不可用，请联系管理员」。
+- 已在 App/Web 编辑过 group-helper 的管理员：平台会标记“内置有新版本”，可在 Skills 里对比后选择恢复默认或保留自己的修改。
 ## 0.4.4 (2026-10-26)
 - 修复访客模式（Guest Mode）回答仍以 HTML 显示、看不到原生 Rich 表格：根因不在 Telegram（Bot API 文档写明 `editMessageText` 的 `rich_message` 适用于 inline 消息），而在 TelePilot 0.106.0-beta.2 只给“入口返回的动作”加了 inline Rich 编辑，插件用 `ctx.messages.apply` 实时编辑“🤔”占位时请求没发到 Telegram 就以 `target_message_id_missing` 失败，插件误记为“Rich Message 被拒绝”并退回 HTML。TelePilot 0.106.0-beta.3 已修复实时链路。
 - 访客占位的 Rich 编辑改为以平台能力标记 `ctx.messages.live_inline_edit`（TelePilot 0.106.0-beta.3+）为准；只有 `inline_rich_edit` 的 0.106.0-beta.2 直接走 HTML，不再每次白试一次 Rich、多一条告警。
