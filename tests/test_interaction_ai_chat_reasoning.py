@@ -1,4 +1,4 @@
-"""interaction-ai-chat 0.4.3：推理草稿不得当作答案发送；访客模式占位优先用 Rich Message 编辑。
+"""interaction-ai-chat 0.4.3/0.4.4：推理草稿不得当作答案发送；访客模式占位优先用 Rich Message 编辑。
 
 复现：GLM-5.3-Flash（Z.ai，始终开启推理）在群里被问空枪资源，Bot 发出的是截断的英文推理草稿
 "The user is asking again whether "空枪" ... Let me organize the data into a table as suggested: ..."。
@@ -156,6 +156,7 @@ class GuestInlineRichEditTest(unittest.TestCase):
     def test_guest_placeholder_uses_inline_rich_edit_when_platform_supports(self) -> None:
         messages = RichMessages()
         messages.inline_rich_edit = True
+        messages.live_inline_edit = True
         ctx = base.live_ctx(ai=base.CapAI(text=TABLE_ANSWER), messages=messages)
         actions = run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.guest_payload("空枪有资源吗")))
         self.assertEqual(actions, [])
@@ -168,12 +169,66 @@ class GuestInlineRichEditTest(unittest.TestCase):
     def test_guest_inline_rich_rejected_falls_back_to_html(self) -> None:
         messages = RichMessages(rich_result={"ok": False, "failed": 1})
         messages.inline_rich_edit = True
+        messages.live_inline_edit = True
         ctx = base.live_ctx(ai=base.CapAI(text="## 标题\n*斜*"), messages=messages)
         actions = run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.guest_payload("问")))
         self.assertEqual(
             actions,
             [{"type": "edit_message", "inline_message_id": "inline-abc", "text": "<b>标题</b>\n<i>斜</i>", "parse_mode": "html", "send_via": ["interaction_bot"]}],
         )
+
+    def test_guest_final_answer_renders_pt_table_as_native_rich(self) -> None:
+        """访客模式最终渲染路径：PT 表格（标题加粗即详情页链接）原样进 Rich Markdown，不退回 HTML。"""
+
+        messages = RichMessages()
+        messages.inline_rich_edit = True
+        messages.live_inline_edit = True
+        answer = (
+            "找到 2 个种子：\n\n| 标题 | 大小 | 做种/下载 | 优惠 | 发布时间 |\n|---|---|---|---|---|\n"
+            "| **[沙丘3 2026 2160p](https://pt.example/details.php?id=11)** | 25 GB | 12/3 | 免费 | 2026-10-25 |\n"
+            "| **[沙丘3 2026 1080p](https://pt.example/details.php?id=12)** | 9 GB | 30/1 | 无 | 2026-10-24 |"
+        )
+        ctx = base.live_ctx(ai=base.CapAI(text=answer), messages=messages)
+        actions = run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.guest_payload("站里有没有沙丘3")))
+        self.assertEqual(actions, [])
+        self.assertEqual([a["type"] for a in messages.applied], ["answer_guest_query", "edit_message"])
+        markdown = messages.applied[1]["rich_message"]["markdown"]
+        self.assertIn("| 标题 | 大小 | 做种/下载 | 优惠 | 发布时间 |", markdown)
+        self.assertIn("**[沙丘3 2026 2160p](https://pt.example/details.php?id=11)**", markdown)
+        self.assertEqual(messages.applied[1]["send_via"], ["interaction_bot"])
+        self.assertFalse(any("改用 Telegram HTML" in log[1] for log in ctx.logs))
+
+    def test_guest_beta2_platform_without_live_inline_edit_goes_html(self) -> None:
+        """TelePilot 0.106.0-beta.2 只声明 inline_rich_edit，实时 apply 不认 inline_message_id：不再白试一次 Rich。"""
+
+        messages = RichMessages()
+        messages.inline_rich_edit = True
+        ctx = base.live_ctx(ai=base.CapAI(text=TABLE_ANSWER), messages=messages)
+        actions = run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.guest_payload("空枪有资源吗")))
+        self.assertEqual([a["type"] for a in messages.applied], ["answer_guest_query"])
+        self.assertEqual(actions[0]["type"], "edit_message")
+        self.assertEqual(actions[0]["inline_message_id"], "inline-abc")
+        self.assertEqual(actions[0]["parse_mode"], "html")
+        self.assertFalse(any("Rich Message 被拒绝" in log[1] for log in ctx.logs))
+
+    def test_guest_inline_rich_rejected_logs_telegram_error(self) -> None:
+        messages = RichMessages(
+            rich_result={
+                "ok": False,
+                "executed": 1,
+                "failed": 1,
+                "errors": [{"index": 0, "type": "edit_message", "error_code": "telegram_api_error", "error": "Bad Request: MESSAGE_NOT_MODIFIED"}],
+            }
+        )
+        messages.inline_rich_edit = True
+        messages.live_inline_edit = True
+        ctx = base.live_ctx(ai=base.CapAI(text="**答**"), messages=messages)
+        actions = run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, base.guest_payload("问")))
+        self.assertEqual(actions[0]["parse_mode"], "html")
+        [log] = [log for log in ctx.logs if "Rich Message 被拒绝" in log[1]]
+        self.assertEqual(log[2]["error_code"], "telegram_api_error")
+        self.assertEqual(log[2]["telegram_error"], "Bad Request: MESSAGE_NOT_MODIFIED")
+        self.assertEqual(log[2]["kind"], "guest")
 
     def test_guest_placeholder_without_capability_keeps_html(self) -> None:
         messages = RichMessages()

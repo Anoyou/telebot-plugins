@@ -1453,9 +1453,10 @@ class InteractionAIChatPlugin(Plugin):
 
         - 私聊/已加入的群：有占位时 ``edit_message.rich_message`` 原地编辑 🤔（editMessageText.rich_message），
           没有占位时 ``send_rich_message``（sendRichMessage）；
-        - 访客模式：有占位且平台声明 ``ctx.messages.inline_rich_edit``（TelePilot 0.106.0-beta.2+）时，
+        - 访客模式：有占位且平台声明 ``ctx.messages.live_inline_edit``（TelePilot 0.106.0-beta.3+）时，
           用 ``edit_message(inline_message_id, rich_message)``（editMessageText.rich_message 同样适用于 inline 消息）
-          原地编辑 🤔；旧平台的 inline 编辑只支持 text/parse_mode，直接走 HTML；
+          实时原地编辑 🤔；0.106.0-beta.2 只有 ``inline_rich_edit``，其实时 apply 不认 inline_message_id、
+          请求发不到 Telegram，旧平台一律直接走 HTML；
           没有占位时用 ``answer_guest_query.rich_message``（InputRichMessageContent）。
         - 动作经 ``ctx.messages.apply`` 实时执行并读取批次结果；失败或平台不支持时返回 False，
           由调用方返回原有 HTML 动作（插件动作失败语义是严格的，平台不会自动降级 Rich Message）。
@@ -1467,7 +1468,7 @@ class InteractionAIChatPlugin(Plugin):
             return False
         rich_message = {"markdown": reply.rich}
         if trigger.kind == "guest" and placeholder is not None:
-            if not placeholder.inline_message_id or getattr(messages, "inline_rich_edit", False) is not True:
+            if not placeholder.inline_message_id or getattr(messages, "live_inline_edit", False) is not True:
                 return False
             action: dict[str, Any] = {
                 "type": "edit_message",
@@ -1511,7 +1512,17 @@ class InteractionAIChatPlugin(Plugin):
             await _log(ctx, "info", "AI 答疑 Rich Message 发送失败，改用 Telegram HTML", error_type=type(exc).__name__, kind=trigger.kind)
             return False
         if isinstance(outcome, dict) and (outcome.get("ok") is False or int(outcome.get("failed") or 0) > 0 or int(outcome.get("dropped") or 0) > 0):
-            await _log(ctx, "info", "AI 答疑 Rich Message 被拒绝，改用 Telegram HTML", kind=trigger.kind, action_type=action["type"])
+            detail: dict[str, Any] = {}
+            errors = outcome.get("errors") if isinstance(outcome.get("errors"), list) else []
+            first = next((item for item in errors if isinstance(item, dict)), None)
+            if first is not None:
+                # 平台 0.106.0-beta.3+ 返回的失败原因已脱敏；Telegram 拒绝时是 Telegram 的错误描述。
+                detail["error_code"] = _clip(str(first.get("error_code") or ""), 64)
+                if first.get("error"):
+                    detail["error"] = _clip(str(first.get("error")), 300)
+                if first.get("error_code") == "telegram_api_error" and first.get("error"):
+                    detail["telegram_error"] = detail["error"]
+            await _log(ctx, "info", "AI 答疑 Rich Message 被拒绝，改用 Telegram HTML", kind=trigger.kind, action_type=action["type"], **detail)
             return False
         return True
 

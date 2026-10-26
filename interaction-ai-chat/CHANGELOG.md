@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.4.4 (2026-10-26)
+- 修复访客模式（Guest Mode）回答仍以 HTML 显示、看不到原生 Rich 表格：根因不在 Telegram（Bot API 文档写明 `editMessageText` 的 `rich_message` 适用于 inline 消息），而在 TelePilot 0.106.0-beta.2 只给“入口返回的动作”加了 inline Rich 编辑，插件用 `ctx.messages.apply` 实时编辑“🤔”占位时请求没发到 Telegram 就以 `target_message_id_missing` 失败，插件误记为“Rich Message 被拒绝”并退回 HTML。TelePilot 0.106.0-beta.3 已修复实时链路。
+- 访客占位的 Rich 编辑改为以平台能力标记 `ctx.messages.live_inline_edit`（TelePilot 0.106.0-beta.3+）为准；只有 `inline_rich_edit` 的 0.106.0-beta.2 直接走 HTML，不再每次白试一次 Rich、多一条告警。
+- “AI 答疑 Rich Message 被拒绝，改用 Telegram HTML”日志带上平台返回的失败原因：`error_code`、`error`，Telegram 拒绝时另带 `telegram_error`（平台已脱敏），便于判断是 Telegram 限制还是参数问题。
+- 兼容性：`min_telepilot_version` 保持 0.105.0-beta.1；旧平台上访客模式照旧用 HTML 编辑占位。访客模式要显示原生表格需 TelePilot 0.106.0-beta.3+；也可关闭“思考中占位”，此时访客回答直接用 `answer_guest_query` 的 Rich 内容（InputRichMessageContent）一次发出。
 ## 0.4.3 (2026-10-26)
 - 紧急修复：推理模型的“思考过程”被当作答案发进群里（GLM-5.3-Flash / Z.ai 始终开启推理，群里问空枪资源，Bot 发出截断的英文推理草稿 “The user is asking again whether "空枪" ... Let me organize the data into a table ...”，没有最终答案、没有表格、不是中文）。根因在平台：输出额度（插件默认最大输出 800 Token）被推理耗尽、content 为空时，旧版 TelePilot 用 reasoning_content 兜底正文；TelePilot 0.106.0-beta.2 起 `ctx.ai.complete` 只返回最终 content 并在没有最终答案时抛 `AIResponseTruncated`。
 - 插件侧防护（新旧平台都生效）：只用最终答案；答案若是推理草稿——以 “The user is asking / Okay, so / Let me think …” 等英文推理句开头、含未闭合的 `<think>`、或中文提问但答案以 “Let me / I should …” 开头或几乎全英文且像计划——一律不发送，改为重试一次：追加系统指令“直接输出给用户的最终中文回答，不要输出思考过程”，最大输出 Token 放宽到 max(配置×2, 2000)（上限 4000），平台 `ctx.ai.complete` 支持 `thinking` 参数时传 `thinking="disabled"`（智谱/Z.ai、DeepSeek、Qwen 等关闭思考；旧平台没有该参数时不传）。平台抛 `AIResponseTruncated`（输出被推理耗尽）时同样重试一次。
