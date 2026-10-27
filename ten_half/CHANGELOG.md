@@ -1,5 +1,8 @@
 # 更新日志
 
+## 0.4.22 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+
 ## 0.4.21 (2026-10-26)
 - 配置表单：每个玩家抓牌/操作限时（秒）（`timeout`）、大厅等待时间（秒）（`lobby_timeout`）、最大玩家数（`max_players`）、结算后自动清理消息时间（秒）（`settlement_cleanup_delay`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
 

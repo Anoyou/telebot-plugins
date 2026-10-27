@@ -81,3 +81,22 @@ TelePilot 远程插件仓库。
 
 - [插件开发指南](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-DEV-GUIDE.md)
 - [插件 API 完整参考](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-API-REFERENCE.md)
+
+### 版本要求与兼容性检查
+
+- `plugin.json` 与 `manifest.py` 的 `version`、`min_telepilot_version`、`permissions`、`config_schema` 等字段必须一致。
+- `min_telepilot_version` 要覆盖插件实际用到的能力。`manifest.py` 向 `Manifest(...)` 传 `requires_platform_capabilities`（新装/升级必填）时，最低版本不得低于 `0.72.0-beta.2`——更早的 TelePilot 导入 manifest 会直接 `TypeError`。用到 `send_rich`、`ctx.skills`、识图、`compact_tables` 等新能力时，要么提高最低版本，要么先用能力标记（如 `getattr(ctx.messages, "rich_table_compact", False)`）探测再调用。注意宿主比较版本只看 `x.y.z`，`-beta.N` 后缀不参与比较。
+- 用 TelePilot 主仓库的真实运行时检查全部插件（安装期校验、加载、manifest 一致性、权限、Host API 方法与参数、最低版本推断、`on_startup` 初始化）：
+
+  ```bash
+  git clone -b Beta https://github.com/Anoyou/Telebot.git ../Telebot
+  python -m pip install -e "../Telebot/backend[dev]"
+  TELEPILOT_REPO=../Telebot python scripts/check_host_compat.py          # 全部插件
+  TELEPILOT_REPO=../Telebot python scripts/check_host_compat.py --plugin sum --strict
+  TELEPILOT_REPO=../Telebot python -m pytest -q                           # 含 tests/test_host_compat.py
+  TELEPILOT_REPO=../Telebot python scripts/check_host_compat.py --plugins-root ../Telebot/examples/plugins  # 检查主仓库示例
+  ```
+
+  也可以把 `TELEPILOT_REPO` 指向主仓库任意历史版本的检出，验证插件在旧版 TelePilot 上能否加载。
+- CI（`.github/workflows/ci.yml`）在每次推送 / PR 和每天定时检出 `Anoyou/Telebot` 的 `Beta` 分支运行上述检查与全部 pytest，不需要任何密钥；手动运行时可指定其它分支或提交，报告作为 `host-compat-report` 工件上传。
+

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.38 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+
 ## 1.1.37 (2026-10-26)
 - 配置表单：触发指令名（`command`）、答题限时（秒）（`timeout`）、结束后自动下一轮（`auto_next`）、下一轮延迟（秒）（`next_delay`）、同一用户答题冷却（秒）（`guess_cooldown`）、开局消息模板（`round_message_template`）、进行中提示模板（`in_progress_message_template`）、答对结果模板（`success_message_template`）、超时结果模板（`timeout_message_template`）、强制结束结果模板（`cancel_message_template`）、奖励参数错误模板（`invalid_prize_message_template`）、奖励入账消息模板（`prize_message_template`）、回合结束后删除消息延迟（秒；0 表示不删除）（`delete_after_round`）、强制结束游戏参数（`force_stop_command`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
 

@@ -3,7 +3,7 @@
   "display_name": "死亡左轮",
   "description": "群聊俄罗斯轮盘游戏。创建游戏后群成员转账加入，轮流对自己或他人开枪，最终存活者赢得奖池。",
   "author": "Anoyou",
-  "version": "1.0.15",
+  "version": "1.0.16",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -136,7 +136,7 @@
       }
     }
   ],
-  "min_telepilot_version": "0.33.0",
+  "min_telepilot_version": "0.72.0-beta.2",
   "interaction_profile": "session_game",
   "usage": "管理员发送 {prefix}dr 门票金额创建死亡左轮大厅；玩家转账门槛金额自动报名，庄家发送配置的开局关键词开局。普通回复继承 TelePilot 当前会话通道；奖励和退款返回 `payout`，由 userbot 执行。事件订阅：管理员命令走 userbot；群内关键词、按钮和会话消息走 interaction_bot；付款确认来自 external_payment_notice/userbot，插件会二次校验收款人。",
   "event_subscriptions": [

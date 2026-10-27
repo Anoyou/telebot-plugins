@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.13"
+PLUGIN_VERSION = "0.1.14"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -256,7 +256,7 @@ MANIFEST = Manifest(
     key="ai-chat",
     display_name="AI-Chat",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.33.0",
+    min_telepilot_version="0.72.0-beta.2",
     min_telebot_version="0.10.2",
     author="Anoyou",
     description="调用 TelePilot AI Provider 的 AI-Chat 聊天与消息解释助手，支持私聊/群聊触发和短期上下文记忆。",

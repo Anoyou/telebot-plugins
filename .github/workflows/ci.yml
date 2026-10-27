@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      telepilot_ref:
+        description: "用于兼容性检查的 TelePilot 分支 / 标签 / 提交"
+        required: false
+        default: "Beta"
+  schedule:
+    # 每天北京时间 09:17 用最新 TelePilot Beta 复查一次，提前发现宿主改动导致的不兼容
+    - cron: "17 1 * * *"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: 插件测试与宿主兼容性（TelePilot ${{ github.event.inputs.telepilot_ref || 'Beta' }}）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # 仅供测试进程实例化配置模型，不连接任何服务、不是真实密钥
+      MASTER_KEY: "4QAy7kFzv2mkHRXTHwL_FEZABz0R3sqat5rBl4vDLXk="
+      JWT_SECRET: "telebot-plugins-ci-only"
+      TELEPILOT_REPO: ${{ github.workspace }}/telebot
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检出 TelePilot 主仓库
+        uses: actions/checkout@v4
+        with:
+          repository: Anoyou/Telebot
+          ref: ${{ github.event.inputs.telepilot_ref || 'Beta' }}
+          path: telebot
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: telebot/backend/pyproject.toml
+
+      - name: 安装 TelePilot 后端依赖
+        run: python -m pip install -e "telebot/backend[dev]"
+
+      - name: 宿主兼容性检查（全部插件）
+        run: python scripts/check_host_compat.py --json host-compat-report.json
+
+      - name: 插件测试（pytest 全量，含宿主兼容性用例）
+        run: python -m pytest -q --ignore=telebot
+
+      - name: 上传兼容性报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-compat-report
+          path: host-compat-report.json
+          if-no-files-found: ignore

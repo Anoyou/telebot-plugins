@@ -3,7 +3,7 @@
   "display_name": "话痨挑战",
   "description": "设定聊天规则，违反者自动扣分，全程被动监听",
   "author": "Anoyou",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -42,7 +42,7 @@
   "license": "MIT",
   "category": "automation",
   "interaction_entries": [],
-  "min_telepilot_version": "0.33.0",
+  "min_telepilot_version": "0.72.0-beta.2",
   "usage": "管理员发送 {prefix}{command} 创建话痨挑战，插件按当前聊天内成员发言统计规则自动记录和结算；配置页可调整触发指令名。事件订阅：管理员通过 userbot 命令启动挑战，挑战期间监听群消息并记录违规；结果消息由平台受控通道发送。",
   "event_subscriptions": [
     {

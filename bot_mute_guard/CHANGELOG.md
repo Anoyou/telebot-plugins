@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.13 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+
 ## 1.1.12 (2026-10-26)
 - 修复 inline Bot 白名单只按 `via_bot_id` 判断、导致已配置的 Bot username 无法命中的问题。
 - inline 消息现在优先按 Bot username 判断白名单；事件未携带 username 时，会通过平台受控实体解析补全，解析失败再回退到 Bot ID。无需为每个 Bot 额外查询数字 ID。

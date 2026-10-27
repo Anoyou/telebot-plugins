@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "1.4.8"
+PLUGIN_VERSION = "1.4.9"
 DEFAULT_COMMAND = "quickqa"
 DEFAULT_START_KEYWORD = "开始答题"
 DEFAULT_INITIAL_POINTS = 20
@@ -57,6 +57,7 @@ AI_SYSTEM_PROMPT = """你是 TelePilot 快问快答插件的题库整理助手�
 
 
 USAGE = '管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家点击大厅里的“加入游戏”参与；付费局通过转账报名。结束后按每位玩家积分余额生成发奖列表，并通过 `payout.reply_to_user_id` 由 userbot 定位玩家近期发言后自动发奖。'
+USAGE_GUIDE = "管理员在 TelePilot Web 配置页的题库管理里填入 URL，点击获取并整理为题库，确认列表后保存配置；游戏开局时由随机玩家按钮多选题库。门槛金额为 0 时玩家点击大厅里的“加入游戏”参与；付费局通过转账报名。每人默认 20 积分，答对加分、答错扣分，扣完出局；结束后按每位玩家积分余额生成发奖列表，可由 userbot 按玩家 Telegram ID 定位近期发言后自动发奖。"
 EVENT_SUBSCRIPTIONS = [
     {
         "events": ["payment_confirmed"],
@@ -84,7 +85,7 @@ CONFIG_SCHEMA = {
     "type": "object",
     "x-ui-mode": "single",
     "x-category": "interactive",
-    "x-usage-guide": USAGE,
+    "x-usage-guide": USAGE_GUIDE,
     "additionalProperties": False,
     "properties": {
         "command": {
@@ -449,7 +450,7 @@ MANIFEST = Manifest(
     key="quick_qa",
     display_name="快问快答",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.59.1",
+    min_telepilot_version="0.72.0-beta.2",
     author="Anoyou",
     description="支持 URL + AI 生成题库的转账报名三选一快问快答积分淘汰赛。",
     usage=USAGE,

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.8 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+
 ## 1.1.7 (2026-08-15)
 - 修复 TelePilot 0.97.0 常驻事件 MessageOps 不暴露 `send_photo` 时的结果图片发送失败，改由标准媒体 action 交给平台执行。
 

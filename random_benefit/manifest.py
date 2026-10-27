@@ -6,7 +6,7 @@ from app.worker.plugins.manifest import Manifest
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.5"
+PLUGIN_VERSION = "1.5.6"
 
 REPLY_TEMPLATE_DEFAULT = "+1-6666"
 TEMPLATE_PREVIEW_DEFAULT = "+1-6666"
@@ -140,12 +140,12 @@ MANIFEST = Manifest(
     key=PLUGIN_KEY,
     display_name="随机福利",
     version=PLUGIN_VERSION,
-    min_telepilot_version="0.33.0",
+    min_telepilot_version="0.72.0-beta.2",
     author="Anoyou",
     description="监听指定群组发言，随机引用某条消息回复自定义福利语",
     usage=USAGE,
     category="interactive",
-    permissions=["send_message", "read_chat"],
+    permissions=["send_message", "read_chat", "resolve_entity"],
     event_subscriptions=EVENT_SUBSCRIPTIONS,
     requires_platform_capabilities=[],
     capabilities=CAPABILITIES,
