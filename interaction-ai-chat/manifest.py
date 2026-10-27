@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.5"
+PLUGIN_VERSION = "0.4.6"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -736,6 +736,15 @@ CONFIG_SCHEMA = {
             "x-ui-section": _SECTION_PT,
             "x-ui-columns": 2,
             "x-ui-order": 93,
+        },
+        "pt_table_compact": {
+            "type": "boolean",
+            "title": "PT 结果使用紧凑表格",
+            "description": "PT 搜索结果表（标题、大小、发布时间）使用 Telegram Bot API 10.3 紧凑表格（单元格内边距更小，手机上一屏能看到更多行）。需要 TelePilot 0.106.0-beta.12+；更旧的平台或不支持紧凑表格的 Bot API 服务器会自动按普通表格发送，不会报错。关闭后保持原来的表格样式。",
+            "default": True,
+            "x-ui-section": _SECTION_PT,
+            "x-ui-columns": 2,
+            "x-ui-order": 94,
         },
         "skill_names": {
             "type": "array",

@@ -447,6 +447,8 @@ def _pt_cfg(raw: dict[str, Any]) -> dict[str, Any]:
         "site_names": _pt_site_names(raw.get("pt_site_name"), site),
         "allowed_chat_ids": _parse_ids(raw.get("pt_allowed_chat_ids")),
         "hide_categories": _pt_hide_words(raw.get("pt_hide_categories")),
+        # Bot API 10.3 紧凑表格；默认开启，平台不支持时自动按普通表格发送。
+        "table_compact": _bool(raw.get("pt_table_compact"), True),
     }
 
 
@@ -1021,7 +1023,7 @@ class _Reply:
     失败再用 ``segments``（Telegram HTML）；平台在 HTML 被拒时最后退回纯文本。
     """
 
-    __slots__ = ("segments", "error_key", "parse_mode", "rich")
+    __slots__ = ("segments", "error_key", "parse_mode", "rich", "compact_tables")
 
     def __init__(
         self,
@@ -1030,11 +1032,23 @@ class _Reply:
         error_key: str | None = None,
         parse_mode: str = "html",
         rich: str | None = None,
+        compact_tables: bool = False,
     ) -> None:
         self.segments = [item for item in segments if item]
         self.error_key = error_key
         self.parse_mode = parse_mode
         self.rich = rich or None
+        # Rich 正文里的表格是否请求平台改为紧凑表格（PT 搜索结果表，配置 pt_table_compact）。
+        self.compact_tables = compact_tables
+
+
+def rich_table_compact_supported(messages: Any) -> bool:
+    """平台是否支持 ``compact_tables``（TelePilot 0.106.0-beta.12+ 的 ``ctx.messages.rich_table_compact``）。
+
+    旧平台没有该能力标记，插件不加字段、按普通表格发送，不会报错。
+    """
+
+    return getattr(messages, "rich_table_compact", False) is True
 
 
 @register
@@ -1324,7 +1338,12 @@ class InteractionAIChatPlugin(Plugin):
                 skills=skills_used,
                 segments=len(segments),
             )
-        reply = _Reply(segments, parse_mode="html" if cfg["rich_text"] else "plain", rich=rich)
+        reply = _Reply(
+            segments,
+            parse_mode="html" if cfg["rich_text"] else "plain",
+            rich=rich,
+            compact_tables=bool(rich and pt_used and cfg["pt"]["table_compact"]),
+        )
         if cfg.get("protect_command_outputs", True):
             reply = await self._neutralize_reply(ctx, cfg, trigger, reply)
         return reply
@@ -1506,6 +1525,9 @@ class InteractionAIChatPlugin(Plugin):
                 action["reply_to_message_id"] = trigger.message_id
         else:
             return False
+        if reply.compact_tables and rich_table_compact_supported(messages):
+            # TelePilot 0.106.0-beta.12+：平台把表格改为 Bot API 10.3 紧凑表格，旧版 Bot API 拒绝时平台自动去掉重发。
+            action["compact_tables"] = True
         try:
             outcome = await apply([action])
         except Exception as exc:  # noqa: BLE001 - Rich 失败一律退回 HTML

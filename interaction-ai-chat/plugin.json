@@ -3,7 +3,7 @@
   "display_name": "AI 答疑（交互 Bot）",
   "description": "交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
   "author": "Anoyou",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "entry": "plugin.py",
   "min_telebot_version": "0.10.2",
   "min_telepilot_version": "0.105.0-beta.1",
@@ -796,6 +796,15 @@
         "x-ui-section": "PT 站点数据源",
         "x-ui-columns": 2,
         "x-ui-order": 93
+      },
+      "pt_table_compact": {
+        "type": "boolean",
+        "title": "PT 结果使用紧凑表格",
+        "description": "PT 搜索结果表（标题、大小、发布时间）使用 Telegram Bot API 10.3 紧凑表格（单元格内边距更小，手机上一屏能看到更多行）。需要 TelePilot 0.106.0-beta.12+；更旧的平台或不支持紧凑表格的 Bot API 服务器会自动按普通表格发送，不会报错。关闭后保持原来的表格样式。",
+        "default": true,
+        "x-ui-section": "PT 站点数据源",
+        "x-ui-columns": 2,
+        "x-ui-order": 94
       },
       "skill_names": {
         "type": "array",
