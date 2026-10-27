@@ -7,8 +7,8 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="math10",
     display_name="随机算数题",
-    version="1.0.13",
-    min_telepilot_version="0.33.0",
+    version="1.0.14",
+    min_telepilot_version="0.72.0-beta.2",
     author="TelePilot Official",
     description="由交互 Bot 开启一局 10 以内算数题，群内第一个答对者获得奖金",
     usage='随机算数题主要由交互中心规则启动：群友通过关键词或付款触发后抢答。普通回复继承 TelePilot 当前会话通道；答对发奖返回 `payout`，由 userbot 执行；结算说明写入 settlement/Trace。',
@@ -78,7 +78,7 @@ MANIFEST = Manifest(
     config_schema={
         "type": "object",
         "x-ui-mode": "single",
-        "x-usage-guide": "随机算数题主要由交互规则启动：在交互中心选择“随机算数题”入口，配置群内关键词或付款触发后，交互 Bot 负责高频答题交互，普通回复继承当前会话通道，答对发奖由 payout/userbot 链路承接。",
+        "x-usage-guide": "随机算数题主要由交互规则启动：在交互中心选择“随机算数题”入口，配置群内关键词或付款触发后，交互 Bot 负责高频答题交互，奖金和结算说明由平台 payout/settlement 链路承接。",
         "additionalProperties": False,
         "properties": {},
     },

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.37 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+
 ## 1.1.36 (2026-10-26)
 - 配置表单：触发指令名（`command`）、默认总结消息数（`default_count`）、单次最多读取消息数（`max_fetch_count`）、结果输出模板（`message_template`）、默认总结提示词（`default_prompt`）、默认折叠显示（`default_spoiler`）、AI 请求超时（秒）（`timeout_seconds`）、回复模式（`reply_mode`）、最大输出字符数（`max_output_length`）、定时总结默认推送目标（`default_push_target`）、定时总结任务 JSON（可选）（`scheduled_tasks_json`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
 

@@ -1,5 +1,8 @@
 # 更新日志
 
+## 0.1.9 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+
 ## 0.1.8 (2026-10-26)
 - 配置表单：文生图命令（`command`）、图片编辑命令（`edit_command`）、管理命令（`admin_command`）、默认图片模型（`default_model`）、默认生成张数（`default_count`）、单次最多张数（`max_count`）、请求超时（秒）（`timeout`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
 

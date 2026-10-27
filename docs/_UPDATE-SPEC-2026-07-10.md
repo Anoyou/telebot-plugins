@@ -19,7 +19,7 @@
 - `plugin.json.event_subscriptions` == `MANIFEST.event_subscriptions`（逐项相等）。
 - `plugin.json.capabilities` == `MANIFEST.capabilities`（没有高风险能力也要显式写 `{}`）。
 - `usage` 存在（顶层 `usage` 或 `config_schema["x-usage-guide"]` 之一非空）。
-- `min_telepilot_version` 存在（缺失补 `"0.33.0"`，manifest 同步）。
+- `min_telepilot_version` 存在（manifest 同步）。2026-10-28 起最低基线为 `0.72.0-beta.2`（manifest 传 `requires_platform_capabilities` 的插件在更早版本导入即失败），以 `scripts/check_host_compat.py` 的推断为准。
 - 全目录无废弃 token：`bbot_notice`、`notice_bot`、`raw_event`（*.py/*.json/*.md 都查）。
 - `result_contract.send_via` 不含旧 notice 值（`notice`/`bbot_notice`/`notice_bot`）。
 - 帮助/用法文案里写死的命令前缀（如 `,guess`）改成 `{prefix}` 模板占位（仅文案，不改解析逻辑）。

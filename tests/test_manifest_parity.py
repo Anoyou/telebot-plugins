@@ -26,6 +26,7 @@ CANONICAL_ACTION_TYPES = frozenset(
         "click_callback_button",
         "answer_callback",
         "answer_inline_query",
+        "answer_guest_query",
         "payout",
         "update_session",
         "start_session",

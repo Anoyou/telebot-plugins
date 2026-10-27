@@ -3,7 +3,7 @@
   "display_name": "十点半",
   "description": "经典十点半纸牌游戏，支持多人对战、加倍、五小等规则",
   "author": "Anoyou",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -101,7 +101,7 @@
   "license": "MIT",
   "category": "interactive",
   "interaction_profile": "session_game",
-  "min_telepilot_version": "0.33.0",
+  "min_telepilot_version": "0.72.0-beta.2",
   "interaction_entries": [
     {
       "key": "start_ten_half",

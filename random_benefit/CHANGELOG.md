@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.5.6 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+- 补声明 `resolve_entity` 权限：判断发言者是否为 Bot 时需要读取用户实体，之前未声明会被 TelePilot 沙箱拒绝、只能退回消息字段判断。
+
 ## 1.5.5 (2026-10-26)
 - 配置表单：开启指令名（`start_command`）、暂停指令名（`stop_command`）、状态指令名（`status_command`）、目标群组（`allowed_chat_ids`）、随机回复语（`reply_template`）、随机回复概率（`trigger_probability`）、全群回复冷却（秒）（`chat_cooldown_seconds`）、同一用户回复冷却（秒）（`user_cooldown_seconds`）、选中群组默认开启（`default_enabled`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
 

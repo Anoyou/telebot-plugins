@@ -1,5 +1,9 @@
 # 更新日志
 
+## 1.4.9 (2026-10-28)
+- 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
+- `manifest.py` 的配置使用说明（`x-usage-guide`）与 `plugin.json` 不一致，统一为 `plugin.json` 的文案。
+
 ## 1.4.8 (2026-10-26)
 - 配置表单：触发指令名（`command`）、默认门槛金额（`entry_fee`）、初始积分（`initial_points`）、答对加分（`correct_points`）、答错扣分（`wrong_points`）、最低开局人数（`min_players`）、最高报名人数（`max_players`）、每局最多题数（`max_questions_per_game`）、每题限时（秒）（`question_timeout_seconds`）、题库选择限时（秒）（`selection_timeout_seconds`）、可发奖金比例（`reward_ratio`）、结算模式（`payout_mode`）、开局关键词（`start_keyword`）、题库来源域名白名单（可选）（`allowed_source_hosts`）、单个 URL 生成题数（`ai_question_count`）、AI 请求超时（秒）（`ai_timeout_seconds`）、网页正文最大字符数（`max_source_chars`）、题库生成系统提示词（`question_generation_prompt`）、题库（`knowledge_bases`）已有默认值，从 `required` 中移除，不再被 App 标成「必填」；留空或不填时运行时仍按默认值处理，不改变任何业务逻辑。
 

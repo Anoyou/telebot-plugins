@@ -145,7 +145,11 @@ async def main():
 
 asyncio.run(main())
 """
-    backend = Path(sys.prefix).resolve().parent
+    backend = (
+        Path(os.environ["TELEPILOT_REPO"]) / "backend"
+        if os.environ.get("TELEPILOT_REPO")
+        else Path(sys.prefix).resolve().parent
+    )
     assert (backend / "app/worker/plugins/loader.py").is_file()
     env = dict(os.environ)
     env["PYTHONPATH"] = str(backend)

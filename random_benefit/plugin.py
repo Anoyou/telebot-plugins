@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - isolated unit-test stubs
 
 
 PLUGIN_KEY = "random_benefit"
-PLUGIN_VERSION = "1.5.5"
+PLUGIN_VERSION = "1.5.6"
 
 DEFAULT_START_COMMAND = "福利开启"
 DEFAULT_STOP_COMMAND = "福利暂停"
