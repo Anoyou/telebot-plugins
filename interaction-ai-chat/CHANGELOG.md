@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.4.7 (2026-10-28)
+- 模型调用失败时在失败消息下附两个 inline 按钮：「🔄 重试」（本次提问者或管理员可点）与「🔀 换模型重试」（仅管理员可点）。会出按钮的失败：供应商报错 / 平台回退全部失败、处理超时、模型返回为空、只有推理没有最终答案（`error_ai_template` / `error_timeout_template` / `error_empty_template` / `error_no_answer_template`）。不出按钮：供应商内容审核拒答（content_filter、data_inspection_failed、内容安全等，重放也会被拒）、输出护栏拦截、每日限额、无权限、提问过长、只发图且读图失败。
+- 「重试」：点击后失败消息先改为“🔄 正在重试…”，再按保存的原请求重放——原问题全文、引用/被回复内容、图片 file_id、提问当时的记忆快照、原 Provider/模型与联网/识图设置、发起人、会话与原消息 ID 都存在 token 映射的记录里，不靠模型猜“要重试什么”；成功则在原消息位置给出答案（Rich Message 优先），再次失败则重新显示两个按钮。
+- 「换模型重试」：按钮替换为可选模型列表（每页 6 个，可翻页，最后一行“✖ 取消”回到两个按钮），选中后只这一次使用该模型、不改插件配置；之后再点“重试”仍用原模型。列表来自 `ctx.ai.list_providers()`：有 API Key 的文本 Provider 里已启用的模型（TelePilot 0.106.0-beta.13+ 才提供启用状态；更旧的平台只列各 Provider 的默认模型），排除刚失败的模型（固定模型时）。
+- 管理员判定：插件配置的新项「重试管理员用户 ID」`retry_admin_user_ids` ∪ TelePilot 管理员（账号本人 + 已授权 sudo 用户，取自平台 payload 的 `owner_user_ids` / `admin_user_ids`，交互 Bot Event Bus 投递需 TelePilot 0.106.0-beta.13+）∪ 本群管理员（`ctx.identities.resolve(...).is_admin`，平台经 UserBot 成员权限 / 管理员目录确认，失败时回退交互 Bot getChatMember；查询失败按非管理员处理）。无权限点击用 callback 提示（“只有提问者或管理员可以重试”“只有管理员可以换模型重试”）且不执行。
+- 防重复：同一条失败消息同时只允许一个进行中的重试（进程内集合 + `ctx.storage` 计数锁，跨 worker 生效），重复点击提示“正在重试，请稍候…”。callback 数据形如 `iac:r:<12 位 token>`（最长约 24 字节，≤64），记录保存 30 分钟，过期或不存在时提示“这条重试已过期，请重新提问。”；callback 先实时 ACK，消除按钮转圈。
+- 根因修复（对失败消息回复“重试”没反应 / 模型不知道重试什么）：0.4.6 及以前失败分支直接返回，只有成功才写短期记忆，失败那一问不进记忆；群里回复 Bot 消息时插件又按“Bot 上一条回答已在记忆里”清空了引用内容（私聊引用的则是失败提示文本），于是模型只收到“重试”二字。现在失败那一轮照常记入问题、助手回答记为失败标记“（这一轮 AI 调用失败，没有给出回答）”；回复失败消息“重试 / 再试一次 / 重新回答 / retry”等（私聊可直接发）被识别为针对该失败问题的重试，按保存的原请求重放（权限同按钮：提问者或管理员），找不到可关联的失败提问时明确提示“没有找到可以重试的失败提问……请重新发送你的问题”，不再把“重试”当新问题交给模型。重试成功后记忆里该问题只保留一份，失败标记原地替换为成功回答，不重复写入问题。
+- 新配置项「失败时显示重试按钮」`retry_buttons_enabled`（回复与记忆分组，默认开启）；关闭后不显示按钮，回复“重试”仍可用。新增 Event Bus 订阅 `callback_query`（交互 Bot，all_allowed_chats，只处理 `iac:` 前缀，其它插件的按钮直接忽略）。
+- 访客模式不附按钮：访客回复是 inline 消息，按钮回调回到 Bot 时只有 inline_message_id、没有 chat/message，TelePilot 不投递这类回调（平台也会剥掉访客回复里的 callback 按钮）；访客模式可回复/再次 @Bot 发“重试”重放。
+- 兼容性：`min_telepilot_version` 保持 0.105.0-beta.1（按钮、`answer_callback`、`edit_message.reply_markup`、`ctx.identities` 旧平台都有）；TelePilot 0.106.0-beta.13+ 额外提供 TelePilot 管理员识别与模型启用状态，旧平台自动降级（管理员只认群管理员与插件配置，模型列表只列默认模型）。
 ## 0.4.6 (2026-10-28)
 - PT 搜索结果表（标题、大小、发布时间）默认使用 Telegram Bot API 10.3 紧凑表格（`is_compact` / `<table compact>`，单元格内边距更小，手机上一屏能看到更多行）。新配置项「PT 结果使用紧凑表格」`pt_table_compact`（PT 站点数据源分组，默认开启）；关闭后与 0.4.5 输出完全一致。
 - 只有本轮回答用了 PT 搜索结果且走原生 Rich Message 时才请求紧凑表格：插件给 Rich 动作（`send_rich_message` / `edit_message.rich_message`，含访客模式 inline 编辑与 `answer_guest_query`）加 `compact_tables: true`，由平台把 Markdown 表格转成 `<table compact>`；普通问答的表格不受影响。

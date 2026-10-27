@@ -52,6 +52,7 @@ try:
         split_html,
     )
     from . import pt_source as ptsrc
+    from . import retry as rty
     from . import wiki_source as wikisrc
 except ImportError:  # pragma: no cover - loaded as a flat module
     from manifest import DEFAULT_SYSTEM_PROMPT, DEFAULT_TEMPLATES, PLUGIN_KEY  # type: ignore[no-redef]
@@ -69,6 +70,7 @@ except ImportError:  # pragma: no cover - loaded as a flat module
         split_html,
     )
     import pt_source as ptsrc  # type: ignore[no-redef]
+    import retry as rty  # type: ignore[no-redef]
     import wiki_source as wikisrc  # type: ignore[no-redef]
 
 TELEGRAM_TEXT_LIMIT = 4096
@@ -92,6 +94,34 @@ MAX_IMAGES = 2
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_SOURCES = 5
 IMAGE_ONLY_QUESTION = "请描述并解读这张图片。"
+
+# -- 失败重试（0.4.7）-------------------------------------------------------
+# 只有“模型调用失败”才可重试：供应商报错/全部回退失败、超时、返回为空、只有推理没有最终答案。
+# 内容审核拒答（供应商 content_filter 等）、护栏拦截、限额、无权限、提问过长、读图失败都不算，不附按钮。
+RETRYABLE_ERROR_KEYS = frozenset(
+    {
+        "error_ai_template",
+        "error_timeout_template",
+        "error_empty_template",
+        "error_no_answer_template",
+    }
+)
+# 失败那一轮写进短期记忆的助手占位：问题照常记入，助手回答记为失败标记（不是正常回答）；重试成功后原地替换成答案。
+FAILED_TURN_MARK = "（这一轮 AI 调用失败，没有给出回答）"
+RETRY_RUNNING_TEXT = "🔄 正在重试…"
+RETRY_RUNNING_MODEL_TEXT = "🔄 正在用 {model} 重试…"
+RETRY_EXPIRED_TEXT = "这条重试已过期，请重新提问。"
+RETRY_BUSY_TEXT = "正在重试，请稍候…"
+RETRY_STARTED_TEXT = "开始重试"
+RETRY_DENY_TEXT = "只有提问者或管理员可以重试。"
+RETRY_ADMIN_ONLY_TEXT = "只有管理员可以换模型重试。"
+RETRY_NO_MODELS_TEXT = "没有其它可用的模型可以切换。"
+RETRY_MODELS_CHANGED_TEXT = "模型列表已变化，请重新点“换模型重试”。"
+RETRY_INVALID_TEXT = "这个按钮已失效，请重新提问。"
+RETRY_MENU_HINT = "<i>选择本次重试使用的模型（只影响这一次，不改插件配置）：</i>"
+RETRY_DONE_SUFFIX = "<i>（已重新回答）</i>"
+RETRY_NOT_FOUND_TEXT = "没有找到可以重试的失败提问（可能已超过 30 分钟），请重新发送你的问题。"
+IDENTITY_TIMEOUT_SECONDS = 6.0
 
 MODE_ALL = "all"
 MODE_WHITELIST = "whitelist"
@@ -397,6 +427,8 @@ def _cfg(ctx: Any) -> dict[str, Any]:
         "pt": _pt_cfg(raw),
         "skills": _skills_cfg(raw),
         "wiki": {"base": wikisrc.normalize_base(raw.get("wiki_base_url"))},
+        "retry_buttons_enabled": _bool(raw.get("retry_buttons_enabled"), True),
+        "retry_admin_user_ids": _parse_ids(raw.get("retry_admin_user_ids")),
     }
 
 
@@ -657,6 +689,25 @@ def _message_id(payload: dict[str, Any]) -> int | None:
 
 def _reply_to(payload: dict[str, Any]) -> dict[str, Any]:
     return _dict(payload.get("reply_to"))
+
+
+def _thread_id(payload: dict[str, Any]) -> int | None:
+    message = _dict(payload.get("message"))
+    return _int_or_none(message.get("message_thread_id") or payload.get("message_thread_id"))
+
+
+def _payload_admin_ids(payload: dict[str, Any]) -> set[int]:
+    """平台 payload 里的 TelePilot 管理员（账号本人 + sudo，0.106.0-beta.13+ 的 Event Bus 投递才有）。"""
+
+    ids: set[int] = set()
+    for key in ("owner_user_ids", "admin_user_ids"):
+        raw = payload.get(key)
+        if isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                value = _int_or_none(item)
+                if value is not None:
+                    ids.add(value)
+    return ids
 
 
 def _reply_to_username(reply: dict[str, Any]) -> str:
@@ -996,6 +1047,9 @@ class _Trigger:
         "guest_query_id",
         "reply_text",
         "image_file_ids",
+        "reply_message_id",
+        "thread_id",
+        "admin_ids",
     )
 
     def __init__(self, **kwargs: Any) -> None:
@@ -1003,6 +1057,8 @@ class _Trigger:
             setattr(self, key, kwargs.get(key))
         if self.image_file_ids is None:
             self.image_file_ids = []
+        if self.admin_ids is None:
+            self.admin_ids = set()
 
 
 class _Placeholder:
@@ -1023,7 +1079,7 @@ class _Reply:
     失败再用 ``segments``（Telegram HTML）；平台在 HTML 被拒时最后退回纯文本。
     """
 
-    __slots__ = ("segments", "error_key", "parse_mode", "rich", "compact_tables")
+    __slots__ = ("segments", "error_key", "parse_mode", "rich", "compact_tables", "retry", "extra_actions")
 
     def __init__(
         self,
@@ -1040,6 +1096,10 @@ class _Reply:
         self.rich = rich or None
         # Rich 正文里的表格是否请求平台改为紧凑表格（PT 搜索结果表，配置 pt_table_compact）。
         self.compact_tables = compact_tables
+        # 可重试的模型调用失败：保存的原请求（token 映射的记录），投递时附重试按钮。
+        self.retry: dict[str, Any] | None = None
+        # 主回复之外附带的动作（例如回复“重试”后去掉旧失败消息上的按钮）。
+        self.extra_actions: list[dict[str, Any]] = []
 
 
 def rich_table_compact_supported(messages: Any) -> bool:
@@ -1065,6 +1125,8 @@ class InteractionAIChatPlugin(Plugin):
             pass
         self._local_store = _LocalStore()
         self._locks: dict[str, asyncio.Lock] = {}
+        # 进行中的重试 token（进程内防重复点击；跨 worker 另有 ctx.storage 计数锁）。
+        self._retry_running: set[str] = set()
         self._privacy_warned: set[str] = set()
         self._wiki_cache = wikisrc.WikiCache()
         self._once_logged: set[str] = set()
@@ -1078,6 +1140,7 @@ class InteractionAIChatPlugin(Plugin):
 
         self._local_store = _LocalStore()
         self._locks.clear()
+        self._retry_running.clear()
         self._pt_users.clear()
         self._pt_titles.clear()
 
@@ -1086,6 +1149,8 @@ class InteractionAIChatPlugin(Plugin):
     async def on_event(self, ctx: PluginContext, payload: dict[str, Any]) -> list[dict[str, Any]]:
         payload = payload if isinstance(payload, dict) else {}
         cfg = _cfg(ctx)
+        if _event_type(payload) == "callback_query":
+            return await self._on_callback(ctx, cfg, payload)
         await self._warn_privacy_mode(ctx, cfg, payload)
         trigger, skip_reason = self._resolve_trigger(cfg, payload)
         if trigger is None:
@@ -1100,9 +1165,13 @@ class InteractionAIChatPlugin(Plugin):
             reply = _Reply([render_named(cfg, "error_ai_template", trigger, reason="服务不可用")], error_key="error_ai_template")
         placeholder = sent[0] if sent else None
         if reply.rich and await self._deliver_rich(ctx, trigger, reply, placeholder):
-            return []
+            return list(reply.extra_actions)
+        if reply.retry is not None:
+            delivered = await self._deliver_failure(ctx, cfg, trigger, reply, placeholder)
+            if delivered is not None:
+                return delivered + list(reply.extra_actions)
         # 占位一旦发出，任何结果（含异常）都编辑这条占位，不留孤零零的 🤔。
-        return self._reply_actions(cfg, trigger, reply, placeholder)
+        return self._reply_actions(cfg, trigger, reply, placeholder) + list(reply.extra_actions)
 
     # -- 触发判定 -----------------------------------------------------------
 
@@ -1123,6 +1192,9 @@ class InteractionAIChatPlugin(Plugin):
             "display_name": _sender_name(payload),
             "message_id": _message_id(payload),
             "image_file_ids": _image_file_ids(payload) if cfg["enable_vision"] else [],
+            "reply_message_id": _int_or_none(reply.get("message_id")),
+            "thread_id": _thread_id(payload),
+            "admin_ids": _payload_admin_ids(payload),
         }
 
         if event_type == "guest_message":
@@ -1232,6 +1304,9 @@ class InteractionAIChatPlugin(Plugin):
         # / 指令（/start、/rules 等）留给交互 Bot 的其它功能处理，本插件不回答也不计费。
         if text.startswith("/") and text.casefold() not in RESET_WORDS:
             return _Reply([])
+        if not trigger.image_file_ids and rty.is_retry_text(text):
+            # 回复失败消息“重试/再试一次”：按保存的原请求重放，不把“重试”二字当成新问题交给模型。
+            return await self._handle_text_retry(ctx, cfg, trigger, sent, started)
         if not text and not trigger.image_file_ids:
             return _Reply([render_named(cfg, "help_template", trigger)])
 
@@ -1254,55 +1329,121 @@ class InteractionAIChatPlugin(Plugin):
             sent.append(placeholder)
         lock = self._lock_for(mem_key)
         async with lock:
-            notices: list[str] = []
-            images = await self._load_images(ctx, cfg, trigger, notices)
-            if not text and not images:
-                await self._refund_quota(store, reserved)
-                return _Reply([render_named(cfg, "vision_unavailable_template", trigger)], error_key="vision_unavailable_template")
-            question = text or IMAGE_ONLY_QUESTION
             history = await self._load_history(store, cfg, mem_key)
-            user_prompt = build_user_prompt(question, history, trigger.reply_text or "", has_images=bool(images))
-            system_prompt = build_system_prompt(cfg)
-            deadline = started + cfg["timeout_seconds"]
-            bundled = await self._bundled_skills(ctx)
-            # 已安装 skills 的选择与 Wiki 页面选择互不依赖，并行进行以缩短等待。
-            (system_prompt, skills_used), wiki_pages = await asyncio.gather(
-                self._apply_skills(ctx, cfg, trigger, question, history, system_prompt, deadline, bundled),
-                self._wiki_context(ctx, cfg, trigger, question, history, deadline, bundled),
-            )
-            if wiki_pages:
-                skills_used.append(WIKI_SKILL_NAME)
-                user_prompt = f"{format_wiki_for_model(wiki_pages)}\n\n{user_prompt}"
-                guidance = wikisrc.skill_guidance(bundled.get(WIKI_SKILL_NAME, ""))
-                system_prompt = f"{system_prompt}\n\n{WIKI_GUIDANCE}" + (f"\n{guidance}" if guidance else "")
-            pt_used = False
-            pt_allowed, pt_reason = self._pt_permitted(cfg, trigger)
-            if pt_allowed:
-                system_prompt = f"{system_prompt}\n\n{pt_capability_prompt(self._pt_names(cfg))}"
-                pt_block = await self._pt_context(ctx, cfg, trigger, question, history, notices, deadline)
-                if pt_block:
-                    pt_used = True
-                    user_prompt = f"{pt_block}\n\n{user_prompt}"
-                    system_prompt = f"{system_prompt}\n\n{PT_GUIDANCE}"
-            elif pt_reason:
-                blocked = await self._pt_blocked_guidance(ctx, cfg, trigger, question, history, notices, deadline, pt_reason)
-                if blocked:
-                    system_prompt = f"{system_prompt}\n\n{blocked}"
-            try:
-                result = await self._call_for_final_answer(ctx, cfg, trigger, system_prompt, user_prompt, images, notices, deadline, question)
-            except _NoFinalAnswer as exc:
-                await self._refund_quota(store, reserved)
-                await _log(ctx, "info", f"AI 答疑未回答：模型没有给出最终答案（{exc}）", kind=trigger.kind)
-                return _Reply([render_named(cfg, "error_no_answer_template", trigger)], error_key="error_no_answer_template")
-            except asyncio.TimeoutError:
-                await self._refund_quota(store, reserved)
-                await _log(ctx, "warning", "AI 答疑请求超时", timeout_seconds=cfg["timeout_seconds"], kind=trigger.kind)
-                return _Reply([render_named(cfg, "error_timeout_template", trigger, timeout=cfg["timeout_seconds"])], error_key="error_timeout_template")
-            except Exception as exc:  # noqa: BLE001
-                await self._refund_quota(store, reserved)
-                await _log(ctx, "warning", f"AI 答疑调用失败：{_describe_ai_error(exc)}", kind=trigger.kind)
-                return _Reply([render_named(cfg, "error_ai_template", trigger, reason=_short_reason(exc))], error_key="error_ai_template")
+            request = self._build_request(cfg, trigger, history, mem_key)
+            return await self._answer_locked(ctx, cfg, trigger, request, store, reserved, started, replay=False)
 
+    def _build_request(self, cfg: dict[str, Any], trigger: _Trigger, history: list[list[str]], mem_key: str) -> dict[str, Any]:
+        """完整保存一次提问的原请求：失败后重试按它重放，不把“重试”当作新问题交给模型。"""
+
+        return {
+            "v": 1,
+            "token": "",
+            "created": time.time(),
+            "kind": trigger.kind,
+            "chat_id": trigger.chat_id,
+            "chat_type": trigger.chat_type,
+            "thread_id": trigger.thread_id,
+            "user_id": trigger.user_id,
+            "display_name": trigger.display_name or "",
+            "message_id": trigger.message_id,
+            "text": trigger.text or "",
+            "reply_text": trigger.reply_text or "",
+            "image_file_ids": list(trigger.image_file_ids or []),
+            "history": [list(item) for item in history],
+            "mem_key": mem_key,
+            # 原模型：提问时插件配置的固定 Provider/模型（留空表示平台自动路由）。
+            "provider": cfg["telepilot_provider"],
+            "model": cfg["telepilot_model"],
+            "max_tokens": cfg["max_tokens"],
+            "web_search": bool(cfg["enable_web_search"]),
+            "vision": bool(cfg["enable_vision"]),
+            "error_key": "",
+            "failed_provider": "",
+            "failed_model": "",
+            "failure_html": "",
+            "failure_parse_mode": "html",
+            "failure_chat_id": None,
+            "failure_message_id": None,
+            "models": [],
+            "attempts": 0,
+        }
+
+    async def _answer_locked(
+        self,
+        ctx: Any,
+        cfg: dict[str, Any],
+        trigger: _Trigger,
+        request: dict[str, Any],
+        store: Any,
+        reserved: list[str],
+        started: float,
+        *,
+        replay: bool,
+    ) -> _Reply:
+        """在会话记忆锁内回答一次请求（首次提问或按保存的原请求重放）。
+
+        ``request["history"]`` 是提问当时的记忆快照：重放时模型看到的上下文与第一次完全一致，
+        而记忆写入按当前记忆进行（首次失败记“问题 + 失败标记”，重试成功把失败标记原地替换为答案）。
+        """
+
+        mem_key = str(request.get("mem_key") or self._memory_key(trigger.chat_id, trigger.user_id))
+        text = str(request.get("text") or "")
+        history = [list(item) for item in (request.get("history") or []) if isinstance(item, (list, tuple)) and len(item) == 2]
+        notices: list[str] = []
+        images = await self._load_images(ctx, cfg, trigger, notices)
+        if not text and not images:
+            await self._refund_quota(store, reserved)
+            return _Reply([render_named(cfg, "vision_unavailable_template", trigger)], error_key="vision_unavailable_template")
+        question = text or IMAGE_ONLY_QUESTION
+        user_prompt = build_user_prompt(question, history, str(request.get("reply_text") or ""), has_images=bool(images))
+        system_prompt = build_system_prompt(cfg)
+        deadline = started + cfg["timeout_seconds"]
+        bundled = await self._bundled_skills(ctx)
+        # 已安装 skills 的选择与 Wiki 页面选择互不依赖，并行进行以缩短等待。
+        (system_prompt, skills_used), wiki_pages = await asyncio.gather(
+            self._apply_skills(ctx, cfg, trigger, question, history, system_prompt, deadline, bundled),
+            self._wiki_context(ctx, cfg, trigger, question, history, deadline, bundled),
+        )
+        if wiki_pages:
+            skills_used.append(WIKI_SKILL_NAME)
+            user_prompt = f"{format_wiki_for_model(wiki_pages)}\n\n{user_prompt}"
+            guidance = wikisrc.skill_guidance(bundled.get(WIKI_SKILL_NAME, ""))
+            system_prompt = f"{system_prompt}\n\n{WIKI_GUIDANCE}" + (f"\n{guidance}" if guidance else "")
+        pt_used = False
+        pt_allowed, pt_reason = self._pt_permitted(cfg, trigger)
+        if pt_allowed:
+            system_prompt = f"{system_prompt}\n\n{pt_capability_prompt(self._pt_names(cfg))}"
+            pt_block = await self._pt_context(ctx, cfg, trigger, question, history, notices, deadline)
+            if pt_block:
+                pt_used = True
+                user_prompt = f"{pt_block}\n\n{user_prompt}"
+                system_prompt = f"{system_prompt}\n\n{PT_GUIDANCE}"
+        elif pt_reason:
+            blocked = await self._pt_blocked_guidance(ctx, cfg, trigger, question, history, notices, deadline, pt_reason)
+            if blocked:
+                system_prompt = f"{system_prompt}\n\n{blocked}"
+        failure: tuple[str, dict[str, Any]] | None = None
+        result: Any = None
+        try:
+            result = await self._call_for_final_answer(ctx, cfg, trigger, system_prompt, user_prompt, images, notices, deadline, question)
+        except _NoFinalAnswer as exc:
+            await _log(ctx, "info", f"AI 答疑未回答：模型没有给出最终答案（{exc}）", kind=trigger.kind, replay=replay)
+            failure = ("error_no_answer_template", {})
+        except asyncio.TimeoutError:
+            await _log(ctx, "warning", "AI 答疑请求超时", timeout_seconds=cfg["timeout_seconds"], kind=trigger.kind, replay=replay)
+            failure = ("error_timeout_template", {"timeout": cfg["timeout_seconds"]})
+        except Exception as exc:  # noqa: BLE001
+            await _log(ctx, "warning", f"AI 答疑调用失败：{_describe_ai_error(exc)}", kind=trigger.kind, replay=replay)
+            if rty.is_moderation_error(exc):
+                # 供应商内容审核拒答：同样的问题重放也会被拒，不是调用失败，不记失败轮次、不附重试按钮。
+                await self._refund_quota(store, reserved)
+                return _Reply([render_named(cfg, "error_ai_template", trigger, reason="内容未通过审核")], error_key="error_ai_template")
+            failure = ("error_ai_template", {"reason": _short_reason(exc)})
+
+        answer = ""
+        sources: Any = None
+        if failure is None:
             answer = _result_text(result, cfg)
             sources = getattr(result, "sources", None)
             if wiki_pages:
@@ -1314,30 +1455,41 @@ class InteractionAIChatPlugin(Plugin):
                 # 第二重脱敏：发给用户（以及写入记忆）前再过滤一次。
                 answer, sources = await self._pt_sanitize_output(ctx, cfg, trigger, answer, sources)
             if not answer:
-                await self._refund_quota(store, reserved)
-                return _Reply([render_named(cfg, "error_empty_template", trigger)], error_key="error_empty_template")
-            guarded = self._guarded_reply(ctx, cfg, trigger, answer)
-            if guarded is not None:
-                guarded_reply, reason, line = guarded
-                await _log(ctx, "info", "已拦截 AI 答疑可执行指令形态输出", reason=reason, line_preview=line[:20], kind=trigger.kind)
-                return guarded_reply
-            answer = truncate(answer, cfg["max_output_chars"])
-            await self._save_history(store, cfg, mem_key, history, question, answer)
-            segments = self._format_answer(cfg, trigger, answer, result, notices, sources=sources)
-            rich = self._format_rich(cfg, trigger, answer, result, notices, sources=sources) if cfg["rich_text"] else None
-            await _log(
-                ctx,
-                "info",
-                "AI 答疑已回答",
-                kind=trigger.kind,
-                latency_ms=int((time.monotonic() - started) * 1000),
-                images=len(images),
-                web_search=bool(cfg["enable_web_search"]),
-                pt_search=pt_used,
-                wiki_pages=[page["path"] for page in wiki_pages],
-                skills=skills_used,
-                segments=len(segments),
-            )
+                failure = ("error_empty_template", {})
+        if failure is not None:
+            await self._refund_quota(store, reserved)
+            error_key, extra = failure
+            # 根因修复：失败的这一轮也写进记忆（问题 + 失败标记），之后的追问/重试都知道上一问是什么。
+            await self._record_turn(store, cfg, mem_key, history, question, FAILED_TURN_MARK, replay=replay)
+            failed = _Reply([render_named(cfg, error_key, trigger, **extra)], error_key=error_key)
+            request["error_key"] = error_key
+            request["failed_provider"] = cfg["telepilot_provider"]
+            request["failed_model"] = cfg["telepilot_model"]
+            request["attempts"] = int(request.get("attempts") or 0) + 1
+            failed.retry = request
+            return failed
+        guarded = self._guarded_reply(ctx, cfg, trigger, answer)
+        if guarded is not None:
+            guarded_reply, reason, line = guarded
+            await _log(ctx, "info", "已拦截 AI 答疑可执行指令形态输出", reason=reason, line_preview=line[:20], kind=trigger.kind)
+            return guarded_reply
+        answer = truncate(answer, cfg["max_output_chars"])
+        await self._record_turn(store, cfg, mem_key, history, question, answer, replay=replay)
+        segments = self._format_answer(cfg, trigger, answer, result, notices, sources=sources)
+        rich = self._format_rich(cfg, trigger, answer, result, notices, sources=sources) if cfg["rich_text"] else None
+        await _log(
+            ctx,
+            "info",
+            "AI 答疑已回答" + ("（重试）" if replay else ""),
+            kind=trigger.kind,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            images=len(images),
+            web_search=bool(cfg["enable_web_search"]),
+            pt_search=pt_used,
+            wiki_pages=[page["path"] for page in wiki_pages],
+            skills=skills_used,
+            segments=len(segments),
+        )
         reply = _Reply(
             segments,
             parse_mode="html" if cfg["rich_text"] else "plain",
@@ -1347,6 +1499,421 @@ class InteractionAIChatPlugin(Plugin):
         if cfg.get("protect_command_outputs", True):
             reply = await self._neutralize_reply(ctx, cfg, trigger, reply)
         return reply
+
+    # -- 失败重试 -----------------------------------------------------------
+
+    @staticmethod
+    def _retry_key(token: str) -> str:
+        return f"retry:{token}"
+
+    @staticmethod
+    def _retry_msg_key(chat_id: Any, message_id: Any) -> str:
+        return f"retry:msg:{_hash_id('retry-msg', chat_id, message_id)}"
+
+    @staticmethod
+    def _retry_last_key(chat_id: Any, user_id: Any) -> str:
+        return f"retry:last:{_hash_id('retry-last', chat_id, user_id if user_id is not None else 'anon')}"
+
+    async def _save_retry_record(self, store: Any, record: dict[str, Any]) -> None:
+        if not record.get("token"):
+            record["token"] = rty.new_token()
+        token = record["token"]
+        ttl = rty.RETRY_TTL_SECONDS
+        try:
+            await store.set(self._retry_key(token), record, ttl=ttl)
+            if record.get("failure_message_id") is not None:
+                await store.set(self._retry_msg_key(record.get("failure_chat_id"), record.get("failure_message_id")), token, ttl=ttl)
+            await store.set(self._retry_last_key(record.get("chat_id"), record.get("user_id")), token, ttl=ttl)
+        except Exception:  # noqa: BLE001 - 存储失败只影响重试，不影响本次回复
+            return
+
+    async def _load_retry_record(self, store: Any, token: str) -> dict[str, Any] | None:
+        if not rty.valid_token(token):
+            return None
+        try:
+            record = await store.get(self._retry_key(token), default=None)
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(record, dict) or record.get("token") != token:
+            return None
+        if time.time() - float(record.get("created") or 0) > rty.RETRY_TTL_SECONDS * 4:
+            return None
+        return record
+
+    async def _drop_retry_record(self, store: Any, record: dict[str, Any]) -> None:
+        token = str(record.get("token") or "")
+        keys = [self._retry_key(token)]
+        if record.get("failure_message_id") is not None:
+            keys.append(self._retry_msg_key(record.get("failure_chat_id"), record.get("failure_message_id")))
+        last_key = self._retry_last_key(record.get("chat_id"), record.get("user_id"))
+        try:
+            if await store.get(last_key, default=None) == token:
+                keys.append(last_key)
+            await store.delete(*keys)
+        except Exception:  # noqa: BLE001
+            return
+
+    async def _acquire_retry(self, store: Any, cfg: dict[str, Any], token: str) -> bool:
+        """同一条失败消息同时只允许一个进行中的重试（进程内 + ctx.storage 计数，跨 worker 也生效）。"""
+
+        if token in self._retry_running:
+            return False
+        count = await _incr_ttl(store, f"retry:lock:{token}", int(cfg["timeout_seconds"]) + 30)
+        if count > 1:
+            return False
+        self._retry_running.add(token)
+        return True
+
+    async def _release_retry(self, store: Any, token: str) -> None:
+        self._retry_running.discard(token)
+        try:
+            await store.delete(f"retry:lock:{token}")
+        except Exception:  # noqa: BLE001
+            return
+
+    async def _is_admin(self, ctx: Any, cfg: dict[str, Any], chat_id: int | None, user_id: int | None, admin_ids: set[int]) -> bool:
+        """管理员 = 插件配置的“重试管理员用户 ID” ∪ TelePilot 管理员（账号本人 + sudo，平台 payload 提供）∪ 本群管理员。
+
+        群管理员经 ``ctx.identities.resolve(...).is_admin`` 由平台确认（UserBot 成员权限 / 管理员目录，
+        失败时平台回退交互 Bot getChatMember）；查询失败按“不是管理员”处理。
+        """
+
+        if user_id is None:
+            return False
+        if user_id in cfg["retry_admin_user_ids"] or user_id in admin_ids:
+            return True
+        if chat_id is None or chat_id > 0:
+            return False
+        identities = getattr(ctx, "identities", None)
+        resolve = getattr(identities, "resolve", None) if identities is not None else None
+        if resolve is None:
+            return False
+        try:
+            identity = await asyncio.wait_for(resolve(chat_id=chat_id, user_id=user_id), timeout=IDENTITY_TIMEOUT_SECONDS)
+        except Exception as exc:  # noqa: BLE001
+            await _log(ctx, "info", "AI 答疑重试：管理员身份查询失败，按非管理员处理", error_type=type(exc).__name__)
+            return False
+        return bool(getattr(identity, "is_admin", False)) and bool(getattr(identity, "resolved", True))
+
+    def _trigger_from_record(self, record: dict[str, Any]) -> _Trigger:
+        return _Trigger(
+            kind=str(record.get("kind") or "private"),
+            chat_id=_int_or_none(record.get("chat_id")),
+            chat_type=str(record.get("chat_type") or ""),
+            user_id=_int_or_none(record.get("user_id")),
+            display_name=str(record.get("display_name") or ""),
+            text=str(record.get("text") or ""),
+            message_id=_int_or_none(record.get("message_id")),
+            reply_text=str(record.get("reply_text") or ""),
+            image_file_ids=[str(item) for item in (record.get("image_file_ids") or []) if item],
+            thread_id=_int_or_none(record.get("thread_id")),
+        )
+
+    async def _replay(
+        self,
+        ctx: Any,
+        cfg: dict[str, Any],
+        record: dict[str, Any],
+        started: float,
+        *,
+        override: dict[str, Any] | None = None,
+    ) -> _Reply:
+        """按保存的原请求重放：原问题、引用、图片、历史快照、原模型；``override`` 只替换本次的 Provider/模型。"""
+
+        store = self._store(ctx)
+        trigger = self._trigger_from_record(record)
+        run_cfg = dict(cfg)
+        run_cfg["telepilot_provider"] = str((override or {}).get("p") or record.get("provider") or "")
+        run_cfg["telepilot_model"] = str((override or {}).get("m") or record.get("model") or "")
+        run_cfg["enable_web_search"] = bool(record.get("web_search", cfg["enable_web_search"]))
+        if not record.get("vision", True):
+            trigger.image_file_ids = []
+        reserved, limit_key, limit_value = await self._reserve_quota(store, cfg, trigger.user_id)
+        if limit_key:
+            await _log(ctx, "info", "AI 答疑重试未执行：每日次数已用完", kind=trigger.kind, limit=limit_key)
+            return _Reply([render_named(cfg, limit_key, trigger, limit=limit_value)], error_key=limit_key)
+        mem_key = str(record.get("mem_key") or self._memory_key(trigger.chat_id, trigger.user_id))
+        async with self._lock_for(mem_key):
+            return await self._answer_locked(ctx, run_cfg, trigger, record, store, reserved, started, replay=True)
+
+    async def _deliver_failure(
+        self,
+        ctx: Any,
+        cfg: dict[str, Any],
+        trigger: _Trigger,
+        reply: _Reply,
+        placeholder: _Placeholder | None,
+    ) -> list[dict[str, Any]] | None:
+        """可重试失败的投递：保存原请求并在失败消息上附「🔄 重试」「🔀 换模型重试」。
+
+        返回 None 表示按普通动作投递（访客模式、开关关闭、模板留空）；记录照样保存，供回复“重试”使用。
+        """
+
+        record = reply.retry or {}
+        store = self._store(ctx)
+        record["failure_html"] = reply.segments[0] if reply.segments else ""
+        record["failure_parse_mode"] = reply.parse_mode
+        buttons = bool(cfg["retry_buttons_enabled"]) and trigger.kind != "guest" and bool(reply.segments)
+        if not buttons:
+            # 访客回复是 inline 消息，callback 按钮回到 Bot 时没有 chat/message，平台不投递；只支持回复“重试”。
+            await self._save_retry_record(store, record)
+            return None
+        if not record.get("token"):
+            record["token"] = rty.new_token()
+        markup = rty.retry_keyboard(record["token"])
+        if placeholder is not None and placeholder.message_id is not None:
+            record["failure_chat_id"] = placeholder.chat_id
+            record["failure_message_id"] = placeholder.message_id
+            await self._save_retry_record(store, record)
+            actions = self._reply_actions(cfg, trigger, reply, placeholder)
+            if actions:
+                actions[0]["reply_markup"] = markup
+            return actions
+        messages = getattr(ctx, "messages", None)
+        apply = getattr(messages, "apply", None)
+        reader = getattr(messages, "read_saved_message_id", None)
+        actions = self._reply_actions(cfg, trigger, reply, None)
+        if not actions:
+            await self._save_retry_record(store, record)
+            return actions
+        actions[0]["reply_markup"] = markup
+        if apply is not None and reader is not None and trigger.chat_id is not None:
+            key = f"iac:failure:{uuid.uuid4().hex}"
+            actions[0]["save_message_id_key"] = key
+            try:
+                await apply(actions)
+                message_id = await reader(key)
+            except Exception as exc:  # noqa: BLE001
+                await _log(ctx, "info", "AI 答疑失败提示实时发送失败，改为普通投递", error_type=type(exc).__name__, kind=trigger.kind)
+                actions[0].pop("save_message_id_key", None)
+            else:
+                if message_id is not None:
+                    record["failure_chat_id"] = trigger.chat_id
+                    record["failure_message_id"] = int(message_id)
+                await self._save_retry_record(store, record)
+                return []
+        await self._save_retry_record(store, record)
+        return actions
+
+    async def _find_text_retry(self, store: Any, trigger: _Trigger) -> dict[str, Any] | None:
+        """回复“重试”时找对应的失败记录：先按被回复的失败消息，再按本人在本会话最近一次失败。"""
+
+        tokens: list[str] = []
+        try:
+            if trigger.reply_message_id is not None and trigger.chat_id is not None:
+                value = await store.get(self._retry_msg_key(trigger.chat_id, trigger.reply_message_id), default=None)
+                if value:
+                    tokens.append(str(value))
+            value = await store.get(self._retry_last_key(trigger.chat_id, trigger.user_id), default=None)
+            if value:
+                tokens.append(str(value))
+        except Exception:  # noqa: BLE001
+            return None
+        for token in tokens:
+            record = await self._load_retry_record(store, token)
+            if record is not None and _int_or_none(record.get("chat_id")) == trigger.chat_id:
+                return record
+        return None
+
+    async def _handle_text_retry(
+        self,
+        ctx: Any,
+        cfg: dict[str, Any],
+        trigger: _Trigger,
+        sent: list[_Placeholder],
+        started: float,
+    ) -> _Reply:
+        """对失败消息回复“重试/再试一次”等：按保存的原请求重放（权限同按钮：提问者或管理员）。"""
+
+        store = self._store(ctx)
+        record = await self._find_text_retry(store, trigger)
+        if record is None:
+            await _log(ctx, "info", "AI 答疑：收到“重试”但没有可关联的失败提问", kind=trigger.kind)
+            return _Reply([html_escape(RETRY_NOT_FOUND_TEXT)])
+        allowed = trigger.user_id is not None and trigger.user_id == _int_or_none(record.get("user_id"))
+        if not allowed:
+            allowed = await self._is_admin(ctx, cfg, trigger.chat_id, trigger.user_id, trigger.admin_ids)
+        if not allowed:
+            return _Reply([html_escape(RETRY_DENY_TEXT)])
+        token = str(record["token"])
+        if not await self._acquire_retry(store, cfg, token):
+            return _Reply([html_escape(RETRY_BUSY_TEXT)])
+        try:
+            placeholder = await self._send_placeholder(ctx, cfg, trigger)
+            if placeholder is not None:
+                sent.append(placeholder)
+            old_chat = _int_or_none(record.get("failure_chat_id"))
+            old_message = _int_or_none(record.get("failure_message_id"))
+            reply = await self._replay(ctx, cfg, record, started)
+        finally:
+            await self._release_retry(store, token)
+        if old_message is not None and record.get("failure_html") and trigger.kind != "guest":
+            # 旧失败消息上的按钮作废（这次重试已接手），保留原失败文案。
+            reply.extra_actions.append(
+                {
+                    "type": "edit_message",
+                    "chat_id": old_chat,
+                    "message_id": old_message,
+                    "text": f"{record['failure_html']}\n\n{RETRY_DONE_SUFFIX}",
+                    "parse_mode": "html" if record.get("failure_parse_mode") == "html" else "plain",
+                    "send_via": ["interaction_bot"],
+                }
+            )
+        if reply.retry is None and reply.error_key is None:
+            await self._drop_retry_record(store, record)
+        elif reply.retry is not None:
+            # 再次失败：新的失败消息接手这条记录（按钮挂到新消息上）。
+            record["failure_chat_id"] = None
+            record["failure_message_id"] = None
+        return reply
+
+    async def _answer_callback(self, ctx: Any, callback_id: str, text: str = "", *, alert: bool = False) -> dict[str, Any] | None:
+        """实时 ACK callback（消除按钮转圈）；平台不支持实时执行时返回动作，由调用方随结果返回。"""
+
+        if not callback_id:
+            return None
+        action: dict[str, Any] = {"type": "answer_callback", "callback_query_id": callback_id, "send_via": ["interaction_bot"]}
+        if text:
+            action["text"] = text
+            action["show_alert"] = bool(alert)
+        apply = getattr(getattr(ctx, "messages", None), "apply", None)
+        if apply is not None:
+            try:
+                await apply([action])
+                return None
+            except Exception:  # noqa: BLE001
+                pass
+        return action
+
+    async def _on_callback(self, ctx: Any, cfg: dict[str, Any], payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """处理失败消息上的重试按钮（只认本插件 ``iac:`` 前缀，其它插件的按钮直接忽略）。"""
+
+        started = time.monotonic()
+        source = _dict(payload.get("source"))
+        data = source.get("callback_data") or payload.get("callback_data") or _dict(payload.get("callback")).get("data")
+        if not rty.is_own_callback(data):
+            return []
+        callback_id = str(source.get("callback_query_id") or payload.get("callback_query_id") or "")
+        chat_id = _chat_id(payload)
+        message_id = _int_or_none(source.get("message_id")) or _message_id(payload)
+        user_id = _sender_id(payload)
+
+        async def reply_only(text: str, alert: bool = True) -> list[dict[str, Any]]:
+            pending = await self._answer_callback(ctx, callback_id, text, alert=alert)
+            return [pending] if pending else []
+
+        parsed = rty.parse_callback(data)
+        if parsed is None:
+            return await reply_only(RETRY_INVALID_TEXT)
+        action, token, arg = parsed
+        store = self._store(ctx)
+        record = await self._load_retry_record(store, token)
+        if record is None or (chat_id is not None and _int_or_none(record.get("failure_chat_id") or record.get("chat_id")) != chat_id):
+            return await reply_only(RETRY_EXPIRED_TEXT)
+        is_requester = user_id is not None and user_id == _int_or_none(record.get("user_id"))
+        if action == rty.ACTION_RETRY:
+            # 提问者本人无需查管理员身份（省一次群成员查询）。
+            if not is_requester and not await self._is_admin(ctx, cfg, chat_id, user_id, _payload_admin_ids(payload)):
+                return await reply_only(RETRY_DENY_TEXT)
+        elif not await self._is_admin(ctx, cfg, chat_id, user_id, _payload_admin_ids(payload)):
+            return await reply_only(RETRY_ADMIN_ONLY_TEXT)
+        if message_id is not None and record.get("failure_message_id") != message_id:
+            # 占位编辑失败改为新发等情况：以实际被点击的消息为准。
+            record["failure_chat_id"] = chat_id
+            record["failure_message_id"] = message_id
+            await self._save_retry_record(store, record)
+        parse_mode = "html" if record.get("failure_parse_mode") == "html" else "plain"
+        failure_text = str(record.get("failure_html") or html_escape(DEFAULT_TEMPLATES["error_ai_template"]))
+
+        def edit(text: str, markup: dict[str, Any] | None) -> dict[str, Any]:
+            item: dict[str, Any] = {
+                "type": "edit_message",
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": text,
+                "parse_mode": parse_mode,
+                "send_via": ["interaction_bot"],
+            }
+            if markup is not None:
+                item["reply_markup"] = markup
+            return item
+
+        if action in (rty.ACTION_MENU, rty.ACTION_PAGE):
+            models = record.get("models") if action == rty.ACTION_PAGE else None
+            if not isinstance(models, list) or not models:
+                models = await self._model_candidates(ctx, record)
+                record["models"] = models
+                await self._save_retry_record(store, record)
+            if not models:
+                return await reply_only(RETRY_NO_MODELS_TEXT)
+            pending = await self._answer_callback(ctx, callback_id)
+            menu_text = f"{failure_text}\n\n{RETRY_MENU_HINT}" if parse_mode == "html" else f"{failure_text}\n\n{html_to_plain(RETRY_MENU_HINT)}"
+            actions = [edit(menu_text, rty.model_keyboard(token, models, arg or 0))]
+            return ([pending] if pending else []) + actions
+        if action == rty.ACTION_CANCEL:
+            pending = await self._answer_callback(ctx, callback_id)
+            return ([pending] if pending else []) + [edit(failure_text, rty.retry_keyboard(token))]
+
+        override: dict[str, Any] | None = None
+        if action == rty.ACTION_SELECT:
+            models = record.get("models") if isinstance(record.get("models"), list) else []
+            if arg is None or arg >= len(models) or not isinstance(models[arg], dict):
+                return await reply_only(RETRY_MODELS_CHANGED_TEXT)
+            override = dict(models[arg])
+        if not await self._acquire_retry(store, cfg, token):
+            return await reply_only(RETRY_BUSY_TEXT, alert=False)
+        try:
+            pending = await self._answer_callback(ctx, callback_id, RETRY_STARTED_TEXT)
+            running = RETRY_RUNNING_MODEL_TEXT.format(model=override.get("label") or override.get("m")) if override else RETRY_RUNNING_TEXT
+            apply = getattr(getattr(ctx, "messages", None), "apply", None)
+            if apply is not None and message_id is not None:
+                try:
+                    await apply([edit(html_escape(running) if parse_mode == "html" else running, None)])
+                except Exception:  # noqa: BLE001 - “正在重试”只是提示，失败不影响重试
+                    pass
+            await _log(ctx, "info", "AI 答疑：按钮重试", switch_model=bool(override), by_requester=is_requester)
+            try:
+                reply = await self._replay(ctx, cfg, record, started, override=override)
+            except Exception as exc:  # noqa: BLE001
+                await _log(ctx, "warning", "AI 答疑重试处理异常", error_type=type(exc).__name__)
+                reply = _Reply([render_named(cfg, "error_ai_template", self._trigger_from_record(record), reason="服务不可用")], error_key="error_ai_template")
+                reply.retry = record
+        finally:
+            await self._release_retry(store, token)
+        prefix = [pending] if pending else []
+        trigger = self._trigger_from_record(record)
+        placeholder = _Placeholder(chat_id=chat_id, message_id=message_id) if message_id is not None else None
+        if reply.retry is None:
+            if reply.error_key is None:
+                # 成功（或被护栏改写）：记录作废；限额等非调用失败保留记录，额度恢复后仍可回复“重试”。
+                await self._drop_retry_record(store, record)
+            if reply.rich and await self._deliver_rich(ctx, trigger, reply, placeholder):
+                return prefix
+            return prefix + self._reply_actions(cfg, trigger, reply, placeholder)
+        delivered = await self._deliver_failure(ctx, cfg, trigger, reply, placeholder)
+        return prefix + (delivered if delivered is not None else self._reply_actions(cfg, trigger, reply, placeholder))
+
+    async def _model_candidates(self, ctx: Any, record: dict[str, Any]) -> list[dict[str, Any]]:
+        lister = getattr(getattr(ctx, "ai", None), "list_providers", None)
+        if lister is None:
+            return []
+        try:
+            providers = await asyncio.wait_for(lister(), timeout=8)
+        except Exception as exc:  # noqa: BLE001
+            await _log(ctx, "info", "AI 答疑换模型：读取 Provider 列表失败", error_type=type(exc).__name__)
+            return []
+        models, exact = rty.model_candidates(
+            list(providers or []),
+            exclude_provider=str(record.get("failed_provider") or record.get("provider") or ""),
+            exclude_model=str(record.get("failed_model") or record.get("model") or ""),
+        )
+        if not exact:
+            await self._log_once(
+                ctx,
+                "retry-models-legacy",
+                "AI 答疑换模型：平台未提供模型启用状态（需要 TelePilot 0.106.0-beta.13+），只列出各 Provider 的默认模型",
+            )
+        return models
 
     def _guarded_reply(self, ctx: Any, cfg: dict[str, Any], trigger: _Trigger, answer: str) -> tuple[_Reply, str, str] | None:
         """整条替换的情形：加款诱导（任意一行，保持原判定），或整条答案只有一行且就是命令。
@@ -1736,15 +2303,47 @@ class InteractionAIChatPlugin(Plugin):
         question: str,
         answer: str,
     ) -> None:
+        turns = [*history, ["u", _clip(question, MEMORY_USER_CHARS)], ["a", _clip(answer, MEMORY_ASSISTANT_CHARS)]]
+        await self._write_history(store, cfg, key, turns)
+
+    async def _write_history(self, store: Any, cfg: dict[str, Any], key: str, turns: list[list[str]]) -> None:
         rounds = cfg["max_history_rounds"]
         if rounds <= 0:
             return
-        turns = [*history, ["u", _clip(question, MEMORY_USER_CHARS)], ["a", _clip(answer, MEMORY_ASSISTANT_CHARS)]]
         record = {"v": 1, "updated": time.time(), "turns": turns[-rounds * 2 :]}
         try:
             await store.set(key, record, ttl=cfg["memory_ttl_minutes"] * 60)
         except Exception:  # noqa: BLE001
             return
+
+    async def _record_turn(
+        self,
+        store: Any,
+        cfg: dict[str, Any],
+        key: str,
+        history: list[list[str]],
+        question: str,
+        answer: str,
+        *,
+        replay: bool,
+    ) -> None:
+        """写入一轮问答。首次提问：在提问时的记忆后追加；重放：在“当前”记忆里找到该问题的失败标记原地替换，
+        找不到（已过期或被重置）才追加，保证同一个问题只留一份、不重复也不缺失。"""
+
+        if cfg["max_history_rounds"] <= 0:
+            return
+        if not replay:
+            await self._save_history(store, cfg, key, history, question, answer)
+            return
+        current = await self._load_history(store, cfg, key)
+        q = _clip(question, MEMORY_USER_CHARS)
+        a = _clip(answer, MEMORY_ASSISTANT_CHARS)
+        for index in range(len(current) - 2, -1, -1):
+            if current[index] == ["u", q] and current[index + 1] == ["a", FAILED_TURN_MARK]:
+                current[index + 1] = ["a", a]
+                await self._write_history(store, cfg, key, current)
+                return
+        await self._write_history(store, cfg, key, [*current, ["u", q], ["a", a]])
 
     # -- 限额 ---------------------------------------------------------------
 

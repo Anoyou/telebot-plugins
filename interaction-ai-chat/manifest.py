@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.6"
+PLUGIN_VERSION = "0.4.7"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -64,6 +64,7 @@ USAGE_PREVIEW = (
     "- “使用已安装的 Agent Skills”可多选管理员安装并对插件启用的 skills；回答前模型按名称和用途判断，最多加载 2 个。\n"
     "- 填写“站点 Wiki 地址”（如 https://wiki.qingwapt.org/docs）后，站点规则、新手、蝌蚪/魔力、保种区、工具配置类问题会先读取"
     "1–2 个相关 Wiki 页面再回答，并附页面链接；访客模式同样可用；只读、只访问该域名 /docs 下页面，正文缓存 6 小时。"
+    "\n\n【模型调用失败重试】\n- 模型调用失败（供应商报错/回退全部失败、超时、返回为空、只有推理没有最终答案）时，失败消息下方出现「🔄 重试」与「🔀 换模型重试」：「重试」提问者或管理员可点，用原问题、原上下文、原模型重新回答并原地替换失败消息；「换模型重试」仅管理员可点，从已配置且启用的模型里选一个只用于这一次（不改插件配置）。按钮 30 分钟内有效，同一条失败消息同时只会有一个进行中的重试。\n- 也可以回复失败消息发送“重试”“再试一次”（私聊直接发），同样按原问题重放；找不到可重试的提问时会提示重新提问。\n- 管理员：本群管理员（平台核验）、TelePilot 管理员（账号本人与 sudo 用户，需 TelePilot 0.106.0-beta.13+）以及下方“重试管理员用户 ID”。\n- 内容审核拒答、护栏拦截、限额、无权限等不是调用失败，不出按钮；访客模式回复是 inline 消息，Telegram 按钮回调无法回到原会话，只支持回复“重试”。"
 )
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -369,6 +370,25 @@ CONFIG_SCHEMA = {
             "x-ui-section": _SECTION_REPLY,
             "x-ui-columns": 2,
             "x-ui-order": 34,
+        },
+        "retry_buttons_enabled": {
+            "type": "boolean",
+            "title": "失败时显示重试按钮",
+            "description": "模型调用失败（供应商报错/回退全部失败、超时、返回为空、只有推理没有最终答案）时，在失败消息下附「🔄 重试」（提问者或管理员可点）与「🔀 换模型重试」（仅管理员可点，所选模型只用于这一次）。按钮 30 分钟内有效。内容审核拒答、护栏拦截、限额等不出按钮；访客模式不附按钮（只支持回复“重试”）。关闭后不显示按钮，但回复失败消息“重试”仍可按原问题重放。",
+            "default": True,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 35,
+        },
+        "retry_admin_user_ids": {
+            "type": "string",
+            "title": "重试管理员用户 ID（可选）",
+            "description": "除本群管理员（平台核验）与 TelePilot 管理员（账号本人与 sudo 用户，需 TelePilot 0.106.0-beta.13+）外，额外视为管理员的 Telegram 用户 ID：可点任何人失败消息上的「重试」与「换模型重试」。逗号或换行分隔，留空即可。",
+            "default": "",
+            "x-ui-widget": "textarea",
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 36,
         },
         "access_mode": {
             "type": "string",
@@ -837,6 +857,13 @@ EVENT_SUBSCRIPTIONS = [
         "scope": "all_allowed_chats",
         "timeout_seconds": 90,
         "description": "Bot 已加入的群里 @Bot/回复 Bot/触发关键词，以及与 Bot 私聊；其余消息直接忽略、不调用 AI。",
+    },
+    {
+        "events": ["callback_query"],
+        "source": ["interaction_bot"],
+        "scope": "all_allowed_chats",
+        "timeout_seconds": 90,
+        "description": "模型调用失败消息上的「重试」「换模型重试」按钮（callback 数据以 iac: 开头，其它按钮直接忽略）；重试会再调用一次 AI，计入处理时限。",
     },
 ]
 
