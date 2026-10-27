@@ -94,6 +94,7 @@ TelePilot 远程插件仓库。
   TELEPILOT_REPO=../Telebot python scripts/check_host_compat.py          # 全部插件
   TELEPILOT_REPO=../Telebot python scripts/check_host_compat.py --plugin sum --strict
   TELEPILOT_REPO=../Telebot python -m pytest -q                           # 含 tests/test_host_compat.py
+  TELEPILOT_REPO=../Telebot python scripts/check_host_compat.py --plugins-root ../Telebot/examples/plugins  # 检查主仓库示例
   ```
 
   也可以把 `TELEPILOT_REPO` 指向主仓库任意历史版本的检出，验证插件在旧版 TelePilot 上能否加载。

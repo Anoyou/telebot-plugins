@@ -956,12 +956,13 @@ def run(
     host_repo: str | None = None,
     only: list[str] | None = None,
     run_startup: bool = True,
+    plugins_root: Path | None = None,
 ) -> tuple[dict[str, Any], list[PluginReport]]:
     repo = locate_host_repo(host_repo)
     with tempfile.TemporaryDirectory() as installed:
         host = prepare_host(repo, Path(installed))
         reports = []
-        for plugin_dir in discover_plugins(ROOT):
+        for plugin_dir in discover_plugins(plugins_root or ROOT):
             if only and plugin_dir.name not in only:
                 continue
             reports.append(check_plugin(plugin_dir, host, run_startup=run_startup))
@@ -976,9 +977,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--strict", action="store_true", help="警告也视为失败")
     parser.add_argument("--no-startup", action="store_true", help="跳过 on_startup 初始化检查")
     parser.add_argument("--quiet", action="store_true", help="只输出有问题的插件")
+    parser.add_argument(
+        "--plugins-root",
+        help="插件目录的上级目录（默认本仓库根目录；可指向主仓库 examples/plugins 校验示例）",
+    )
     args = parser.parse_args(argv)
 
-    info, reports = run(host_repo=args.host_repo, only=args.plugin, run_startup=not args.no_startup)
+    info, reports = run(
+        host_repo=args.host_repo,
+        only=args.plugin,
+        run_startup=not args.no_startup,
+        plugins_root=Path(args.plugins_root).resolve() if args.plugins_root else None,
+    )
     print(f"TelePilot 宿主: {info['host_version']}（{info['host_repo']}）")
     counts = {"OK": 0, "WARN": 0, "ERROR": 0}
     for rep in reports:
