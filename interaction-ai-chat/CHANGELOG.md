@@ -1,5 +1,15 @@
 # 更新日志
 
+## 0.4.8 (2026-10-28)
+- 修复“非访客群 + 模型不可用”失败消息没有「🔄 重试」「🔀 换模型重试」按钮（实测：测试群里固定一个不通的模型，失败消息显示自定义的 `error_ai_template` 却没有按钮）。按真实链路复现（插件 + 主程序 worker/交互 Bot 投递），普通报错（连接失败、404、401）在 0.4.7 上会正常出按钮；能产生“`error_ai_template` + 无按钮”这一现象的只有插件里两条路径（线上日志无法直接确认命中哪条，两条都已修）：
+  1. 审核拒答误判：0.4.7 把带审核类字样的报错当作“内容审核拒答”，回复 `error_ai_template` 且不附按钮、不存重试记录（用户模板不含 {reason}，看起来与调用失败一模一样）。固定模型不可用时平台会回退到其它 Provider，最后报错常来自回退的那家（例如对 PT 资源内容的 `data_inspection_failed`），裸词 `sensitive` 还会命中 “Model names are case-sensitive” 这类模型不存在报错。现在去掉裸词 `sensitive`；报错明确是连接失败 / 模型不存在 / 鉴权失败 / 模型未启用时一律不算审核拒答；真正的审核拒答改用独立模板（见下），并同样附按钮（换个模型往往能过）。
+  2. AI 调用 try 之外的意外异常（Skills / Wiki / PT 判断等前置步骤、失败轮次写记忆）会冒到 `on_event` 的通用兜底，回复 `error_ai_template` 却没有重试记录。现在原请求建好之后的任何意外异常都按可重试失败处理（保存原请求、附按钮）；失败轮次写记忆失败不再吃掉按钮；失败提示实时发送异常或被拒时退回“入口返回动作 + 按钮”。
+  - 主程序侧已核实：交互 Bot 返回的 `edit_message` 带 `reply_markup`（含 `send_on_edit_failure` 编辑失败改新发）原样透传，TelePilot 0.106.0-beta.17 补了回归测试。
+- 内容审核拒答使用新模板「内容审核拒答提示」`error_moderation_template`（默认“内容未通过模型审核，换个问法试试。”），不再和“模型调用失败提示”共用，免得分不清是审核拒答还是模型不可用。
+- 访客模式（Bot API 10.0 Guest Chat Mode）失败回复也附「🔄 重试」「🔀 换模型重试」：需要 TelePilot 0.106.0-beta.17+（平台能力 `ctx.messages.guest_reply_markup`：`answer_guest_query` 保留 callback 按钮、实时 apply 带回 `inline_message_id`、访客回复上的按钮点击以 inline callback 投递）。有“🤔”占位时用 `edit_message(inline_message_id, reply_markup)` 原地编辑为失败提示；没有占位时 `answer_guest_query` 一次带按钮发出。重试记录保存 `failure_inline_message_id`，按钮回调（只有 inline_message_id 与点击者，没有 chat/message）按它定位记录并原地编辑（“正在重试…”、模型列表、最终答案、再次失败重新挂按钮）；inline 回调只认访客记录，inline_message_id 不一致按过期处理。回复“重试”文本重放时，旧失败回复上的按钮同样作废。
+- 访客场景的权限（与普通群一致，按点击者判定，不读 `guest.caller_user_id`）：「重试」= 原提问者本人或管理员；「换模型重试」（含模型列表、翻页、选择、取消）= 仅管理员，提问者本人不是管理员也不行；其他人两个都不行，无权限点击用 callback 弹窗提示且不执行。管理员 = 「重试管理员用户 ID」∪ TelePilot 账号本人与 sudo 用户（payload `owner_user_ids` / `admin_user_ids`）∪ 提问所在群的群管理员（访客回复没有 chat，用提问时记录的访客会话核验；平台拿不到该群信息或查询失败时不算）。防重复点击、30 分钟过期、跨 worker 计数锁沿用 0.4.7。
+- 新增 Event Bus 订阅 `callback_query`（交互 Bot，scope `guest_all`，只处理 `iac:` 前缀）；旧平台不会投递 inline 回调，订阅无副作用。
+- 兼容性：`min_telepilot_version` 保持 0.105.0-beta.1，访客按钮以能力标记降级——TelePilot 低于 0.106.0-beta.17 时访客失败回复不附按钮、只支持回复“重试”（与 0.4.7 相同）；非访客的按钮修复对旧平台同样生效。
 ## 0.4.7 (2026-10-28)
 - 模型调用失败时在失败消息下附两个 inline 按钮：「🔄 重试」（本次提问者或管理员可点）与「🔀 换模型重试」（仅管理员可点）。会出按钮的失败：供应商报错 / 平台回退全部失败、处理超时、模型返回为空、只有推理没有最终答案（`error_ai_template` / `error_timeout_template` / `error_empty_template` / `error_no_answer_template`）。不出按钮：供应商内容审核拒答（content_filter、data_inspection_failed、内容安全等，重放也会被拒）、输出护栏拦截、每日限额、无权限、提问过长、只发图且读图失败。
 - 「重试」：点击后失败消息先改为“🔄 正在重试…”，再按保存的原请求重放——原问题全文、引用/被回复内容、图片 file_id、提问当时的记忆快照、原 Provider/模型与联网/识图设置、发起人、会话与原消息 ID 都存在 token 映射的记录里，不靠模型猜“要重试什么”；成功则在原消息位置给出答案（Rich Message 优先），再次失败则重新显示两个按钮。

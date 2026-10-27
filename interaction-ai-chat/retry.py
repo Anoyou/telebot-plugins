@@ -61,7 +61,8 @@ RETRY_WORDS = {
 }
 _RETRY_STRIP_RE = re.compile(r"^[\s\W_]+|[\s\W_]+$", re.UNICODE)
 
-# 供应商内容审核 / 安全拦截：同样的问题重放也会被拒，不算“调用失败”，不附重试按钮。
+# 供应商内容审核 / 安全拦截：0.4.8 起用独立提示模板；固定模型不可用时平台可能回退到其它 Provider，
+# 拒答常来自回退的那家，所以仍附重试按钮（换模型往往能过）。
 MODERATION_MARKERS = (
     "content_filter",
     "content filter",
@@ -73,7 +74,10 @@ MODERATION_MARKERS = (
     "safety system",
     "safety_violation",
     "responsibleaipolicyviolation",
-    "sensitive",
+    # 0.4.8：不再用裸词 “sensitive”——“Model names are case-sensitive …” 之类的模型不存在报错会被误判为审核拒答。
+    "sensitive content",
+    "sensitive words",
+    "sensitive_words",
     "内容审核",
     "内容安全",
     "敏感内容",
@@ -166,8 +170,30 @@ def is_retry_text(text: Any) -> bool:
     return bool(value) and value in RETRY_WORDS
 
 
+# 明确是“模型不可用”的报错（连接失败、模型不存在、鉴权失败、未启用）：即使夹带审核类字样也不算审核拒答。
+UNAVAILABLE_MARKERS = (
+    "model_not_found",
+    "model not found",
+    "does not exist",
+    "connection error",
+    "connection refused",
+    "connecterror",
+    "name or service not known",
+    "unauthorized",
+    "invalid_api_key",
+    "incorrect api key",
+    "未在 provider",
+    "没有已启用模型",
+    "模型不存在",
+)
+
+
 def is_moderation_error(exc: BaseException) -> bool:
+    """供应商内容审核拒答（0.4.8 起用独立模板 ``error_moderation_template``，仍可重试/换模型）。"""
+
     text = f"{type(exc).__name__} {exc}".casefold()
+    if any(marker in text for marker in UNAVAILABLE_MARKERS):
+        return False
     return any(marker in text for marker in MODERATION_MARKERS)
 
 
