@@ -202,13 +202,15 @@ class FailureButtonsTest(unittest.TestCase):
         actions, _, _ = fail_first(ctx, PLUGIN.InteractionAIChatPlugin())
         self.assertIsNotNone(markup_of(actions))
 
-    def test_moderation_rejection_has_no_buttons_and_no_memory(self) -> None:
+    def test_moderation_rejection_uses_own_template_and_keeps_buttons(self) -> None:
+        # 0.4.8：审核拒答用独立模板（不再与“模型调用失败”共用），仍附按钮（换模型往往能过）。
         ai = ScriptedAI(RuntimeError("Error code: 400 data_inspection_failed: Input data may contain inappropriate content"))
-        ctx = make_ctx(ai)
+        ctx = make_ctx(ai, error_ai_template="模型调用失败。请联系管理员。")
         actions, _, token = fail_first(ctx, PLUGIN.InteractionAIChatPlugin())
-        self.assertIsNone(markup_of(actions))
-        self.assertFalse(any(key.startswith("retry:") for key in ctx.storage.data))
-        self.assertEqual(memory(ctx), [])
+        edit = next(a for a in actions if a.get("type") == "edit_message")
+        self.assertEqual(edit["text"], "内容未通过模型审核，换个问法试试。")
+        self.assertEqual([b["text"] for b in buttons(markup_of(actions))], ["🔄 重试", "🔀 换模型重试"])
+        self.assertEqual(ctx.storage.data[f"retry:{token}"]["error_key"], "error_moderation_template")
 
     def test_limit_and_guard_have_no_buttons(self) -> None:
         ctx = make_ctx(ScriptedAI("x"), per_user_daily_limit=1)

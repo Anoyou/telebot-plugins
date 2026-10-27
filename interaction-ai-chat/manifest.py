@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.7"
+PLUGIN_VERSION = "0.4.8"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -64,7 +64,7 @@ USAGE_PREVIEW = (
     "- “使用已安装的 Agent Skills”可多选管理员安装并对插件启用的 skills；回答前模型按名称和用途判断，最多加载 2 个。\n"
     "- 填写“站点 Wiki 地址”（如 https://wiki.qingwapt.org/docs）后，站点规则、新手、蝌蚪/魔力、保种区、工具配置类问题会先读取"
     "1–2 个相关 Wiki 页面再回答，并附页面链接；访客模式同样可用；只读、只访问该域名 /docs 下页面，正文缓存 6 小时。"
-    "\n\n【模型调用失败重试】\n- 模型调用失败（供应商报错/回退全部失败、超时、返回为空、只有推理没有最终答案）时，失败消息下方出现「🔄 重试」与「🔀 换模型重试」：「重试」提问者或管理员可点，用原问题、原上下文、原模型重新回答并原地替换失败消息；「换模型重试」仅管理员可点，从已配置且启用的模型里选一个只用于这一次（不改插件配置）。按钮 30 分钟内有效，同一条失败消息同时只会有一个进行中的重试。\n- 也可以回复失败消息发送“重试”“再试一次”（私聊直接发），同样按原问题重放；找不到可重试的提问时会提示重新提问。\n- 管理员：本群管理员（平台核验）、TelePilot 管理员（账号本人与 sudo 用户，需 TelePilot 0.106.0-beta.13+）以及下方“重试管理员用户 ID”。\n- 内容审核拒答、护栏拦截、限额、无权限等不是调用失败，不出按钮；访客模式回复是 inline 消息，Telegram 按钮回调无法回到原会话，只支持回复“重试”。"
+    "\n\n【模型调用失败重试】\n- 模型调用失败（供应商报错/回退全部失败、连接失败、模型不存在、鉴权失败、超时、返回为空、只有推理没有最终答案）或内容审核拒答（按“内容审核拒答提示”模板，与调用失败分开显示）时，失败消息下方出现「🔄 重试」与「🔀 换模型重试」：「重试」提问者或管理员可点，用原问题、原上下文、原模型重新回答并原地替换失败消息；「换模型重试」仅管理员可点，从已配置且启用的模型里选一个只用于这一次（不改插件配置）。按钮 30 分钟内有效，同一条失败消息同时只会有一个进行中的重试。\n- 也可以回复失败消息发送“重试”“再试一次”（私聊直接发），同样按原问题重放；找不到可重试的提问时会提示重新提问。\n- 管理员：本群管理员（平台核验）、TelePilot 管理员（账号本人与 sudo 用户，需 TelePilot 0.106.0-beta.13+）以及下方“重试管理员用户 ID”。\n- 管理员（访客模式）：TelePilot 管理员与“重试管理员用户 ID”同上；群管理员按提问所在的群核验，平台拿不到该群信息时不算。\n- 护栏拦截、限额、无权限等不是调用失败，不出按钮。访客模式（Bot 未加入的会话）需要 TelePilot 0.106.0-beta.17+ 才有按钮（失败回复是 inline 消息，按钮回调按 inline_message_id 原地编辑）；更旧的平台访客模式只支持回复“重试”。"
 )
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -79,6 +79,7 @@ DEFAULT_TEMPLATES = {
     "error_timeout_template": "AI 思考超时了（{timeout} 秒），换个简短点的问题再试试？",
     "error_empty_template": "AI 这次没有给出内容，换个说法再问一次吧。",
     "error_no_answer_template": "模型没有给出最终答案，请稍后再试或换模型。",
+    "error_moderation_template": "内容未通过模型审核，换个问法试试。",
     "limit_user_template": "你今天的提问次数已用完（每日 {limit} 次），明天再来吧。",
     "limit_global_template": "今天的 AI 答疑额度已用完，明天再来吧。",
     "deny_template": "这个 Bot 的 AI 答疑暂未对你开放。",
@@ -374,7 +375,7 @@ CONFIG_SCHEMA = {
         "retry_buttons_enabled": {
             "type": "boolean",
             "title": "失败时显示重试按钮",
-            "description": "模型调用失败（供应商报错/回退全部失败、超时、返回为空、只有推理没有最终答案）时，在失败消息下附「🔄 重试」（提问者或管理员可点）与「🔀 换模型重试」（仅管理员可点，所选模型只用于这一次）。按钮 30 分钟内有效。内容审核拒答、护栏拦截、限额等不出按钮；访客模式不附按钮（只支持回复“重试”）。关闭后不显示按钮，但回复失败消息“重试”仍可按原问题重放。",
+            "description": "模型调用失败（供应商报错/回退全部失败、连接失败、模型不存在、鉴权失败、超时、返回为空、只有推理没有最终答案）或内容审核拒答（换个模型往往能过）时，在失败消息下附「🔄 重试」（提问者或管理员可点）与「🔀 换模型重试」（仅管理员可点，所选模型只用于这一次）。按钮 30 分钟内有效。护栏拦截、限额、无权限等不出按钮。访客模式需要 TelePilot 0.106.0-beta.17+（平台能力 guest_reply_markup），更旧的平台访客模式只支持回复“重试”。关闭后不显示按钮，但回复失败消息“重试”仍可按原问题重放。",
             "default": True,
             "x-ui-section": _SECTION_REPLY,
             "x-ui-columns": 2,
@@ -552,6 +553,13 @@ CONFIG_SCHEMA = {
             "error_no_answer_template",
             66,
             "模型只输出了思考过程（推理草稿）或输出额度被推理耗尽、重试一次后仍没有最终答案时显示。可用：{user}。",
+        ),
+        "error_moderation_template": _template_field(
+            "内容审核拒答提示",
+            "error_moderation_template",
+            66,
+            "模型供应商的内容审核拒绝了这次请求（content_filter、data_inspection_failed、内容安全等）时显示，"
+            "与“模型调用失败提示”分开，方便区分是审核拒答还是模型不可用。可用：{user}。",
         ),
         "limit_user_template": _template_field(
             "每用户限额用尽提示", "limit_user_template", 67, "触发者当日次数用完时显示。可用：{limit} {user}。"
@@ -864,6 +872,13 @@ EVENT_SUBSCRIPTIONS = [
         "scope": "all_allowed_chats",
         "timeout_seconds": 90,
         "description": "模型调用失败消息上的「重试」「换模型重试」按钮（callback 数据以 iac: 开头，其它按钮直接忽略）；重试会再调用一次 AI，计入处理时限。",
+    },
+    {
+        "events": ["callback_query"],
+        "source": ["interaction_bot"],
+        "scope": "guest_all",
+        "timeout_seconds": 90,
+        "description": "访客模式失败回复上的「重试」「换模型重试」按钮（inline 消息，只有 inline_message_id 与点击者；TelePilot 0.106.0-beta.17+ 才投递，旧平台不会触发）。",
     },
 ]
 
