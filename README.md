@@ -23,7 +23,7 @@ TelePilot 远程插件仓库。
 | [chatgpt_image](./chatgpt_image/) | 插件配置 | 插件库维护 ChatGPT2API 图片生成/编辑与 token 池 |
 | [codex_image](./codex_image/) | 插件配置 | 插件库维护 Codex 图片生成 |
 | [AI-Chat](./ai-chat/) | `{prefix}ask` | AI-Chat 聊天与消息解释助手，调用 TelePilot 已配置的 AI Provider |
-| [AI 答疑（交互 Bot）](./interaction-ai-chat/) | @交互 Bot / 回复 Bot | 交互 Bot 被 @提及或回复（含访客模式 Guest Mode）时调用 TelePilot 已配置的 AI Provider 回答：先回“🤔”占位再编辑为 Telegram 富文本，可选联网搜索与识图，文案模板可自定义，带短期记忆、白名单与每日限额；可选 NexusPHP PT 站点只读数据源（Cookie 自填，只搜种子列表、双重脱敏，结果表默认用 Bot API 10.3 紧凑表格）；内置 group-helper / qingwa-wiki skills，可选用已安装 Agent Skills 与站点 Wiki 只读检索（附页面链接） |
+| [AI 答疑（交互 Bot）](./interaction-ai-chat/) | @交互 Bot / 回复 Bot | 交互 Bot 被 @提及或回复（含访客模式 Guest Mode）时调用 TelePilot 已配置的 AI Provider 回答：先回“🤔”占位再编辑为 Telegram 富文本，可选联网搜索与识图，文案模板可自定义，带短期记忆、白名单与每日限额；可选 NexusPHP PT 站点只读数据源（Cookie 自填，只搜种子列表、双重脱敏，结果表默认用 Bot API 10.3 紧凑表格）；内置 group-helper / qingwa-wiki skills，可选用已安装 Agent Skills 与站点 Wiki 只读检索（附页面链接）；模型调用失败时附「重试」（提问者/管理员）与「换模型重试」（管理员）按钮，也可回复“重试”按原问题重放 |
 | [bot_mute_guard](./bot_mute_guard/) | 无 | 指定群组非白名单 @bot、inline Bot 与 Bot 发言广告消息删除 |
 | [private_chat_assistant](./private_chat_assistant/) | 无 | 监听账号收到的私聊，通过插件专用 Bot 向指定账号发送 60 秒聚合提醒 |
 | [todo_reminder](./todo_reminder/) | `{prefix}todo`、`{prefix}undo ID` | 支持自然语言单次提醒和 `todo 数字 提醒内容` 重复简写；含完成反馈与命令自动删除 |
