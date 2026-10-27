@@ -452,8 +452,8 @@ class ManifestPTTest(_Case):
         raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
         self.assertIn("external_http", manifest.permissions)
         self.assertEqual(raw["allowed_hosts"], manifest.allowed_hosts)
-        self.assertEqual(raw["version"], "0.4.5")
-        self.assertEqual(manifest.version, "0.4.5")
+        self.assertEqual(raw["version"], "0.4.6")
+        self.assertEqual(manifest.version, "0.4.6")
         self.assertIn("test_pt", [action["key"] for action in manifest.config_actions])
 
 
@@ -783,3 +783,85 @@ class BoldTitleLinkTest(_Case):
         self.assertNotIn("torrents.php", text)
         self.assertIn("<b>沙丘1</b>", text)  # 非详情页链接被去掉，只留加粗标题文字
 
+
+
+TABLE_ANSWER = (
+    "站里有 2 个结果：\n\n| 标题 | 大小 | 发布时间 |\n|---|---|---|\n"
+    "| **[Dune.Part.Two.2024](https://pt.example.com/details.php?id=1001)** | 61.25 GB | 2026-10-20 |\n"
+)
+
+
+class _RichPTMessages(base.LiveMessages):
+    """支持 Rich Message 的 ctx.messages；``compact`` 控制是否声明平台紧凑表格能力（0.106.0-beta.12+）。"""
+
+    def __init__(self, *, compact: bool, result: dict | None = None) -> None:
+        super().__init__()
+        if compact:
+            self.rich_table_compact = True
+        self.result = result or {"ok": True, "executed": 1, "failed": 0}
+
+    async def send_rich(self, **kwargs):  # pragma: no cover - 插件用 apply 实时执行
+        raise AssertionError("应通过 apply 实时执行 rich 动作")
+
+    async def apply(self, actions, *, entry_key=None):
+        if any("rich_message" in action for action in actions):
+            self.applied.extend(dict(action) for action in actions)
+            return dict(self.result)
+        return await super().apply(actions, entry_key=entry_key)
+
+
+class PTCompactTableTest(_Case):
+    """0.4.6：PT 三列结果表默认请求 Bot API 10.3 紧凑表格（pt_table_compact，默认开启）。"""
+
+    def _run(self, *, config: dict | None = None, compact: bool = True, answer: str = TABLE_ANSWER, result=None):
+        ctx = make_ctx({"rich_text": True, **(config or {})}, ai=RouterAI(answer=answer))
+        ctx.messages = _RichPTMessages(compact=compact, result=result)
+        actions = base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("站里有没有 Dune")))
+        rich = [action for action in ctx.messages.applied if "rich_message" in action]
+        return ctx, actions, rich
+
+    def test_schema_default_true_with_chinese_description(self) -> None:
+        props = PACKAGE.MANIFEST.config_schema["properties"]
+        field = props["pt_table_compact"]
+        self.assertEqual(field["type"], "boolean")
+        self.assertIs(field["default"], True)
+        self.assertEqual(field["x-ui-section"], "PT 站点数据源")
+        self.assertIn("紧凑表格", field["description"])
+        self.assertIn("0.106.0-beta.12", field["description"])
+        self.assertIs(PLUGIN._pt_cfg({})["table_compact"], True)
+        self.assertIs(PLUGIN._pt_cfg({"pt_table_compact": False})["table_compact"], False)
+
+    def test_pt_table_requests_compact_on_new_platform(self) -> None:
+        _, actions, rich = self._run()
+        self.assertEqual(actions, [])
+        self.assertEqual(len(rich), 1)
+        self.assertIs(rich[0]["compact_tables"], True)
+        self.assertEqual(rich[0]["type"], "send_rich_message")
+        self.assertIn("| 标题 | 大小 | 发布时间 |", rich[0]["rich_message"]["markdown"])
+
+    def test_disabled_keeps_old_output(self) -> None:
+        _, _, rich = self._run(config={"pt_table_compact": False})
+        self.assertNotIn("compact_tables", rich[0])
+        self.assertEqual(set(rich[0]), {"type", "chat_id", "rich_message", "send_via"})
+
+    def test_old_platform_without_capability_sends_plain_table_without_error(self) -> None:
+        ctx, actions, rich = self._run(compact=False)
+        self.assertEqual(actions, [])
+        self.assertNotIn("compact_tables", rich[0])
+        self.assertFalse(any(level in {"warning", "error"} for level, *_ in ctx.logs))
+
+    def test_non_pt_answer_does_not_request_compact(self) -> None:
+        ctx = base.live_ctx(
+            config={"rich_text": True, "allowed_user_ids": "601", "thinking_placeholder": False},
+            ai=base.FakeAI(text="| a | b |\n|---|---|\n| 1 | 2 |"),
+            messages=_RichPTMessages(compact=True),
+        )
+        base.run(PLUGIN.InteractionAIChatPlugin().on_event(ctx, private("普通问题")))
+        rich = [action for action in ctx.messages.applied if "rich_message" in action]
+        self.assertTrue(rich)
+        self.assertNotIn("compact_tables", rich[0])
+
+    def test_capability_helper_requires_true(self) -> None:
+        self.assertFalse(PLUGIN.rich_table_compact_supported(object()))
+        self.assertFalse(PLUGIN.rich_table_compact_supported(types.SimpleNamespace(rich_table_compact="yes")))
+        self.assertTrue(PLUGIN.rich_table_compact_supported(types.SimpleNamespace(rich_table_compact=True)))

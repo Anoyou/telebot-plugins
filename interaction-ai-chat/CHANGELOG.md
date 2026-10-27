@@ -1,5 +1,9 @@
 # 更新日志
 
+## 0.4.6 (2026-10-28)
+- PT 搜索结果表（标题、大小、发布时间）默认使用 Telegram Bot API 10.3 紧凑表格（`is_compact` / `<table compact>`，单元格内边距更小，手机上一屏能看到更多行）。新配置项「PT 结果使用紧凑表格」`pt_table_compact`（PT 站点数据源分组，默认开启）；关闭后与 0.4.5 输出完全一致。
+- 只有本轮回答用了 PT 搜索结果且走原生 Rich Message 时才请求紧凑表格：插件给 Rich 动作（`send_rich_message` / `edit_message.rich_message`，含访客模式 inline 编辑与 `answer_guest_query`）加 `compact_tables: true`，由平台把 Markdown 表格转成 `<table compact>`；普通问答的表格不受影响。
+- 兼容性：`min_telepilot_version` 保持 0.105.0-beta.1。紧凑表格需要 TelePilot 0.106.0-beta.12+（以平台能力标记 `ctx.messages.rich_table_compact` 为准）；旧平台没有该标记时不加字段、照常发送普通表格，不报错、不多记告警。自建或未升级的 Bot API 服务器拒绝紧凑表格时，平台自动去掉紧凑标记重发一次；仍失败才按原有逻辑退回 Telegram HTML。
 ## 0.4.5 (2026-10-26)
 - 内置 skill `group-helper` 按管理员修改更新：新增官种规则——标题末尾发布组为 FROGWeb/FROGE/FROG 的是官种，其余为转种；开头报「官种 x 条、转种 y 条」，先列官种表再列转种表，各按做种数排序、合计最多 8 条。
 - PT 结果表格固定三列：标题（加粗详情页链接）、大小、发布时间，不再有做种/下载、优惠列；做种数只用于排序，优惠写在表格后的推荐里。插件内置的 PT 回答格式提示同步改为三列，并说明 skill 另有官种分组规定时按 skill。
