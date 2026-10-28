@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.8"
+PLUGIN_VERSION = "0.4.9"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
