@@ -452,8 +452,9 @@ class ManifestPTTest(_Case):
         raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text("utf-8"))
         self.assertIn("external_http", manifest.permissions)
         self.assertEqual(raw["allowed_hosts"], manifest.allowed_hosts)
-        self.assertEqual(raw["version"], "0.4.8")
-        self.assertEqual(manifest.version, "0.4.8")
+        # 版本号以 plugin.json 为准，只校验两处一致与格式，避免每次发版都要改测试。
+        self.assertRegex(raw["version"], r"^\d+\.\d+\.\d+$")
+        self.assertEqual(manifest.version, raw["version"])
         self.assertIn("test_pt", [action["key"] for action in manifest.config_actions])
 
 
