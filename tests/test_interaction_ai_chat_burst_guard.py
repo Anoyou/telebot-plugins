@@ -122,7 +122,7 @@ def test_schema_fields_in_trigger_section() -> None:
         assert schema[key]["default"] == default, key
         assert schema[key]["x-ui-section"] == "触发方式", key
     raw = json.loads((base.PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
-    assert raw["version"] == base.PACKAGE.MANIFEST.version == "0.4.12"
+    assert raw["version"] == base.PACKAGE.MANIFEST.version  # 版本号随发布递增，这里只校验两处一致
 
 
 # -- 口令判定 --------------------------------------------------------------------

@@ -313,6 +313,16 @@ def _extract_entity_urls(message: Any, text: str) -> list[str]:
     return result
 
 
+def _card_epoch_seconds(value: Any) -> int | None:
+    """任务里的时间（毫秒 / 秒时间戳字符串）→ 秒；无法识别返回 None（卡片显示为空）。"""
+
+    text = str(value or "").strip()
+    if not text.isdigit():
+        return None
+    number = int(text)
+    return number // 1000 if number > 10**11 else number
+
+
 def _default_db() -> SummaryDB:
     return SummaryDB()
 
@@ -406,6 +416,50 @@ class SummaryPlugin(Plugin):
         await self._bootstrap_tasks(ctx)
         if ctx.log:
             await ctx.log("info", f"[sum] 已启动 v{VERSION}，指令：{self._command}")
+
+    async def on_ui_card(self, ctx: PluginContext, card_id: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+        """TelePilot 0.110.0+ 声明式卡片（plugin.json ``ui.cards``）：插件详情顶部的「定时总结任务」。
+
+        只读：读取 worker 上次保存的 ``summary_config.json``（含配置页任务），不创建文件、不改任务；
+        平台在主进程里调用（没有 Telegram client / storage），旧平台不认识 ``ui`` 声明、不会调用。
+        """
+
+        rows: list[dict[str, Any]] = []
+        data_dir = getattr(ctx, "data_dir", None)
+        path = Path(data_dir) / DB_FILE_NAME if data_dir else None
+        data: dict[str, Any] = {}
+        if path is not None and path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                data = loaded if isinstance(loaded, dict) else {}
+            except Exception:  # noqa: BLE001 - 文件损坏时卡片显示空表，不影响插件运行
+                data = {}
+        enabled = errors = 0
+        for item in data.get("tasks") or []:
+            if not isinstance(item, dict):
+                continue
+            task = self._coerce_task(item)
+            schedule = task.interval or task.cron or "-"
+            if task.disabled:
+                status = "已停用"
+            elif task.last_error:
+                status = "出错"
+            else:
+                status = "正常"
+            enabled += 0 if task.disabled else 1
+            errors += 1 if (task.last_error and not task.disabled) else 0
+            rows.append(
+                {
+                    "id": task.id,
+                    "chat": task.chat_display or task.chat_id or "-",
+                    "schedule": schedule,
+                    "push": task.push_target or "原群",
+                    "last_run": _card_epoch_seconds(task.last_run_at),
+                    "status": status,
+                    "note": (task.last_error or task.last_result or task.remark or "")[:80],
+                }
+            )
+        return {"total": len(rows), "enabled": enabled, "errors": errors, "rows": rows}
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
         await self._unregister_all(ctx)

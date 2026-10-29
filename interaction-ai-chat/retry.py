@@ -125,12 +125,26 @@ def is_own_callback(data: Any) -> bool:
     return str(data or "").startswith(f"{CALLBACK_PREFIX}:")
 
 
-def retry_keyboard(token: str) -> dict[str, Any]:
+def button(text: str, data: str, *, routed: bool = False) -> dict[str, Any]:
+    """一个 inline 按钮。
+
+    ``routed=True``（宿主支持 ``messages.callback_routing``，TelePilot 0.108.0+）时写成
+    ``{"text", "callback": {"data"}}``：宿主签发 ``cb1.<token>`` 作为真实 callback_data，点击只回到本插件，
+    投递时 ``payload["callback_data"]`` 还原成这里的 ``iac:…`` 字符串，所以解析与订阅都不用改。
+    旧宿主（或探测失败）照旧直接写 ``callback_data``。
+    """
+
+    if routed:
+        return {"text": text, "callback": {"data": data}}
+    return {"text": text, "callback_data": data}
+
+
+def retry_keyboard(token: str, *, routed: bool = False) -> dict[str, Any]:
     return {
         "inline_keyboard": [
             [
-                {"text": BUTTON_RETRY, "callback_data": callback_data(ACTION_RETRY, token)},
-                {"text": BUTTON_SWITCH, "callback_data": callback_data(ACTION_MENU, token)},
+                button(BUTTON_RETRY, callback_data(ACTION_RETRY, token), routed=routed),
+                button(BUTTON_SWITCH, callback_data(ACTION_MENU, token), routed=routed),
             ]
         ]
     }
@@ -140,7 +154,7 @@ def page_count(total: int) -> int:
     return max(1, (max(0, total) + MODELS_PER_PAGE - 1) // MODELS_PER_PAGE)
 
 
-def model_keyboard(token: str, models: list[dict[str, Any]], page: int) -> dict[str, Any]:
+def model_keyboard(token: str, models: list[dict[str, Any]], page: int, *, routed: bool = False) -> dict[str, Any]:
     """模型列表：每行一个模型，最多 ``MODELS_PER_PAGE`` 个；多页时加翻页行；最后一行“取消”。"""
 
     pages = page_count(len(models))
@@ -148,15 +162,15 @@ def model_keyboard(token: str, models: list[dict[str, Any]], page: int) -> dict[
     start = page * MODELS_PER_PAGE
     rows: list[list[dict[str, Any]]] = []
     for index, item in enumerate(models[start : start + MODELS_PER_PAGE], start=start):
-        rows.append([{"text": _clip_label(str(item.get("label") or item.get("m") or "")), "callback_data": callback_data(ACTION_SELECT, token, index)}])
+        rows.append([button(_clip_label(str(item.get("label") or item.get("m") or "")), callback_data(ACTION_SELECT, token, index), routed=routed)])
     if pages > 1:
         nav: list[dict[str, Any]] = []
         if page > 0:
-            nav.append({"text": BUTTON_PREV, "callback_data": callback_data(ACTION_PAGE, token, page - 1)})
+            nav.append(button(BUTTON_PREV, callback_data(ACTION_PAGE, token, page - 1), routed=routed))
         if page < pages - 1:
-            nav.append({"text": BUTTON_NEXT, "callback_data": callback_data(ACTION_PAGE, token, page + 1)})
+            nav.append(button(BUTTON_NEXT, callback_data(ACTION_PAGE, token, page + 1), routed=routed))
         rows.append(nav)
-    rows.append([{"text": BUTTON_CANCEL, "callback_data": callback_data(ACTION_CANCEL, token)}])
+    rows.append([button(BUTTON_CANCEL, callback_data(ACTION_CANCEL, token), routed=routed)])
     return {"inline_keyboard": rows}
 
 
@@ -283,6 +297,7 @@ __all__ = [
     "ACTION_SELECT",
     "ADMIN_ACTIONS",
     "RETRY_TTL_SECONDS",
+    "button",
     "callback_data",
     "is_moderation_error",
     "is_own_callback",

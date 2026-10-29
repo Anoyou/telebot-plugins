@@ -1,5 +1,10 @@
 # 更新日志
 
+## 1.1.38 (2026-10-29)
+- 新增插件详情卡片「定时总结任务」（TelePilot 0.110.0+ 声明式卡片 `ui.cards`，slot `plugin.overview`）：一排数字（任务数 / 启用 / 出错）+ 任务表（ID、群、周期、推送到、上次运行、状态、备注或最近结果），Web 与 iOS 插件详情顶部直接可见，不用发指令就能看到任务是否在跑、最近有没有出错。
+- 卡片只读：`on_ui_card` 读取 worker 上次保存的 `summary_config.json`（含配置页任务），不创建文件、不改任务、不调用 AI；文件缺失或损坏时显示空表。
+- 兼容：旧平台不认识 `ui` 声明、不会调用 `on_ui_card`，总结与定时任务行为完全不变；`min_telepilot_version` 保持 0.72.0-beta.2。
+
 ## 1.1.37 (2026-10-28)
 - 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
 

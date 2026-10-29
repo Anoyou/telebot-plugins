@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.12"
+PLUGIN_VERSION = "0.4.13"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -246,6 +246,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 18,
         },
         "keyword_burst_users": {
+            "x-ui-visible-if": {"field": "keyword_burst_guard", "not_in": [False]},
             "type": "integer",
             "title": "几个人发同一句算口令",
             "description": "在下面的时间窗口内，有这么多个不同的人发了同一句话，就认定是口令。默认 3 人，最少 2 人。",
@@ -257,6 +258,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 18,
         },
         "keyword_burst_window_seconds": {
+            "x-ui-visible-if": {"field": "keyword_burst_guard", "not_in": [False]},
             "type": "integer",
             "title": "口令判定时间窗口（秒）",
             "description": "多少秒内有足够多人发同一句话才算口令。默认 60 秒。",
@@ -268,6 +270,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 18,
         },
         "keyword_burst_cooldown_minutes": {
+            "x-ui-visible-if": {"field": "keyword_burst_guard", "not_in": [False]},
             "type": "integer",
             "title": "口令静默时长（分钟）",
             "description": "认定为口令后，这句话在多少分钟内都不再回答（从认定那一刻算起）。默认 10 分钟。",
@@ -466,6 +469,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 40,
         },
         "allowed_user_ids": {
+            "x-ui-visible-if": {"field": "access_mode", "not_in": ["所有人"]},
             "type": "string",
             "title": "白名单用户 ID",
             "description": "“仅白名单用户”模式下生效；逗号或换行分隔。",
@@ -555,6 +559,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 50,
         },
         "payment_guard_reply": {
+            "x-ui-visible-if": {"field": "protect_command_outputs", "not_in": [False]},
             "type": "string",
             "title": "加款诱导反制回复",
             "description": "AI 回复若像 +数字 或 +数字-数字 的加款诱导，会替换成此内容；留空则改用“内容被拦截提示”模板。",
@@ -566,6 +571,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 51,
         },
         "blocked_bare_outputs": {
+            "x-ui-visible-if": {"field": "protect_command_outputs", "not_in": [False]},
             "type": "string",
             "title": "额外拦截的裸文本",
             "description": "每行或逗号分隔一个词；消息首行就是这个词，或“这个词 + 空格 + 参数”时视为可能触发命令。",
@@ -576,6 +582,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 52,
         },
         "guard_neutralize_prefix": {
+            "x-ui-visible-if": {"field": "protect_command_outputs", "not_in": [False]},
             "type": "string",
             "title": "指令中和前缀",
             "description": "消息首行像命令时加在消息开头的前缀，让 Bot / TelePilot 不再把它当作命令；不能以 / . ! , 等命令符号开头，留空或不合法时用“💬 ”。",
@@ -691,6 +698,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 80,
         },
         "pt_site_url": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "站点地址",
             "description": "NexusPHP 站点首页地址，只支持 https，例如 https://pt.example.com；路径会被忽略，插件只访问该站点的 torrents.php。",
@@ -701,6 +709,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 81,
         },
         "pt_cookie": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "站点 Cookie",
             "description": (
@@ -716,6 +725,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 82,
         },
         "pt_user_agent": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "User-Agent（可选）",
             "description": "站点要求 Cookie 与浏览器 UA 匹配时，填写复制 Cookie 那个浏览器的 User-Agent；留空使用插件默认 UA。",
@@ -726,6 +736,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 83,
         },
         "pt_access_scope": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "PT 查询可用范围",
             "description": "仅白名单用户：只有下方“PT 白名单用户 ID”（留空则用“白名单用户 ID”）里的人提问时才会查站；所有可用答疑的人：能使用答疑的人都可触发查站。",
@@ -737,6 +748,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 84,
         },
         "pt_allowed_user_ids": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "PT 白名单用户 ID（可选）",
             "description": "“仅白名单用户”时生效；逗号或换行分隔。留空则沿用“使用者与限额”里的“白名单用户 ID”。",
@@ -747,6 +759,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 85,
         },
         "pt_allow_guest": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "boolean",
             "title": "访客模式可查 PT",
             "description": "访客模式（Bot 未加入的会话）里的提问默认不查站；开启后仍受上面的可用范围约束。",
@@ -756,6 +769,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 86,
         },
         "pt_enable_special": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "boolean",
             "title": "允许搜索特别区（special.php）",
             "description": "站点有特别区且你的账号可访问时开启；关闭时 special.php 也在只读白名单之外。",
@@ -765,6 +779,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 87,
         },
         "pt_rate_limit_per_minute": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "integer",
             "title": "每分钟最多查询次数",
             "description": "本插件在当前账号下每分钟最多向站点发起多少次搜索（命中缓存不计）；超出时回答附“PT 查询限速提示”。",
@@ -776,6 +791,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 88,
         },
         "pt_cache_seconds": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "integer",
             "title": "结果缓存（秒）",
             "description": "相同关键词在这段时间内直接复用已清洗的结果，不再请求站点；0 表示不缓存。",
@@ -787,6 +803,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 89,
         },
         "pt_max_results": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "integer",
             "title": "每次最多返回条数",
             "description": "每次搜索最多把多少条种子交给模型（按站点默认排序取前 N 条）。",
@@ -798,6 +815,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 90,
         },
         "pt_site_name": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "站点叫法（可选）",
             "description": "群里对这个站点的自定义叫法，多个用逗号分隔，例如“青蛙, 蛙站”。「站点」「站里」「站内」「站上」「本站」「咱站」「我们站」「PT 站」「种子站」等泛称已默认识别为在查配置的站点，无需填写；这里只补充站名、昵称等额外叫法。这些叫法与泛称都不会被当作搜索关键词。留空时自动从站点域名与页面标题推断站名。",
@@ -808,6 +826,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 91,
         },
         "pt_allowed_chat_ids": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "允许 PT 搜索的群 ID（可选）",
             "description": "只在这些会话里查站（群 ID 通常以 -100 开头；私聊填对方用户 ID）；逗号或换行分隔，留空表示不限群。不在列表里的会话不会请求站点，回答会说明“当前群未开启 PT 搜索”。仍受上面的可用范围与访客模式开关约束。",
@@ -818,6 +837,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 92,
         },
         "pt_hide_categories": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "string",
             "title": "隐藏的分类关键词（可选）",
             "description": "分类（或标题/副标题）包含这些关键词的种子不交给模型、也不会出现在回答里，例如成人类分类名；逗号或换行分隔，默认空。",
@@ -829,6 +849,7 @@ CONFIG_SCHEMA = {
             "x-ui-order": 93,
         },
         "pt_table_compact": {
+            "x-ui-visible-if": {"field": "pt_enabled", "not_in": [False]},
             "type": "boolean",
             "title": "PT 结果使用紧凑表格",
             "description": "PT 搜索结果表（标题、大小、发布时间）使用 Telegram Bot API 10.3 紧凑表格（单元格内边距更小，手机上一屏能看到更多行）。需要 TelePilot 0.106.0-beta.12+；更旧的平台或不支持紧凑表格的 Bot API 服务器会自动按普通表格发送，不会报错。关闭后保持原来的表格样式。",

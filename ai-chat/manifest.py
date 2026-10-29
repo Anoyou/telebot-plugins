@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.worker.plugins.manifest import Manifest
 
-PLUGIN_VERSION = "0.1.14"
+PLUGIN_VERSION = "0.1.15"
 
 USAGE = (
     "发送 {prefix}{command} 文本直接调用 TelePilot AI Provider；回复消息后发送 {prefix}{command} "
@@ -144,12 +144,14 @@ CONFIG_SCHEMA = {
             "default": True,
         },
         "reply_to_trigger_message": {
+            "x-ui-visible-if": {"field": "enable_group_chat", "not_in": [False]},
             "type": "boolean",
             "title": "引用触发消息回复",
             "description": "开启后，群聊 AI 回答会以回复触发消息的形式发出；关闭后仍由 @当前账号或回复当前账号触发，但回答会作为普通新消息直接发送。",
             "default": True,
         },
         "group_chat_ids": {
+            "x-ui-visible-if": {"field": "enable_group_chat", "not_in": [False]},
             "type": "string",
             "title": "群聊生效群组（可选）",
             "description": "群 ID 用逗号或换行分隔；留空表示所有群。",
@@ -186,6 +188,7 @@ CONFIG_SCHEMA = {
             "default": True,
         },
         "explain_prompt": {
+            "x-ui-visible-if": {"field": "enable_explain_prompt", "not_in": [False]},
             "type": "string",
             "title": "命令解释模板",
             "description": "支持 {content} 占位被回复消息与用户问题。",

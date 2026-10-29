@@ -286,6 +286,18 @@ class TodoReminderPlugin(Plugin):
         self._me_id: int | None = None
         self._me_username = ""
 
+    async def on_config_validate(self, ctx: PluginContext, config: dict[str, Any], scope: str = "account") -> dict[str, Any] | None:
+        """TelePilot 0.110.0+：保存前检查时区名。写错的时区运行时会静默回退到默认时区，这里改为保存时提示。"""
+
+        name = str((config or {}).get("timezone") or "").strip()
+        if not name:
+            return None
+        try:
+            ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            return {"errors": {"timezone": f"不认识的时区「{name}」，请填 IANA 时区名，例如 {DEFAULT_TIMEZONE}"}}
+        return None
+
     async def on_startup(self, ctx: PluginContext) -> None:
         self._command = _clean_command((ctx.config or {}).get("command"))
         self.commands = {"undo": self._handle_undo_command}

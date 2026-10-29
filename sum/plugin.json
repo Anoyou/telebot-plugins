@@ -3,7 +3,7 @@
   "display_name": "群消息总结",
   "description": "调用 TelePilot 已配置的 AI 总结群组消息，支持快捷总结与可配置定时任务",
   "author": "Anoyou",
-  "version": "1.1.37",
+  "version": "1.1.38",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -164,6 +164,33 @@
       "description": "账号主人或授权管理员通过 UserBot 命令触发。"
     }
   ],
+  "ui": {
+    "cards": [
+      {
+        "id": "scheduled_tasks",
+        "slot": "plugin.overview",
+        "title": "定时总结任务",
+        "subtitle": "worker 最近一次保存的任务状态（含配置页任务）",
+        "source": {"action": "scheduled_tasks"},
+        "blocks": [
+          {"type": "stats", "items": [
+            {"label": "任务", "path": "total", "format": "number"},
+            {"label": "启用", "path": "enabled", "format": "number", "tone": "success"},
+            {"label": "出错", "path": "errors", "format": "number", "tone": "danger"}
+          ]},
+          {"type": "table", "rows_path": "rows", "empty": "还没有定时总结任务", "columns": [
+            {"key": "id", "label": "ID"},
+            {"key": "chat", "label": "群"},
+            {"key": "schedule", "label": "周期"},
+            {"key": "push", "label": "推送到"},
+            {"key": "last_run", "label": "上次运行", "format": "relative_time"},
+            {"key": "status", "label": "状态"},
+            {"key": "note", "label": "备注 / 最近结果"}
+          ]}
+        ]
+      }
+    ]
+  },
   "requires_platform_capabilities": ["ai"],
   "capabilities": {}
 }
