@@ -1192,6 +1192,24 @@ def guest_buttons_supported(messages: Any) -> bool:
     return getattr(messages, "guest_reply_markup", False) is True
 
 
+def callback_routing_supported(ctx: Any) -> bool:
+    """宿主是否提供通用回调路由（TelePilot 0.108.0-beta.1+，能力 ``messages.callback_routing``）。
+
+    支持时重试 / 换模型按钮写成 ``{"callback": {"data": "iac:…"}}``，由宿主签发 ``cb1.`` token、点击只投递给本插件
+    （其它插件即使订阅了 callback_query 也收不到），``payload["callback_data"]`` 仍是原来的 ``iac:…``。
+    订阅保持 ``all_allowed_chats`` / ``guest_all`` 不变：不新增 ``own_buttons`` 订阅，因为同一点击同时命中两条订阅会
+    投递两次，旧宿主又会把不认识的 ``own_buttons`` 当成 ``all_allowed_chats``。旧宿主没有 ``ctx.capabilities`` 时返回 False，照旧写 callback_data。
+    """
+
+    caps = getattr(ctx, "capabilities", None)
+    if caps is None:
+        return False
+    try:
+        return bool(caps.has("messages.callback_routing"))
+    except Exception:  # noqa: BLE001 - 探测失败按旧写法
+        return False
+
+
 def _apply_failed(outcome: Any) -> bool:
     return isinstance(outcome, dict) and (
         outcome.get("ok") is False or int(outcome.get("failed") or 0) > 0 or int(outcome.get("dropped") or 0) > 0
@@ -1953,7 +1971,7 @@ class InteractionAIChatPlugin(Plugin):
             return None
         if not record.get("token"):
             record["token"] = rty.new_token()
-        markup = rty.retry_keyboard(record["token"])
+        markup = rty.retry_keyboard(record["token"], routed=callback_routing_supported(ctx))
         try:
             if guest:
                 return await self._deliver_guest_failure(ctx, cfg, trigger, reply, placeholder, record, markup)
@@ -2241,6 +2259,7 @@ class InteractionAIChatPlugin(Plugin):
                 item["reply_markup"] = markup
             return item
 
+        routed = callback_routing_supported(ctx)
         if action in (rty.ACTION_MENU, rty.ACTION_PAGE):
             models = record.get("models") if action == rty.ACTION_PAGE else None
             if not isinstance(models, list) or not models:
@@ -2251,11 +2270,11 @@ class InteractionAIChatPlugin(Plugin):
                 return await reply_only(RETRY_NO_MODELS_TEXT)
             pending = await self._answer_callback(ctx, callback_id)
             menu_text = f"{failure_text}\n\n{RETRY_MENU_HINT}" if parse_mode == "html" else f"{failure_text}\n\n{html_to_plain(RETRY_MENU_HINT)}"
-            actions = [edit(menu_text, rty.model_keyboard(token, models, arg or 0))]
+            actions = [edit(menu_text, rty.model_keyboard(token, models, arg or 0, routed=routed))]
             return ([pending] if pending else []) + actions
         if action == rty.ACTION_CANCEL:
             pending = await self._answer_callback(ctx, callback_id)
-            return ([pending] if pending else []) + [edit(failure_text, rty.retry_keyboard(token))]
+            return ([pending] if pending else []) + [edit(failure_text, rty.retry_keyboard(token, routed=routed))]
 
         override: dict[str, Any] | None = None
         if action == rty.ACTION_SELECT:

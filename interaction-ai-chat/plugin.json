@@ -3,7 +3,7 @@
   "display_name": "AI 答疑（交互 Bot）",
   "description": "交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。",
   "author": "Anoyou",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "entry": "plugin.py",
   "min_telepilot_version": "0.105.0-beta.1",
   "reads": [
