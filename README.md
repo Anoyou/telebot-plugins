@@ -82,10 +82,38 @@ TelePilot 远程插件仓库。
 - [插件开发指南](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-DEV-GUIDE.md)
 - [插件 API 完整参考](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-API-REFERENCE.md)
 
+### 新平台能力：先探测、再回退（本仓库约定）
+
+插件库约定**不为了用新能力抬高 `min_telepilot_version`**：新能力先探测 `ctx.capabilities`，旧平台自动走旧实现；这层兼容写法保留到 Plugin API 2.0 再删。各能力的写法与门槛见主仓库 [PLUGIN-API-REFERENCE.md「版本与兼容」](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-API-REFERENCE.md#版本与兼容)，本仓库已有的参考实现：
+
+| 能力 | 参考插件 | 旧平台表现 |
+| --- | --- | --- |
+| 通用回调路由 `messages.callback_routing`（按钮写 `{"callback": {"data": ...}}`） | interaction-ai-chat `retry.button()` / `callback_routing_supported()` | 照旧写 `callback_data`；订阅不改（不要同时订阅 `own_buttons` 与 `all_allowed_chats`，同一点击会投递两次） |
+| 宿主只读查询 `host.read.account.admins@1` | interaction-ai-chat `_host_admin_ids()` | 读 payload 的 `owner_user_ids` / `admin_user_ids` |
+| 声明式卡片 `ui.cards` + `on_ui_card` | sum「定时总结任务」 | 旧宿主忽略 `ui`，不调用钩子 |
+| 保存校验 `on_config_validate` | interaction-ai-chat、todo_reminder、private_chat_assistant、chatgpt_image、codex_image | 旧宿主不调用，保存行为不变 |
+| 表单契约 2：`x-ui-visible-if`、数组 `textarea` 每行一项、`x-rule-schema`、`dry_run_rule` | interaction-ai-chat / ai-chat / todo_reminder / bot_mute_guard、auto_reply、autorepeat | 旧客户端忽略声明，字段照常全部显示 |
+| 密钥列表 `x-secret-list` | chatgpt_image | 旧宿主经 plugin_compat 兼容 |
+
+```python
+def callback_routing_supported(ctx) -> bool:
+    caps = getattr(ctx, "capabilities", None)   # 0.107 之前的宿主没有
+    if caps is None:
+        return False
+    try:
+        return bool(caps.has("messages.callback_routing"))
+    except Exception:  # 探测失败按旧写法
+        return False
+```
+
+- `on_ui_card` / `on_ui_action` / `on_config_validate` 在**主进程**的受控上下文里调用：有 `ctx.config`、`ctx.data_dir`、`ctx.http`、`ctx.ai`、`ctx.account_id`（全局作用域为 0），**没有** `ctx.storage`、`ctx.messages`、Telegram client。数据放在 `ctx.storage` 里的插件暂时做不了数据卡片。
+- `x-ui-visible-if` 推荐写 `not_in`（只在开关被明确关掉时隐藏）：Web / iOS 按表单当前值判断，值缺省或控制字段在另一作用域时 `equals: true` 会把字段误藏起来。
+- 涉及资金（红包、抽奖、下注、结算、转账）的插件只做纯展示类适配，不改结算与金额逻辑。
+
 ### 版本要求与兼容性检查
 
 - `plugin.json` 与 `manifest.py` 的 `version`、`min_telepilot_version`、`permissions`、`config_schema` 等字段必须一致。
-- `min_telepilot_version` 要覆盖插件实际用到的能力。`manifest.py` 向 `Manifest(...)` 传 `requires_platform_capabilities`（新装/升级必填）时，最低版本不得低于 `0.72.0-beta.2`——更早的 TelePilot 导入 manifest 会直接 `TypeError`。用到 `send_rich`、`ctx.skills`、识图、`compact_tables` 等新能力时，要么提高最低版本，要么先用能力标记（如 `getattr(ctx.messages, "rich_table_compact", False)`）探测再调用。注意宿主比较版本只看 `x.y.z`，`-beta.N` 后缀不参与比较。
+- `min_telepilot_version` 要覆盖插件实际用到的能力。`manifest.py` 向 `Manifest(...)` 传 `requires_platform_capabilities`（新装/升级必填）时，最低版本不得低于 `0.72.0-beta.2`——更早的 TelePilot 导入 manifest 会直接 `TypeError`。用到 `send_rich`、`ctx.skills`、识图、`compact_tables` 等新能力时，要么提高最低版本，要么先用能力标记（如 `getattr(ctx.messages, "rich_table_compact", False)`）探测再调用。版本比较：TelePilot 0.107.0-beta.1 起声明带 beta 号（如 `0.106.0-beta.12`）时按完整 SemVer 比较，不带 beta 号时仍只比 `x.y.z`；更早的宿主一律只比 `x.y.z`，所以依赖某个 beta 才有的能力仍要同时做能力探测。
 - 用 TelePilot 主仓库的真实运行时检查全部插件（安装期校验、加载、manifest 一致性、权限、Host API 方法与参数、最低版本推断、`on_startup` 初始化）：
 
   ```bash
