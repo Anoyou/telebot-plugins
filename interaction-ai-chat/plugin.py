@@ -124,6 +124,14 @@ RETRY_MENU_HINT = "<i>选择本次重试使用的模型（只影响这一次，�
 RETRY_DONE_SUFFIX = "<i>（已重新回答）</i>"
 RETRY_NOT_FOUND_TEXT = "没有找到可以重试的失败提问（可能已超过 30 分钟），请重新发送你的问题。"
 IDENTITY_TIMEOUT_SECONDS = 6.0
+# 群口令保护（0.4.12）：同一会话里同一句话短时间内被多个不同的人发送，判定为抽奖/红包口令，冷却期内静默跳过。
+# 已有别人发过同一句话时先等这么久再判定（极短去抖），减少判定前就已触发的条数；首个发送者不等待。
+BURST_DEBOUNCE_SECONDS = 1.5
+# 每群每分钟上限按自然分钟分桶；计数 key 保留两分钟后自动过期。
+CHAT_RATE_KEY_TTL_SECONDS = 120
+# “超出上限后核验是否管理员”的进程内缓存（避免刷屏时每条都查一次群管理员）。
+ADMIN_CACHE_SECONDS = 60.0
+ADMIN_CACHE_MAX = 1024
 
 MODE_ALL = "all"
 MODE_WHITELIST = "whitelist"
@@ -351,6 +359,16 @@ def match_trigger_keyword(cfg: dict[str, Any], text: str) -> tuple[str, str] | N
     return None
 
 
+def normalize_burst_text(text: Any) -> str:
+    """口令判定用的归一化：去首尾空白、合并连续空白、casefold（不分大小写）。"""
+
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _minute_bucket() -> int:
+    return int(time.time() // 60)
+
+
 def _split_words(raw: Any) -> set[str]:
     return {item.strip() for item in re.split(r"[\s,，;；]+", str(raw or "")) if item.strip()}
 
@@ -405,6 +423,11 @@ def _cfg(ctx: Any) -> dict[str, Any]:
         if str(raw.get("keyword_match_mode") or "").strip().lower() in {KEYWORD_MATCH_CONTAINS, "包含"}
         else KEYWORD_MATCH_PREFIX,
         "strip_keyword": _bool(raw.get("strip_keyword"), True),
+        "burst_guard": _bool(raw.get("keyword_burst_guard"), True),
+        "burst_users": _int(raw.get("keyword_burst_users"), 3, 2, 50),
+        "burst_window_seconds": _int(raw.get("keyword_burst_window_seconds"), 60, 10, 600),
+        "burst_cooldown_minutes": _int(raw.get("keyword_burst_cooldown_minutes"), 10, 1, 1440),
+        "group_answers_per_minute": _int(raw.get("group_answers_per_minute"), 6, 0, 120),
         "max_tokens": _int(raw.get("max_tokens"), 800, 128, 4000),
         "rich_text": _bool(raw.get("rich_text"), True),
         "max_output_chars": _int(raw.get("max_output_chars"), 3500, 200, 12000),
@@ -1201,6 +1224,8 @@ class InteractionAIChatPlugin(Plugin):
         # 进行中的重试 token（进程内防重复点击；跨 worker 另有 ctx.storage 计数锁）。
         self._retry_running: set[str] = set()
         self._privacy_warned: set[str] = set()
+        # (chat_id, user_id) -> (是否管理员, 过期时间)：每群每分钟上限超出后的管理员核验缓存。
+        self._admin_cache: dict[tuple[int, int], tuple[bool, float]] = {}
         self._wiki_cache = wikisrc.WikiCache()
         self._once_logged: set[str] = set()
         # PT 站点当前登录用户（用户名, UID）只留在进程内存，用作脱敏屏蔽词，不写存储与日志。
@@ -1214,6 +1239,7 @@ class InteractionAIChatPlugin(Plugin):
         self._local_store = _LocalStore()
         self._locks.clear()
         self._retry_running.clear()
+        self._admin_cache.clear()
         self._pt_users.clear()
         self._pt_titles.clear()
 
@@ -1368,6 +1394,9 @@ class InteractionAIChatPlugin(Plugin):
             return _Reply([])
         if cfg["chat_whitelist"] and (chat_id is None or chat_id not in cfg["chat_whitelist"]):
             await _log(ctx, "info", "AI 答疑未回答：会话不在白名单中", kind=trigger.kind)
+            return _Reply([])
+        if await self._group_guard(ctx, cfg, trigger):
+            # 口令保护 / 每群每分钟上限：静默跳过——不挂占位、不扣次数、不回复（原因已记运行日志）。
             return _Reply([])
         if cfg["access_mode"] == MODE_WHITELIST and (user_id is None or user_id not in cfg["allowed_user_ids"]):
             await _log(ctx, "info", "AI 答疑未回答：提问者不在白名单用户中", kind=trigger.kind)
@@ -1633,6 +1662,132 @@ class InteractionAIChatPlugin(Plugin):
         if cfg.get("protect_command_outputs", True):
             reply = await self._neutralize_reply(ctx, cfg, trigger, reply)
         return reply
+
+    # -- 群内防刷屏（0.4.12） ---------------------------------------------------
+
+    async def _group_guard(self, ctx: Any, cfg: dict[str, Any], trigger: _Trigger) -> bool:
+        """群内触发的防刷屏：返回 True 表示这条静默跳过。私聊与访客模式不受影响。
+
+        1. 口令保护（只看关键词触发）：同一会话里同一句话在窗口内被 ≥N 个不同的人发送 → 判定为口令，
+           冷却期内这句话一律静默跳过；已在处理中的不受影响。
+        2. 每群每分钟上限（关键词、@Bot、回复 Bot）：超出静默跳过；管理员不受约束。
+        计数都放在 ``ctx.storage``（跨 worker），全部带 TTL 自动过期。
+        """
+
+        if trigger.kind not in GROUP_KINDS or trigger.chat_id is None:
+            return False
+        text = trigger.text or ""
+        if text.startswith("/") and text.casefold() not in RESET_WORDS:
+            return False  # / 指令本插件本来就不回答，不计数
+        store = self._store(ctx)
+        if trigger.kind == "keyword" and cfg["burst_guard"] and await self._burst_blocked(ctx, cfg, store, trigger):
+            return True
+        if cfg["group_answers_per_minute"] > 0 and await self._chat_rate_blocked(ctx, cfg, store, trigger):
+            return True
+        return False
+
+    async def _burst_blocked(self, ctx: Any, cfg: dict[str, Any], store: Any, trigger: _Trigger) -> bool:
+        norm = normalize_burst_text(trigger.text)
+        if not norm or trigger.image_file_ids:
+            return False  # 只判定纯文字；带图的提问各不相同
+        digest = _hash_id("burst", trigger.chat_id, norm)
+        flag_key = f"burst:flag:{digest}"
+        if await self._stored_int(store, flag_key) > 0:
+            return True  # 冷却期内：已判定为口令
+        window = cfg["burst_window_seconds"]
+        threshold = cfg["burst_users"]
+        count_key = f"burst:n:{digest}"
+        user = trigger.user_id if trigger.user_id is not None else "anon"
+        # 每个人在窗口内只算一次：个人 key 第一次出现（=1）才给“不同发送人数”加一。
+        first = await _incr_ttl(store, f"burst:u:{digest}:{_hash_id('u', user)}", window)
+        count = await _incr_ttl(store, count_key, window) if first == 1 else await self._stored_int(store, count_key)
+        if count >= threshold:
+            return await self._flag_burst(ctx, cfg, store, trigger, flag_key, count, norm)
+        if count >= 2:
+            # 已有别人在窗口内发过同一句：先等一小会儿再判定，口令刷屏时第 2…N-1 条也能被拦下。
+            await asyncio.sleep(BURST_DEBOUNCE_SECONDS)
+            if await self._stored_int(store, flag_key) > 0:
+                return True
+            count = await self._stored_int(store, count_key)
+            if count >= threshold:
+                return await self._flag_burst(ctx, cfg, store, trigger, flag_key, count, norm)
+        return False
+
+    async def _flag_burst(
+        self, ctx: Any, cfg: dict[str, Any], store: Any, trigger: _Trigger, flag_key: str, count: int, norm: str
+    ) -> bool:
+        # 冷却从判定那一刻算起；flag 计数第一次为 1 的那个 worker 记日志，同一口令只记一次。
+        marked = await _incr_ttl(store, flag_key, cfg["burst_cooldown_minutes"] * 60)
+        if marked == 1:
+            await _log(
+                ctx,
+                "info",
+                "AI 答疑：识别到群口令（多人短时间内发送同一句话），冷却期内静默跳过",
+                kind=trigger.kind,
+                chat_id=trigger.chat_id,
+                users=count,
+                window_seconds=cfg["burst_window_seconds"],
+                cooldown_minutes=cfg["burst_cooldown_minutes"],
+                text_preview=norm[:20],
+            )
+        return True
+
+    async def _chat_rate_blocked(self, ctx: Any, cfg: dict[str, Any], store: Any, trigger: _Trigger) -> bool:
+        limit = cfg["group_answers_per_minute"]
+        user_id = trigger.user_id
+        if user_id is not None and (user_id in cfg["retry_admin_user_ids"] or user_id in (trigger.admin_ids or set())):
+            return False  # 已知管理员：不计数、不受限
+        bucket = _minute_bucket()
+        chat_hash = _hash_id("chat", trigger.chat_id)
+        key = f"rate:chat:{bucket}:{chat_hash}"
+        count = await _incr_ttl(store, key, CHAT_RATE_KEY_TTL_SECONDS)
+        if count <= limit:  # 0 = 存储不可用，放行
+            return False
+        if await self._cached_is_admin(ctx, cfg, trigger):
+            try:
+                await store.incr(key, -1, ttl=CHAT_RATE_KEY_TTL_SECONDS)  # 管理员不占本群名额
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+        if await _incr_ttl(store, f"rate:log:{bucket}:{chat_hash}", CHAT_RATE_KEY_TTL_SECONDS) == 1:
+            await _log(
+                ctx,
+                "info",
+                "AI 答疑：本群本分钟回答次数已达上限，静默跳过",
+                kind=trigger.kind,
+                chat_id=trigger.chat_id,
+                limit=limit,
+            )
+        return True
+
+    async def _cached_is_admin(self, ctx: Any, cfg: dict[str, Any], trigger: _Trigger) -> bool:
+        if trigger.user_id is None or trigger.chat_id is None:
+            return False
+        key = (int(trigger.chat_id), int(trigger.user_id))
+        now = time.monotonic()
+        hit = self._admin_cache.get(key)
+        if hit is not None and hit[1] > now:
+            return hit[0]
+        result = await self._is_admin(ctx, cfg, trigger.chat_id, trigger.user_id, trigger.admin_ids or set())
+        if len(self._admin_cache) >= ADMIN_CACHE_MAX:
+            for stale_key, (_, expires) in list(self._admin_cache.items()):
+                if expires <= now:
+                    self._admin_cache.pop(stale_key, None)
+            if len(self._admin_cache) >= ADMIN_CACHE_MAX:
+                self._admin_cache.clear()
+        self._admin_cache[key] = (result, now + ADMIN_CACHE_SECONDS)
+        return result
+
+    @staticmethod
+    async def _stored_int(store: Any, key: str) -> int:
+        try:
+            value = await store.get(key, default=0)
+        except Exception:  # noqa: BLE001
+            return 0
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
 
     # -- 失败重试 -----------------------------------------------------------
 
