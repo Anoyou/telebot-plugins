@@ -3,7 +3,7 @@
   "display_name": "猜数字",
   "description": "群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
   "author": "Anoyou",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -56,6 +56,12 @@
       "interaction_profile": "session_game",
       "launch_mode": "hybrid",
       "session_scope": "chat",
+      "legacy_entry_keys": [
+        {
+          "key": "start_game",
+          "session_scope": "chat"
+        }
+      ],
       "events": [
         "payment_confirmed",
         "keyword",

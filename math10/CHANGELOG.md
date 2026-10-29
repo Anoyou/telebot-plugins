@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.15 (2026-10-30)
+- 入口 `start_math_game` 增加 `legacy_entry_keys`，把旧入口 key `start_math10` 的推断（按群会话）写进插件自己的声明。TelePilot 0.112.0-beta.3+ 按声明处理、不再查宿主为本插件写死的兜底入口表；结论与原来完全相同（旧启动词、奖金与派奖不变）。旧宿主（含 0.110.0-beta.2 / 0.112.0-beta.2）忽略该字段、照旧走兜底表。未写 `entry_policy`（0.112.0-beta.2 见到它会整表跳过兜底），`min_telepilot_version` 不变。
+
 ## 1.0.14 (2026-10-28)
 - 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
 - `manifest.py` 的配置使用说明（`x-usage-guide`）与 `plugin.json` 不一致，统一为 `plugin.json` 的文案。
