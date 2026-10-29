@@ -69,6 +69,7 @@ MANIFEST = Manifest(
                 },
                 "group_ids": {
                     "type": "array",
+                    "x-ui-widget": "textarea",
                     "title": "指定群 ID",
                     "description": "每行一个群 chat_id（超级群通常是 -100 开头）。",
                     "items": {"type": "string"},
@@ -77,6 +78,7 @@ MANIFEST = Manifest(
                 },
                 "patterns": {
                     "type": "array",
+                    "x-ui-widget": "textarea",
                     "title": "模式",
                     "description": "每行一条。关键词规则命中任一即可；正则规则每行一个表达式。",
                     "items": {"type": "string"},
@@ -146,6 +148,7 @@ MANIFEST = Manifest(
                 },
                 "whitelist": {
                     "type": "array",
+                    "x-ui-widget": "textarea",
                     "title": "白名单会话 ID",
                     "description": "可选；填写后只在这些会话里回复，每行一个 chat_id。",
                     "items": {"type": "string"},
@@ -153,6 +156,7 @@ MANIFEST = Manifest(
                 },
                 "blacklist": {
                     "type": "array",
+                    "x-ui-widget": "textarea",
                     "title": "黑名单会话 ID",
                     "description": "可选；这些会话里不回复，每行一个 chat_id。",
                     "items": {"type": "string"},
