@@ -70,6 +70,14 @@ TelePilot 远程插件仓库。
 2. 添加仓库地址：`https://github.com/Anoyou/telebot-plugins.git`
 3. 浏览插件列表，点击安装
 
+## 插件市场索引（registry.json）
+
+TelePilot 0.113.0+ 的“插件市场”默认从本仓库根目录的 `registry.json` 读取官方插件的元数据（key、名称、类型、图标、简介、版本、`min_telepilot_version`、`plugin_api`、权限、只读查询、通道）。这份文件**由脚本生成，不要手改**：
+
+- 改了任何插件的 `plugin.json` 后运行 `python scripts/build_registry.py` 并一起提交；
+- PR 上 CI 用 `--check` 校验；合并到 main 后若仍不一致，CI 会自动重新生成并提交；
+- 真正安装 / 更新时宿主仍会克隆本仓库并完整校验插件自己的 `plugin.json`，索引只用于浏览、更新角标和兼容性预判。
+
 ## 开发新插件
 
 每个插件一个目录，包含：
