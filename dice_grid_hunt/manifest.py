@@ -252,7 +252,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="dice_grid_hunt",
     display_name="九宫格骰子竞猜",
-    version="1.1.38",
+    version="1.1.39",
     min_telepilot_version="0.72.0-beta.2",
     author="Anoyou",
     description="发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
@@ -267,6 +267,7 @@ MANIFEST = Manifest(
   'interaction_profile': 'session_game',
   'launch_mode': 'hybrid',
   'session_scope': 'chat',
+  'legacy_entry_keys': [{'key': 'answer_dice_grid_hunt', 'session_scope': 'chat'}],
   'events': ['command',
              'payment_confirmed',
              'keyword',

@@ -7,7 +7,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="math10",
     display_name="随机算数题",
-    version="1.0.14",
+    version="1.0.15",
     min_telepilot_version="0.72.0-beta.2",
     author="TelePilot Official",
     description="由交互 Bot 开启一局 10 以内算数题，群内第一个答对者获得奖金",
@@ -38,6 +38,7 @@ MANIFEST = Manifest(
             "interaction_profile": "session_game",
             "launch_mode": "bridge",
             "session_scope": "chat",
+            "legacy_entry_keys": [{"key": "start_math10", "session_scope": "chat"}],
             "events": ["payment_confirmed", "keyword", "message", "callback_query", "session_close"],
             "preserve_command_trigger": True,
             "payload_contract": {

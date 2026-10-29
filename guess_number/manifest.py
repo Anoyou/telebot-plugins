@@ -50,7 +50,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="guess_number",
     display_name="猜数字",
-    version="1.0.21",
+    version="1.0.22",
     min_telepilot_version="0.72.0-beta.2",
     author="Anoyou",
     description="群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
@@ -65,6 +65,7 @@ MANIFEST = Manifest(
   'interaction_profile': 'session_game',
   'launch_mode': 'hybrid',
   'session_scope': 'chat',
+  'legacy_entry_keys': [{'key': 'start_game', 'session_scope': 'chat'}],
   'events': ['payment_confirmed', 'keyword', 'message', 'session_close'],
   'preserve_command_trigger': True,
   'command_fallback': {'enabled': True, 'command': 'guess', 'mode': 'hint_only'},
