@@ -1,5 +1,9 @@
 # 更新日志
 
+## 0.4.11 (2026-10-29)
+- 管理员判定接入 TelePilot 0.108.0 的声明式只读查询：`plugin.json` 声明 `reads: ["account.admins@1"]`，平台支持 `host.read.account.admins@1` 时用 `ctx.host.read("account.admins@1")` 读取账号本人与 sudo 管理员；旧平台（无 `ctx.capabilities` / `ctx.host`）继续用 payload 的 `owner_user_ids` / `admin_user_ids`，行为不变。
+- 去掉已弃用的 `min_telebot_version` 字段（`min_telepilot_version` 仍为 0.105.0-beta.1）。
+
 ## 0.4.10 (2026-10-29)
 - group-helper skill 优化：明确 skill 只定义能力与输出，身份/语气以人设（自定义系统提示词）为准，与 0.4.9 的安全规则调整衔接；PT 搜索规则更新（0 条类别不报、搜具体某一集只列精确结果、推荐优先官种/做种多/体积合适无视优惠）；补充被问身份时按人设回答且不夸大能力。
 

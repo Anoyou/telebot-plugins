@@ -21,8 +21,11 @@
    ``ctx.skills`` → ``agent_skills``、识图 → ``ai_vision``、``client.X`` → ``sandbox.ALLOWED_API``）。
 5. Host API：``ctx.messages/ai/http/storage/skills/scheduler`` 上调用的方法必须存在，关键字参数必须被
    宿主签名接受；返回的标准动作 ``{"type": ...}`` 必须是 ``action_core.CANONICAL_ACTION_TYPES``。
-6. ``min_telepilot_version``：按用到的能力推断所需最低版本（见 ``FEATURE_MIN_VERSIONS``），声明偏低时报警告；
-   做了能力探测（``getattr``/``hasattr`` 能力标记或 ``except TypeError`` 回退）的用法不计入。
+6. ``min_telepilot_version``：按用到的能力推断所需最低版本，声明偏低时报警告；做了能力探测
+   （``ctx.capabilities.has("X")``、``getattr``/``hasattr`` 能力标记或 ``except TypeError`` 回退）的用法不计入。
+   宿主有能力注册表（TelePilot 0.107.0+ ``app.worker.plugins.capabilities.CAPABILITIES``）时，注册表里
+   登记过的能力一律以注册表的 ``since`` 为准（``FEATURE_CAPABILITY`` 映射），``FEATURE_MIN_VERSIONS``
+   只保留注册表出现之前的历史门槛；同时校验 ``plugin_api`` 范围、对弃用接口（``DEPRECATIONS``）给警告。
 7. 初始化：实例化插件类，用平台 ``PluginContext`` + 内存版 storage/scheduler 跑一次 ``on_startup`` /
    ``on_shutdown``（超时 5 秒；失败记为警告，因为真实环境还会注入 Telegram client）。
 
@@ -78,6 +81,19 @@ FEATURE_MIN_VERSIONS: dict[str, tuple[str, str]] = {
     "guest_message": ("0.106.0-beta.1", "guest_message 事件 / guest_all"),
     "ai.complete.thinking": ("0.106.0-beta.2", "ctx.ai.complete(thinking=...)"),
     "compact_tables": ("0.106.0-beta.12", "compact_tables 紧凑表格"),
+}
+
+# 本脚本的能力键 → 宿主能力注册表名（0.107.0+）。宿主有注册表时，门槛版本与说明一律读注册表。
+FEATURE_CAPABILITY: dict[str, str] = {
+    "compact_tables": "messages.rich_table_compact",
+    "guest_reply_markup": "messages.guest_reply_markup",
+    "messages.stream_editor": "messages.streaming_edit",
+    "messages.stream_edit": "messages.streaming_edit",
+    "callback_routing": "messages.callback_routing",
+    "bot_api_extra": "messages.bot_api_extra",
+    "ai.complete.extra_body": "ai.extra_body",
+    "host.read": "host.read",
+    "capabilities": "runtime.capabilities",
 }
 
 # 插件做了能力探测时，用这些标记判断“已兼容旧平台”。
@@ -209,6 +225,11 @@ def prepare_host(repo: Path, installed_dir: Path) -> dict[str, Any]:
     PluginStorage = _optional("app.worker.plugins.storage", "PluginStorage")
     SchedulerFacade = _optional("app.worker.scheduler_runtime", "SchedulerFacade")
     PluginIdentityFacade = _optional("app.worker.plugins.base", "PluginIdentityFacade")
+    capabilities = _optional("app.worker.plugins.capabilities", "CAPABILITIES") or ()
+    deprecations = _optional("app.worker.plugins.deprecations", "DEPRECATION_INDEX") or {}
+    plugin_api_version = _optional("app.worker.plugins.versioning", "PLUGIN_API_VERSION")
+    plugin_api_satisfies = _optional("app.worker.plugins.versioning", "plugin_api_satisfies")
+    compare_versions = _optional("app.worker.plugins.versioning", "compare_versions")
     known_permissions = set(sandbox.ALLOWED_API) | set(getattr(sandbox, "_NON_CLIENT_PERMISSIONS", ()))
     known_permissions |= set(getattr(loader, "_SUPPORTED_FACADE_PERMISSIONS", ()))
     return {
@@ -235,7 +256,46 @@ def prepare_host(repo: Path, installed_dir: Path) -> dict[str, Any]:
             "identities": [c for c in (PluginIdentityFacade,) if c is not None],
         },
         "live_message_ops": LiveMessageOps,
+        # 能力注册表（0.107.0+）：{name: (since, summary)}；旧宿主为空，回退手写门槛表。
+        "capabilities": {str(c.name): (str(c.since), str(c.summary)) for c in capabilities},
+        "deprecations": dict(deprecations),
+        "plugin_api_version": plugin_api_version,
+        "plugin_api_satisfies": plugin_api_satisfies,
+        "compare_versions": compare_versions,
     }
+
+
+def feature_min_versions(host: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    """门槛表：注册表里有的能力以注册表为准，其余沿用历史手写表。"""
+
+    table = dict(FEATURE_MIN_VERSIONS)
+    registry = host.get("capabilities") or {}
+    for feature, cap_name in FEATURE_CAPABILITY.items():
+        if cap_name in registry:
+            since, summary = registry[cap_name]
+            table[feature] = (since, f"{cap_name}：{summary}"[:120])
+    return table
+
+
+def _probed_capabilities(plugin_dir: Path) -> set[str]:
+    """插件里 ``capabilities.has("X")`` / ``"X" in ctx.capabilities`` 探测过的能力名。"""
+
+    names: set[str] = set()
+    pattern = re.compile(r"""\.has\(\s*["']([\w.@-]+)["']|["']([\w.@-]+)["']\s+in\s+[\w.]*capabilities""")
+    for path in plugin_dir.rglob("*.py"):
+        if "__pycache__" in str(path):
+            continue
+        for match in pattern.finditer(_read_text(path)):
+            names.add(match.group(1) or match.group(2))
+    return names
+
+
+def _capability_probed(cap_name: str | None, probed: set[str]) -> bool:
+    """探测名等于能力名，或以“能力名.”/“能力名@”开头（如 ``host.read.account.admins@1`` 探测 ``host.read``）。"""
+
+    if not cap_name:
+        return False
+    return any(name == cap_name or name.startswith((cap_name + ".", cap_name + "@")) for name in probed)
 
 
 # ─────────────────────────────────────────────────────
@@ -510,12 +570,16 @@ def check_plugin(plugin_dir: Path, host: dict[str, Any], *, run_startup: bool = 
                 use(key, where)
             if "compact_tables" in kwargs:
                 use("compact_tables", where)
+            if "bot_api_extra" in kwargs:
+                use("bot_api_extra", where)
+            if method in {"stream_editor", "stream_edit"}:
+                use(f"messages.{method}", where)
         elif facade == "ai":
             key = f"ai.{method}"
             if key in FEATURE_MIN_VERSIONS:
                 use(key, where)
             if method == "complete":
-                for kw in ("images", "web_search", "thinking"):
+                for kw in ("images", "web_search", "thinking", "extra_body"):
                     if kw in kwargs:
                         use(f"ai.complete.{kw}", where)
         elif facade in {"storage", "skills", "identities"}:
@@ -586,6 +650,39 @@ def check_plugin(plugin_dir: Path, host: dict[str, Any], *, run_startup: bool = 
                 "guest_message" in (sub.get("events") or []) or sub.get("scope") == "guest_all"
             ):
                 use("guest_message", "event_subscriptions guest_message/guest_all")
+    for sub in raw.get("event_subscriptions") or []:
+        if isinstance(sub, dict) and sub.get("scope") == "own_buttons":
+            use("callback_routing", "event_subscriptions scope own_buttons")
+    if raw.get("reads"):
+        use("host.read", "plugin.json reads")
+    source_text = "\n".join(_read_text(p) for p in plugin_dir.rglob("*.py") if "__pycache__" not in str(p))
+    if re.search(r"""["']callback["']\s*:\s*\{""", source_text):
+        use("callback_routing", "reply_markup callback 按钮")
+    if ".host.read(" in source_text:
+        use("host.read", "ctx.host.read")
+    # Plugin API 范围（0.107.0+ 宿主）
+    spec = raw.get("plugin_api")
+    satisfies = host.get("plugin_api_satisfies")
+    if isinstance(spec, str) and spec.strip() and satisfies is not None:
+        try:
+            if not satisfies(spec, host.get("plugin_api_version")):
+                report.errors.append(f"plugin_api={spec} 与宿主 Plugin API {host.get('plugin_api_version')} 不兼容")
+        except Exception as exc:  # noqa: BLE001
+            report.errors.append(f"plugin_api={spec!r} 写法无法识别：{exc}")
+    # 弃用接口（宿主 DEPRECATIONS 登记，0.107.0+）
+    deprecations = host.get("deprecations") or {}
+
+    def deprecated(dep_id: str, where: str) -> None:
+        item = deprecations.get(dep_id)
+        if item is not None:
+            report.warnings.append(
+                f"{where} 使用了已弃用接口 {dep_id}：{item.summary}；请改用 {item.replacement}（计划移除：{item.removal}）"
+            )
+
+    if raw.get("min_telebot_version") is not None or "min_telebot_version" in _read_text(plugin_dir / "manifest.py"):
+        deprecated("manifest.min_telebot_version", "plugin.json / manifest.py")
+    if cls is not None and _has_override(cls, "on_interaction", host) and not _has_override(cls, "on_event", host):
+        deprecated("hook.on_interaction", "插件类")
     if "requires_platform_capabilities" in _read_text(plugin_dir / "manifest.py"):
         use("manifest.requires_platform_capabilities", "manifest.py")
     if _has_override(cls, "on_direct_message", host):
@@ -617,13 +714,18 @@ def check_plugin(plugin_dir: Path, host: dict[str, Any], *, run_startup: bool = 
     # 8. 最低版本推断
     required: list[tuple[str, str, str]] = []
     subscribes_guest = "guest_message" in features
+    min_versions = feature_min_versions(host)
+    probed = _probed_capabilities(plugin_dir)
     for feature, wheres in features.items():
-        if feature not in FEATURE_MIN_VERSIONS:
+        if feature not in min_versions:
             continue
-        version, label = FEATURE_MIN_VERSIONS[feature]
+        version, label = min_versions[feature]
         guards = FEATURE_GUARDS.get(feature, ())
         if any(g in facts.guard_tokens for g in guards):
             # 能力探测：旧平台不会因此失败
+            continue
+        if _capability_probed(FEATURE_CAPABILITY.get(feature), probed):
+            # ctx.capabilities.has(...) 探测过：旧平台走回退分支，不抬高最低版本
             continue
         if feature in GUEST_GATED and subscribes_guest:
             # 只在 guest_message 事件里走到；旧平台不会投递该事件
@@ -634,7 +736,15 @@ def check_plugin(plugin_dir: Path, host: dict[str, Any], *, run_startup: bool = 
         top = max(required, key=lambda item: _full_version_key(item[0]))
         report.inferred_min = top[0]
         declared = report.min_version or "0.0.0"
-        if _version_tuple(declared) < _version_tuple(top[0]):
+        compare = host.get("compare_versions")
+        if compare is not None:
+            try:
+                too_low = compare(declared, top[0]) < 0
+            except Exception:  # noqa: BLE001
+                too_low = _version_tuple(declared) < _version_tuple(top[0])
+        else:
+            too_low = _version_tuple(declared) < _version_tuple(top[0])
+        if too_low:
             report.warnings.append(
                 f"min_telepilot_version={declared} 偏低：用到 {top[1]}（{top[2]}）需要 ≥ {top[0]}"
             )

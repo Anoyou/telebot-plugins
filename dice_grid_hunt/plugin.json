@@ -13,7 +13,6 @@
     "send_file",
     "payout"
   ],
-  "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
   "strict_trace": true,
   "commands": [

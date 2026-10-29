@@ -12,7 +12,6 @@
     "payout"
   ],
   "strict_trace": true,
-  "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
   "commands": [
     "poetry",

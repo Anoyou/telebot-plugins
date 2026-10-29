@@ -37,7 +37,6 @@ MANIFEST = Manifest(
     display_name="jpmai-byRBQ",
     version="1.0.11",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="AI 生成艳情文案插件，支持完整 chat/completions URL 兼容、非标准响应文本提取和连通性测试",
     permissions=["send_message", "edit_message", "delete_message", "send_file", "read_chat", "external_http"],

@@ -37,7 +37,6 @@ MANIFEST = Manifest(
     display_name="pixivshow-byRBQ",
     version="1.0.10",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="Pixiv 美少女推图插件，支持普通图与 R18 图推送，R18 自动添加 Telegram 遮罩，可指定单次推送数量",
     permissions=["send_message", "edit_message", "delete_message", "send_file", "read_chat", "external_http"],

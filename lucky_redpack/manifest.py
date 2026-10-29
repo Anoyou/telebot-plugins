@@ -115,7 +115,6 @@ MANIFEST = Manifest(
     display_name="拼手气口令红包",
     version="1.4.14",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="纯 UserBot 口令红包插件，支持多红包并行、红包代码管理和图片财富密码",
     permissions=["send_message", "edit_message", "read_chat", "resolve_entity", "delete_message", "send_file", "payout"],

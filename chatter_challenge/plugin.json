@@ -10,7 +10,6 @@
     "edit_message",
     "read_chat"
   ],
-  "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
   "commands": [
     "chat",

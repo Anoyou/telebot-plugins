@@ -245,7 +245,6 @@ MANIFEST = Manifest(
     display_name="彩票系统 Plus",
     version="1.0.19",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内彩票玩法，支持下注、奖池滚存、自动开奖、历史和消息模板预览",
     permissions=["send_message", "edit_message", "read_chat", "delete_message", "payout"],
