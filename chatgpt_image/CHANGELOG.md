@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.2.0 (2026-10-29)
+- Token 池改为通用声明：`tokens` 声明 `x-secret-list`（遮罩显示、按 id 保留原 token、加密保存），旧版多行 `token` 字段隐藏并在保存时并入列表；字段按指令 / Token 池 / 生成参数 / 风格模板 / 网络与轮询 / Token 健康 / 导入分组，CPA Secret Key 改为密码框。
+- 新增 `on_config_validate`（TelePilot 0.110.0+ 调用）：新填的整段 session JSON 自动提取 accessToken、去掉空条目与重复 token、默认张数不得超过单次最多张数。旧宿主仍由宿主内置兼容逻辑处理。
+- `min_telepilot_version` 不变。
+
 ## 0.1.9 (2026-10-28)
 - 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
 

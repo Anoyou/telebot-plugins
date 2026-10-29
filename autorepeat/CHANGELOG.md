@@ -1,3 +1,7 @@
+## 1.1.0 (2026-10-29)
+- 通用规则页（TelePilot 0.110.0-beta.2+）：声明列表摘要 `x-rule-summary`（群组 / 时间窗口 / 人数）与试运行卡片 `x-dry-run`；新增 `dry_run_rule(config, sample)`。
+- `min_telepilot_version` 不变，旧宿主行为不变。
+
 ## 1.0.4 (2026-08-15)
 - 将自动复读发送和管理命令编辑统一改为平台 MessageOps。
 

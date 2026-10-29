@@ -1439,9 +1439,46 @@ def _dry_run_match(
     return True, rendered
 
 
+_SCOPE_LABELS = {
+    "private": "仅私聊",
+    "group_all": "所有群",
+    "all_groups": "所有群",
+    "group_specific": "指定群",
+    "groups": "指定群",
+    "all": "全部会话",
+}
+_MATCH_LABELS = {"keyword": "关键词", "template": "变量模式", "regex": "正则"}
+
+
+def dry_run_rule(cfg: dict, sample: dict) -> dict:
+    """规则试运行（TelePilot 0.110.0-beta.2+ 通用协议，宿主不再替插件解释）。
+
+    ``sample = {"message", "chat_type", "chat_id"}``；返回 ``{matched, output, logs}``，
+    不发送消息、不写冷却。旧宿主仍调用 ``_dry_run_match``，两者结论一致。
+    """
+    cfg = cfg or {}
+    text = str(sample.get("message") or "")
+    chat_type = str(sample.get("chat_type") or "private")
+    chat_id = sample.get("chat_id")
+    scope = str(cfg.get("scope") or "all")
+    match = str(cfg.get("match") or cfg.get("match_type") or "keyword")
+    patterns = cfg.get("patterns") or []
+    logs = [
+        {"step": "scope", "msg": f"会话类型：{chat_type}；规则作用范围：{_SCOPE_LABELS.get(scope, scope)}"},
+    ]
+    if scope in ("group_specific", "groups"):
+        gids = _coerce_int_list(cfg.get("groups") or cfg.get("group_ids") or [])
+        logs.append({"step": "scope", "msg": f"指定群：{gids or '（未填）'}；样本会话 ID：{chat_id if chat_id is not None else '（未填，取第一个群）'}"})
+    logs.append({"step": "match", "msg": f"匹配类型：{_MATCH_LABELS.get(match, match)}；模式 {len(patterns)} 条"})
+    matched, output = _dry_run_match(cfg, text, chat_type, chat_id)
+    logs.append({"step": "result", "msg": "命中，将回复下方内容" if matched else "未命中：作用范围或模式不匹配"})
+    return {"matched": matched, "output": output, "logs": logs}
+
+
 __all__ = [
     "AutoReplyPlugin",
     "_dry_run_match",
+    "dry_run_rule",
     "_match",
     "_match_vars",
     "_parse_duration_seconds",
