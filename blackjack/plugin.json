@@ -3,7 +3,7 @@
   "display_name": "21点",
   "description": "经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
   "author": "Anoyou",
-  "version": "1.0.32",
+  "version": "1.0.33",
   "entry": "plugin.py",
   "permissions": [
     "send_message",
@@ -136,7 +136,12 @@
         "public_keyword": "interaction_bot"
       },
       "money_channel": "userbot_reply",
-      "participant_policy": "solo_owner"
+      "participant_policy": "solo_owner",
+      "entry_policy": {
+        "session_scope": "user",
+        "participant_policy": "solo_owner",
+        "prize": true
+      }
     }
   ],
   "min_telepilot_version": "0.72.0-beta.2",
@@ -177,6 +182,9 @@
       "description": "付款确认由外部到账证据和 UserBot 上下文共同确认。"
     }
   ],
-  "requires_platform_capabilities": ["interaction_bot", "ledger"],
+  "requires_platform_capabilities": [
+    "interaction_bot",
+    "ledger"
+  ],
   "capabilities": {}
 }
