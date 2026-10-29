@@ -12,7 +12,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="game24",
     display_name="24点游戏",
-    version="1.1.17",
+    version="1.1.18",
     min_telepilot_version="0.72.0-beta.2",
     author="TelePilot Official",
     description="随机生成 24 点题目，群内竞速答题，第一名获得奖金",
@@ -50,6 +50,7 @@ MANIFEST = Manifest(
             "launch_mode": "hybrid",
             "events": ["payment_confirmed", "keyword", "message", "callback_query", "session_close"],
             "session_scope": "chat",
+            "entry_policy": {"session_scope": "chat", "prize": True},
             "preserve_command_trigger": True,
             "command_fallback": {
                 "enabled": True,

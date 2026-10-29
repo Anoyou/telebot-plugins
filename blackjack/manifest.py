@@ -50,7 +50,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="blackjack",
     display_name="21点",
-    version="1.0.32",
+    version="1.0.33",
     min_telepilot_version="0.72.0-beta.2",
     author="Anoyou",
     description="经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
@@ -90,7 +90,8 @@ MANIFEST = Manifest(
   'dispatch_modes': ['admin_command', 'public_keyword'],
   'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
   'money_channel': 'userbot_reply',
-  'participant_policy': 'solo_owner'}],
+  'participant_policy': 'solo_owner',
+  'entry_policy': {'session_scope': 'user', 'participant_policy': 'solo_owner', 'prize': True}}],
     config_schema=CONFIG_SCHEMA,
     requires_platform_capabilities=['interaction_bot', 'ledger'],
 )

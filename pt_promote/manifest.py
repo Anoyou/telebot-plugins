@@ -57,7 +57,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="pt_promote",
     display_name="PT 种子促销",
-    version="1.0.29",
+    version="1.0.30",
     min_telepilot_version="0.72.0-beta.2",
     author="xiaoyou",
     description="在青娃PT置顶促销某个种子（消耗蝌蚪）",
@@ -84,7 +84,8 @@ MANIFEST = Manifest(
                                   'options': {'type': 'string', 'title': '促销参数', 'default': ''}}},
   'dispatch_modes': ['admin_command', 'public_keyword'],
   'message_channels': {'admin_command': 'userbot_reply', 'public_keyword': 'interaction_bot'},
-  'participant_policy': 'notify_only'}],
+  'participant_policy': 'notify_only',
+  'entry_policy': {'session_scope': 'user', 'participant_policy': 'notify_only', 'prize': False}}],
     permissions=["send_message", "edit_message", "external_http"],
     allowed_hosts=["www.qingwapt.com"],
     config_schema={
