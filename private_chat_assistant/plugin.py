@@ -192,6 +192,17 @@ class PrivateChatAssistantPlugin(Plugin):
     def _sender_lock(self, sender_id: int) -> asyncio.Lock:
         return self._sender_locks.setdefault(sender_id, asyncio.Lock())
 
+    async def on_config_validate(self, ctx: PluginContext, config: dict[str, Any], scope: str = "account") -> dict[str, Any] | None:
+        """TelePilot 0.110.0+：保存前检查通知 Bot Token 的格式（<数字 ID>:<密钥>），填错时逐字段提示。
+
+        只检查格式、不联网；留空不报错（插件照旧不发送通知）。旧平台不调用此钩子。
+        """
+
+        token = str((config or {}).get("bot_token") or "").strip()
+        if token and (_bot_id_from_token(token) is None or len(token.partition(":")[2]) < 20):
+            return {"errors": {"bot_token": "Bot Token 格式不对，应为 @BotFather 给出的「数字:密钥」形式"}}
+        return None
+
     async def on_startup(self, ctx: PluginContext) -> None:
         await self._resolve_monitored_account(ctx)
         if ctx.log is not None:

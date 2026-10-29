@@ -3522,6 +3522,24 @@ class InteractionAIChatPlugin(Plugin):
             "result": {"ok": True, "count": len(items), "latency_ms": latency_ms, "scope": scope},
         }
 
+    # -- 配置保存校验（TelePilot 0.110.0+ on_config_validate） ---------------
+
+    async def on_config_validate(self, ctx: PluginContext, config: dict[str, Any], scope: str = "account") -> dict[str, Any] | None:
+        """保存配置前检查站点地址：PT 站点 / Wiki 地址填了但格式不被支持时逐字段提示，而不是运行时静默不用。
+
+        只校验非空且本作用域里出现的字段；PT 地址只在 PT 数据源未关闭时检查。旧平台不调用此钩子，保存行为不变。
+        """
+
+        config = config if isinstance(config, dict) else {}
+        errors: dict[str, str] = {}
+        pt_raw = str(config.get("pt_site_url") or "").strip()
+        if pt_raw and config.get("pt_enabled") is not False and not ptsrc.normalize_site(pt_raw):
+            errors["pt_site_url"] = "站点地址不合法：只支持 https://域名[:端口]，不能带用户名或密码"
+        wiki_raw = str(config.get("wiki_base_url") or "").strip()
+        if wiki_raw and not wikisrc.normalize_base(wiki_raw):
+            errors["wiki_base_url"] = "Wiki 地址不合法：只支持 https://域名/docs（只填域名会自动补 /docs）"
+        return {"errors": errors} if errors else None
+
     # -- 配置页动作 ---------------------------------------------------------
 
     async def on_config_action(

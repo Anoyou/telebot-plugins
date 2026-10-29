@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "todo_reminder"
-PLUGIN_VERSION = "0.1.5"
+PLUGIN_VERSION = "0.1.6"
 DEFAULT_COMMAND = "todo"
 USAGE = (
     "发送 {prefix}todo 五分钟后提醒我喝水，或回复某人的消息发送 {prefix}todo 五分钟后提醒他喝水。"
@@ -62,6 +62,7 @@ CONFIG_SCHEMA = {
             "level": "account",
         },
         "auto_delete_delay_seconds": {
+            "x-ui-visible-if": {"field": "auto_delete_enabled", "not_in": [False]},
             "type": "integer",
             "title": "反馈消息自动删除延迟（秒）",
             "description": "命令结果和完成反馈共用此延迟；0 表示不自动删除。",

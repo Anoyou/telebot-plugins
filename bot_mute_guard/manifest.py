@@ -73,6 +73,7 @@ CONFIG_SCHEMA = {
             ],
         },
         "mute_duration_seconds": {
+            "x-ui-visible-if": {"field": "violation_action", "not_in": ["delete_only", "kick_sender", "ban_sender"]},
             "type": "integer",
             "title": "禁言时长（秒）",
             "description": "违规处理动作为禁言时生效；0 表示永久禁言。",
@@ -102,7 +103,7 @@ CAPABILITIES = {}
 MANIFEST = Manifest(
     key="bot_mute_guard",
     display_name="Bot 防广告守卫",
-    version="1.1.13",
+    version="1.1.14",
     min_telepilot_version="0.72.0-beta.2",
     author="Anoyou",
     description="针对指定群组删除非白名单 @bot 提及、inline Bot 与 Bot 发言广告触发消息",
