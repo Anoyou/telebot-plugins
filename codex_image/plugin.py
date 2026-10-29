@@ -522,6 +522,42 @@ def _normalize_main_model(value: Any) -> str:
     return model if model in SUPPORTED_MAIN_MODELS else DEFAULT_MODEL
 
 
+def _extract_access_token(raw: Any) -> str:
+    """支持直接粘贴 .codex/auth.json 或 session JSON：取 tokens.access_token / accessToken。"""
+    text = str(raw or "").strip()
+    if not text.startswith("{"):
+        return text
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return text
+    if isinstance(data, dict):
+        tokens = data.get("tokens") if isinstance(data.get("tokens"), dict) else {}
+        for value in (tokens.get("access_token"), data.get("access_token"), data.get("accessToken")):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return text
+
+
+def _validate_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """on_config_validate 的纯函数实现：返回 {"config": ...} 或附带 {"errors": ...}。"""
+    out = dict(config or {})
+    errors: dict[str, str] = {}
+    if "model" in out:
+        out["model"] = _normalize_main_model(out.get("model"))
+    if "command" in out:
+        command = str(out.get("command") or "").strip()
+        if any(ch.isspace() for ch in command):
+            errors["command"] = "指令名不能包含空格"
+        out["command"] = command or DEFAULT_COMMAND
+    if isinstance(out.get("access_token"), str):
+        out["access_token"] = _extract_access_token(out["access_token"])
+    result: dict[str, Any] = {"config": out}
+    if errors:
+        result["errors"] = errors
+    return result
+
+
 def _command_name(ctx: PluginContext) -> str:
     value = str(_get_config_value(ctx, "command", DEFAULT_COMMAND) or DEFAULT_COMMAND).strip()
     return value or DEFAULT_COMMAND
@@ -1140,6 +1176,15 @@ class CodexImagePlugin(Plugin):
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._command_name = _command_name(ctx)
+
+    async def on_config_validate(
+        self,
+        ctx: PluginContext,
+        config: dict[str, Any],
+        scope: str,
+    ) -> dict[str, Any] | None:
+        """保存前规范化（TelePilot 0.110.0+ 才会调用；旧宿主仍由宿主自己改写下线模型名）。"""
+        return _validate_config(config)
         self.commands = {self._command_name: self._cmd_handler}
         if ctx.log:
             await ctx.log("info", f"[codex_image] 启动，指令名={self._command_name}")

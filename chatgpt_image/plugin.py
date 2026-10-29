@@ -41,7 +41,7 @@ from .token_pool import (
     parse_token_lines,
 )
 
-PLUGIN_VERSION = "0.1.9"
+PLUGIN_VERSION = "0.2.0"
 DEFAULT_MODELS = [
     "gpt-image-2",
     "codex-gpt-image-2",
@@ -335,6 +335,48 @@ def _parse_image_args(args: list[str], cfg: ChatGPTImageConfig) -> ParsedImageCo
     return ParsedImageCommand(prompt=prompt, model=model, count=count, style=style, size=size)
 
 
+def _validate_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """on_config_validate 的纯函数实现。
+
+    - Token 池：新填的整段 session JSON（chatgpt.com/api/auth/session）自动提取 accessToken；
+      空条目去掉，同一 token 只保留第一条（保留备注）。
+    - 默认张数不超过单次最多张数。
+    """
+    out = dict(config or {})
+    errors: dict[str, str] = {}
+    tokens = out.get("tokens")
+    if isinstance(tokens, list):
+        cleaned: list[Any] = []
+        seen: set[str] = set()
+        for item in tokens:
+            if not isinstance(item, dict):
+                cleaned.append(item)
+                continue
+            entry = dict(item)
+            raw = str(entry.get("token") or "").strip()
+            if raw.startswith("{"):
+                raw = extract_auth_session_access_token(raw) or raw
+            if not raw:
+                continue
+            if raw in seen:
+                continue
+            seen.add(raw)
+            entry["token"] = raw
+            cleaned.append(entry)
+        out["tokens"] = cleaned
+    try:
+        default_count = int(out.get("default_count") or 0)
+        max_count = int(out.get("max_count") or 0)
+    except (TypeError, ValueError):
+        default_count = max_count = 0
+    if default_count and max_count and default_count > max_count:
+        errors["default_count"] = f"默认生成张数不能超过单次最多张数（{max_count}）"
+    result: dict[str, Any] = {"config": out}
+    if errors:
+        result["errors"] = errors
+    return result
+
+
 @register
 class ChatGPTImagePlugin(Plugin):
     key = "chatgpt_image"
@@ -354,6 +396,15 @@ class ChatGPTImagePlugin(Plugin):
         self._last_images_by_chat: dict[int, list[bytes]] = {}
         self._ctx: PluginContext | None = None
         self._proxy_url = ""
+
+    async def on_config_validate(
+        self,
+        ctx: PluginContext,
+        config: dict[str, Any],
+        scope: str,
+    ) -> dict[str, Any] | None:
+        """保存前规范化（TelePilot 0.110.0+ 才会调用；旧宿主走宿主内置的多 Token 兼容逻辑）。"""
+        return _validate_config(config)
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._ctx = ctx

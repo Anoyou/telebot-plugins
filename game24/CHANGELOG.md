@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.1.17 (2026-10-29)
+- 触发指令名补输入提示，配置由 TelePilot 通用表单渲染（旧专属页 0.110.0-beta.2 起只作对照）。
+
 ## 1.1.16 (2026-10-28)
 - 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
 - `manifest.py` 的配置使用说明（`x-usage-guide`）与 `plugin.json` 不一致，统一为 `plugin.json` 的文案。

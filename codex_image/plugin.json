@@ -4,7 +4,7 @@
   "description": "通过 Codex API 调用 GPT 图片生成模型，支持纯文生图和参考图生成",
   "usage": "安装并配置 Codex Access Token 后，由账号主人或授权管理员使用命令触发图片生成；可回复图片作为参考图，普通交互结果由 userbot 回复或编辑。该插件不自动订阅群内普通消息。",
   "author": "TelePilot Official",
-  "version": "1.1.8",
+  "version": "1.2.0",
   "entry": "plugin.py",
   "min_telepilot_version": "0.72.0-beta.2",
   "category": "utility",
@@ -17,7 +17,9 @@
     "send_file",
     "external_http"
   ],
-  "allowed_hosts": ["chatgpt.com"],
+  "allowed_hosts": [
+    "chatgpt.com"
+  ],
   "event_subscriptions": [],
   "requires_platform_capabilities": [],
   "capabilities": {},
@@ -67,6 +69,7 @@
         "level": "account"
       },
       "image_model": {
+        "x-ui-section": "输出参数",
         "type": "string",
         "title": "底层图片模型",
         "default": "auto",
@@ -81,6 +84,7 @@
         "level": "account"
       },
       "max_wait_seconds": {
+        "x-ui-section": "等待与状态",
         "type": "integer",
         "title": "最大等待时间（秒）",
         "default": 600,
@@ -88,6 +92,7 @@
         "level": "account"
       },
       "status_interval_seconds": {
+        "x-ui-section": "等待与状态",
         "type": "integer",
         "title": "状态刷新间隔（秒）",
         "default": 20,
@@ -102,6 +107,7 @@
         "level": "account"
       },
       "image_size": {
+        "x-ui-section": "输出参数",
         "type": "string",
         "title": "默认分辨率",
         "default": "1024x1024",
@@ -116,6 +122,7 @@
         "level": "account"
       },
       "aspect_ratio": {
+        "x-ui-section": "输出参数",
         "type": "string",
         "title": "默认画面比例",
         "default": "1:1",
@@ -134,6 +141,7 @@
         "level": "account"
       },
       "image_format": {
+        "x-ui-section": "输出参数",
         "type": "string",
         "title": "默认图片格式",
         "default": "png",
@@ -146,6 +154,7 @@
         "level": "account"
       },
       "delete_command_message": {
+        "x-ui-section": "等待与状态",
         "type": "boolean",
         "title": "完成后删除命令消息",
         "default": true,
@@ -153,6 +162,7 @@
         "level": "account"
       },
       "show_revised_prompt": {
+        "x-ui-section": "等待与状态",
         "type": "boolean",
         "title": "显示模型修订提示词",
         "default": true,
@@ -160,6 +170,7 @@
         "level": "account"
       },
       "reasoning_effort": {
+        "x-ui-section": "高级",
         "type": "string",
         "title": "推理强度",
         "default": "low",
@@ -172,6 +183,7 @@
         "level": "account"
       },
       "custom_instructions": {
+        "x-ui-section": "高级",
         "type": "string",
         "title": "自定义系统指令",
         "default": "",

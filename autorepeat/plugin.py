@@ -631,6 +631,20 @@ def _dry_run_match(
     )
 
 
+def dry_run_rule(cfg: dict[str, Any], sample: dict[str, Any]) -> dict[str, Any]:
+    """规则试运行（TelePilot 0.110.0-beta.2+ 通用协议）：返回 {matched, output, logs}，不发送消息。"""
+    cfg = cfg or {}
+    chat_id = sample.get("chat_id")
+    logs = [
+        {"step": "target", "msg": f"目标群组：{cfg.get('target_chat_id', '（未设置）')}"},
+        {"step": "config", "msg": f"{cfg.get('time_window', 300)} 秒内 ≥{cfg.get('min_users', 5)} 个不同用户发送相同文本时复读"},
+        {"step": "sample", "msg": f"样本会话 ID：{chat_id if chat_id is not None else '（未填）'}"},
+    ]
+    matched, output = _dry_run_match(cfg, str(sample.get("message") or ""), chat_id)
+    logs.append({"step": "result", "msg": "命中" if matched else "未命中"})
+    return {"matched": matched, "output": output, "logs": logs}
+
+
 PLUGIN_CLASS = AutoRepeatPlugin
 
 
@@ -638,4 +652,5 @@ __all__ = [
     "AutoRepeatPlugin",
     "PLUGIN_CLASS",
     "_dry_run_match",
+    "dry_run_rule",
 ]

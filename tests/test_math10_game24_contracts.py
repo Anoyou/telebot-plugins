@@ -232,7 +232,7 @@ class InteractionPayoutContractTests(unittest.TestCase):
                 game_actions = await game_plugin.on_interaction(game_ctx, "start_paid_game", start_payload(prize=777))
 
             self.assertIn("v1.0.14", math_actions[0]["text"])
-            self.assertIn("v1.1.16", game_actions[0]["text"])
+            self.assertIn("v1.1.17", game_actions[0]["text"])
 
         asyncio.run(scenario())
 

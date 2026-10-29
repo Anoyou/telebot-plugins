@@ -17,7 +17,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="codex_image",
     display_name="Codex 图片生成",
-    version="1.1.8",
+    version="1.2.0",
     min_telepilot_version="0.72.0-beta.2",
     author="TeleBoxOrg",
     description="通过 Codex API 调用 GPT 图片生成模型，支持纯文生图和参考图生成",
@@ -57,6 +57,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "image_model": {
+                "x-ui-section": "输出参数",
                 "type": "string",
                 "title": "底层图片模型",
                 "default": "auto",
@@ -65,6 +66,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "max_wait_seconds": {
+                "x-ui-section": "等待与状态",
                 "type": "integer",
                 "title": "最大等待时间（秒）",
                 "default": 600,
@@ -72,6 +74,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "status_interval_seconds": {
+                "x-ui-section": "等待与状态",
                 "type": "integer",
                 "title": "状态刷新间隔（秒）",
                 "default": 20,
@@ -94,6 +97,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "image_size": {
+                "x-ui-section": "输出参数",
                 "type": "string",
                 "title": "默认分辨率",
                 "default": "1024x1024",
@@ -102,6 +106,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "aspect_ratio": {
+                "x-ui-section": "输出参数",
                 "type": "string",
                 "title": "默认画面比例",
                 "default": "1:1",
@@ -110,6 +115,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "image_format": {
+                "x-ui-section": "输出参数",
                 "type": "string",
                 "title": "默认图片格式",
                 "default": "png",
@@ -118,6 +124,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "delete_command_message": {
+                "x-ui-section": "等待与状态",
                 "type": "boolean",
                 "title": "完成后删除命令消息",
                 "default": True,
@@ -125,6 +132,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "show_revised_prompt": {
+                "x-ui-section": "等待与状态",
                 "type": "boolean",
                 "title": "显示模型修订提示词",
                 "default": True,
@@ -132,6 +140,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "reasoning_effort": {
+                "x-ui-section": "高级",
                 "type": "string",
                 "title": "推理强度",
                 "default": "low",
@@ -140,6 +149,7 @@ MANIFEST = Manifest(
                 "level": "account",
             },
             "custom_instructions": {
+                "x-ui-section": "高级",
                 "type": "string",
                 "title": "自定义系统指令",
                 "default": "",

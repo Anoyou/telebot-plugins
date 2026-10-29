@@ -14,7 +14,7 @@ from app.worker.plugins.manifest import Manifest
 MANIFEST = Manifest(
     key="autorepeat",
     display_name="自动复读",
-    version="1.0.5",
+    version="1.1.0",
     min_telepilot_version="0.72.0-beta.2",
     author="TelePilot Official",
     description="当群组中多名用户在指定时间内发送相同内容时自动复读",
@@ -35,6 +35,13 @@ MANIFEST = Manifest(
         "type": "object",
         "x-ui-mode": "rules",
         "x-usage-guide": "自动复读通过规则触发：每条规则绑定一个群组和复读条件。当指定时间窗口内有足够多不同用户发送完全相同文本时，账号会自动复读一次。规则只监听 incoming 文本消息，保存后立即生效。",
+        # 0.110.0-beta.2+ 通用规则页：没有 x-rule-schema 时整个 config_schema 就是每条规则的字段。
+        "x-rule-summary": ["target_chat_id", "time_window", "min_users"],
+        "x-dry-run": {
+            "sample_fields": ["message", "chat_id"],
+            "title": "试运行",
+            "description": "填一个会话 ID 验证规则是否作用于该群；不会真的复读。",
+        },
         "additionalProperties": False,
         "required": ["target_chat_id"],
         "properties": {
