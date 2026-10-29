@@ -1,7 +1,7 @@
 # 更新日志
 
 ## 1.0.30 (2026-10-29)
-- 入口 `promote_torrent` 增加 `entry_policy`（按用户会话、只通知、无奖金），TelePilot 0.111.0-beta.2+ 按声明处理、不再查宿主兜底表；结果与原来完全相同，旧宿主忽略。功能无变化。
+- 入口 `promote_torrent` 增加 `entry_policy`（按用户会话、只通知、无奖金），TelePilot 0.112.0-beta.2+ 按声明处理、不再查宿主兜底表；结果与原来完全相同，旧宿主忽略。功能无变化。
 
 ## 1.0.29 (2026-10-28)
 - 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。

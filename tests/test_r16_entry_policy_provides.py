@@ -1,4 +1,4 @@
-"""TelePilot 0.111.0（Plugin API 1.4）业务下沉声明：entry_policy / provides / ui.rule_editor。
+"""TelePilot 0.112.0（Plugin API 1.5）业务下沉声明：entry_policy / provides / ui.rule_editor。
 
 兼容约定（两种组合都必须成立）：
 
