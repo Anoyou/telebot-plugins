@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.11"
+PLUGIN_VERSION = "0.4.12"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -21,6 +21,8 @@ USAGE_PREVIEW = (
     "3. 与 Bot 私聊：直接发送问题。\n"
     "3b. 关键词触发（可选）：在下方“触发关键词”填写如“AI”“问问”，Bot 已加入的群里以关键词开头（或包含关键词）的消息"
     "也会触发，不必 @Bot；需关闭 Bot 的群隐私模式。\n"
+    "3c. 防刷屏（默认开启）：群里好几个人短时间内发同一句话（如抽奖口令）会被当作口令暂时不理；"
+    "每个群每分钟最多回答 6 次（可在“触发方式”分组调整，管理员不受限）。\n"
     "4. 发送“重置”或 reset：清空你在当前会话的短期记忆。\n"
     "5. 回复别人的消息并 @Bot：被回复消息会作为本轮参考内容；被回复的是图片时（开启识图）会把图片交给模型。\n"
     "6. 发图片并在说明里 @Bot（或私聊直接发图）：开启识图后让模型看图回答。\n\n"
@@ -228,6 +230,67 @@ CONFIG_SCHEMA = {
             "x-ui-section": _SECTION_TRIGGER,
             "x-ui-columns": 2,
             "x-ui-order": 17,
+        },
+        "keyword_burst_guard": {
+            "type": "boolean",
+            "title": "口令保护（防抽奖/红包口令刷屏）",
+            "description": (
+                "群里抽奖、红包的参与口令刚好以触发词开头时（例如触发词“问”、口令“问答抽奖”），几十人同时发会让 Bot 挂一堆"
+                "“🤔”、逐条调 AI 刷屏，还会烧光全群当天的次数。开启后：同一个群里，短时间内有好几个人发一模一样的话"
+                "（不分大小写、不管多余空格），就认定它是口令，之后一段时间里这句话直接不理——不挂占位、不扣次数、不回复，"
+                "运行日志记一条。已经在回答的不受影响。只对关键词触发生效；@Bot、回复 Bot、私聊和访客模式不受影响。"
+            ),
+            "default": True,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 1,
+            "x-ui-order": 18,
+        },
+        "keyword_burst_users": {
+            "type": "integer",
+            "title": "几个人发同一句算口令",
+            "description": "在下面的时间窗口内，有这么多个不同的人发了同一句话，就认定是口令。默认 3 人，最少 2 人。",
+            "default": 3,
+            "minimum": 2,
+            "maximum": 50,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 18,
+        },
+        "keyword_burst_window_seconds": {
+            "type": "integer",
+            "title": "口令判定时间窗口（秒）",
+            "description": "多少秒内有足够多人发同一句话才算口令。默认 60 秒。",
+            "default": 60,
+            "minimum": 10,
+            "maximum": 600,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 18,
+        },
+        "keyword_burst_cooldown_minutes": {
+            "type": "integer",
+            "title": "口令静默时长（分钟）",
+            "description": "认定为口令后，这句话在多少分钟内都不再回答（从认定那一刻算起）。默认 10 分钟。",
+            "default": 10,
+            "minimum": 1,
+            "maximum": 1440,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 18,
+        },
+        "group_answers_per_minute": {
+            "type": "integer",
+            "title": "每个群每分钟最多回答几次",
+            "description": (
+                "同一个群里每分钟最多回答这么多次（按自然分钟算），超出的提问直接不理、不扣次数，运行日志每分钟最多记一条。"
+                "对群里的关键词、@Bot、回复 Bot 都生效；私聊和访客模式不受限制；管理员（本群管理员、TelePilot 管理员与“重试管理员用户 ID”）不受这个上限约束。填 0 表示不限制。默认 6 次。"
+            ),
+            "default": 6,
+            "minimum": 0,
+            "maximum": 120,
+            "x-ui-section": _SECTION_TRIGGER,
+            "x-ui-columns": 2,
+            "x-ui-order": 19,
         },
         "bot_username": {
             "type": "string",
