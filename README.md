@@ -33,6 +33,7 @@ TelePilot 远程插件仓库。
 | [lucky_redpack](./lucky_redpack/) | `{prefix}rp 发财 88888 10` | 拼手气口令红包，财富密码每次领取后随机刷新 |
 | [ai_redpacket](./ai_redpacket/) | `{prefix}airp` | 基于 URL + AI 题库的三选一答题红包，支持默认配置或 `create` 参数创建，Interaction Bot 答题、UserBot 发奖 |
 | [reply_anchor_test](./reply_anchor_test/) | `{prefix}send 用户ID 金额` | 测试 userbot 搜索目标用户近期发言并回复 `+金额` |
+| [payment-source-cn-transfer](./payment-source-cn-transfer/) | 无（交互 Bot 转账通知） | TelePilot 0.111.0+ 转账通知解析扩展点（payment_sources）官方实现：识别中文转账 / 扣减通知的付款人、收款人、金额；规则与宿主内置解析器逐字一致，只返回解析结果、不结算；双跑对照期默认只做对照 |
 | [random_benefit](./random_benefit/) | `{prefix}随机福利 on/off` | 随机引用指定群组发言回复自定义福利语 |
 
 ## byRBQ 迁移插件（Pagermaid → TelePilot）
