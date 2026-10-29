@@ -52,7 +52,6 @@ MANIFEST = Manifest(
     display_name="21点",
     version="1.0.32",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="经典21点纸牌游戏，群内庄家模式，支持要牌/停牌/加倍",
     permissions=["send_message", "edit_message", "read_chat", "delete_message", "payout"],

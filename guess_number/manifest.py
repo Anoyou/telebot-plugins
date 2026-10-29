@@ -52,7 +52,6 @@ MANIFEST = Manifest(
     display_name="猜数字",
     version="1.0.21",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内猜数字游戏，系统随机一个数字，群友轮流猜，提示大了/小了",
     permissions=["send_message", "edit_message", "read_chat", "payout"],

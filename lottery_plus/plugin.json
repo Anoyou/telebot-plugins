@@ -13,7 +13,6 @@
     "payout"
   ],
   "min_telepilot_version": "0.72.0-beta.2",
-  "min_telebot_version": "0.10.0",
   "cleanup_mode": "resource",
   "strict_trace": true,
   "commands": [

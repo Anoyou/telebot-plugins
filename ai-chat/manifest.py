@@ -257,7 +257,6 @@ MANIFEST = Manifest(
     display_name="AI-Chat",
     version=PLUGIN_VERSION,
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.2",
     author="Anoyou",
     description="调用 TelePilot AI Provider 的 AI-Chat 聊天与消息解释助手，支持私聊/群聊触发和短期上下文记忆。",
     permissions=["send_message", "edit_message", "read_chat", "ai_text"],

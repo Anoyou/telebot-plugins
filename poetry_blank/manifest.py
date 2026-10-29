@@ -52,7 +52,6 @@ MANIFEST = Manifest(
     display_name="诗词填空",
     version="1.0.20",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="古诗词填空抢答，答对获奖",
     permissions=["send_message", "edit_message", "read_chat", "payout"],

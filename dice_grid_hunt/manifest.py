@@ -254,7 +254,6 @@ MANIFEST = Manifest(
     display_name="九宫格骰子竞猜",
     version="1.1.38",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="发送九宫格骰子图片。公布唯一目标点数并让群内抢答格子赢奖励",
     permissions=["send_message", "edit_message", "delete_message", "read_chat", "send_file", "payout"],

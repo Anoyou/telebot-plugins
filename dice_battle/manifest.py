@@ -52,7 +52,6 @@ MANIFEST = Manifest(
     display_name="骰子比大小",
     version="1.0.19",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="群内骰子对战，两人各掷骰子比点数，支持下注",
     permissions=["send_message", "edit_message", "read_chat", "payout"],

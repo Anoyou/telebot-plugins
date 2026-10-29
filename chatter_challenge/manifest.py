@@ -42,7 +42,6 @@ MANIFEST = Manifest(
     display_name="话痨挑战",
     version="1.0.12",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="设定聊天规则，违反者自动扣分，全程被动监听",
     permissions=["send_message", "edit_message", "read_chat"],

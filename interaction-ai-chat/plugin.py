@@ -740,6 +740,32 @@ def _payload_admin_ids(payload: dict[str, Any]) -> set[int]:
     return ids
 
 
+async def _host_admin_ids(ctx: Any) -> set[int]:
+    """TelePilot 0.108.0+：经 ``ctx.host.read("account.admins@1")`` 读取管理员（账号本人 + sudo）。
+
+    旧平台没有 ``ctx.capabilities`` / ``ctx.host`` 时返回空集合，继续用 payload 里的
+    ``owner_user_ids`` / ``admin_user_ids``（``_payload_admin_ids``）。读取失败同样按空集合处理。
+    """
+
+    caps = getattr(ctx, "capabilities", None)
+    host = getattr(ctx, "host", None)
+    if caps is None or host is None:
+        return set()
+    try:
+        if not caps.has("host.read.account.admins@1"):
+            return set()
+        data = await host.read("account.admins@1")
+    except Exception:  # noqa: BLE001 - 未声明 / 不可用都按“没有额外管理员”处理
+        return set()
+    ids: set[int] = set()
+    for key in ("owner_user_ids", "admin_user_ids"):
+        for item in (data or {}).get(key) or []:
+            value = _int_or_none(item)
+            if value is not None:
+                ids.add(value)
+    return ids
+
+
 def _reply_to_username(reply: dict[str, Any]) -> str:
     sender = _dict(reply.get("sender"))
     return str(reply.get("username") or sender.get("username") or "").strip().lstrip("@").casefold()
@@ -1689,6 +1715,8 @@ class InteractionAIChatPlugin(Plugin):
         if user_id is None:
             return False
         if user_id in cfg["retry_admin_user_ids"] or user_id in admin_ids:
+            return True
+        if user_id in await _host_admin_ids(ctx):
             return True
         if chat_id is None or chat_id > 0:
             return False

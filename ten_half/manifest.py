@@ -99,7 +99,6 @@ MANIFEST = Manifest(
     display_name="十点半",
     version="0.4.22",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.0",
     author="Anoyou",
     description="经典十点半纸牌游戏：支持多人对战、加倍、五小等规则",
     permissions=["send_message", "edit_message", "delete_message", "read_chat", "payout"],

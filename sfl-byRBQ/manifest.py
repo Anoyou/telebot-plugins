@@ -37,7 +37,6 @@ MANIFEST = Manifest(
     display_name="sfl-byRBQ",
     version="1.0.11",
     min_telepilot_version="0.72.0-beta.2",
-    min_telebot_version="0.10.2",
     author="RBQ (migrated from zhiluop/pagermaid_plugins)",
     description="贴纸跟随插件，在特定群组中自动跟随发送特定贴纸",
     permissions=["send_message", "edit_message", "delete_message", "send_file", "read_chat"],
