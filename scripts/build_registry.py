@@ -21,6 +21,12 @@ TelePilot（0.113.0+）的“插件市场”从这里读取官方插件的元数
 - ``channels.stable`` = ``main``（本仓库 main 分支即稳定通道）。
 
 索引里不写生成时间，保证同样的插件内容总是生成同样的文件（``--check`` 才能稳定）。
+
+**目录版本 1 已定死**（TelePilot Plugin API 1.0 冻结范围，第 22 轮）：``schema_version`` 固定为 1，顶层与条目只能
+使用 ``REGISTRY_V1_TOP_FIELDS`` / ``REGISTRY_V1_ENTRY_FIELDS`` 里的字段（与主仓库
+``app.worker.plugins.stability.REGISTRY_V1_*`` 一致）；``kind`` 只能是 ``KINDS``、``trust`` 只能是 ``TRUST_LEVELS``。
+生成与 ``--check`` 都会校验，越界即失败。要加字段或改格式，先在主仓库更新目录版本（加字段属于 1.x 追加，
+改格式发目录版本 2，宿主两版都读），再改这里。
 """
 
 from __future__ import annotations
@@ -34,6 +40,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY_PATH = ROOT / "registry.json"
 SCHEMA_VERSION = 1
+# registry.json 目录版本 1 的字段（定死，只增不减；与主仓库 stability.REGISTRY_V1_* 一致）。
+REGISTRY_V1_TOP_FIELDS = ("schema_version", "name", "trust", "repository", "homepage", "plugins")
+REGISTRY_V1_ENTRY_FIELDS = (
+    "key",
+    "name",
+    "kind",
+    "icon",
+    "summary",
+    "version",
+    "author",
+    "min_telepilot_version",
+    "plugin_api",
+    "permissions",
+    "reads",
+    "tags",
+    "path",
+    "channels",
+    "repository",
+    "trust",
+)
+TRUST_LEVELS = ("official", "community", "unreviewed")
 REPOSITORY = "https://github.com/Anoyou/telebot-plugins.git"
 HOMEPAGE = "https://github.com/Anoyou/telebot-plugins"
 SUMMARY_MAX = 200
@@ -127,6 +154,26 @@ def build() -> dict:
     }
 
 
+def validate_v1(data: dict) -> None:
+    """确认索引符合目录版本 1：版本号、顶层字段、条目字段、kind / trust 取值都在冻结清单内。"""
+
+    if data.get("schema_version") != SCHEMA_VERSION or SCHEMA_VERSION != 1:
+        raise RegistryError(f"schema_version 必须是 1（目录版本 1 已定死），当前 {data.get('schema_version')!r}")
+    extra_top = sorted(set(data) - set(REGISTRY_V1_TOP_FIELDS))
+    if extra_top:
+        raise RegistryError(f"顶层字段超出目录版本 1：{', '.join(extra_top)}")
+    if data.get("trust") not in TRUST_LEVELS:
+        raise RegistryError(f"trust={data.get('trust')!r} 不是目录版本 1 的信任等级")
+    for entry in data.get("plugins") or []:
+        extra = sorted(set(entry) - set(REGISTRY_V1_ENTRY_FIELDS))
+        if extra:
+            raise RegistryError(f"{entry.get('key')}: 条目字段超出目录版本 1：{', '.join(extra)}")
+        if entry.get("kind") not in KINDS:
+            raise RegistryError(f"{entry.get('key')}: kind={entry.get('kind')!r} 不是目录版本 1 的类型")
+        if "trust" in entry and entry["trust"] not in TRUST_LEVELS:
+            raise RegistryError(f"{entry.get('key')}: trust={entry['trust']!r} 不是目录版本 1 的信任等级")
+
+
 def render(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
@@ -136,7 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="只校验，不写文件")
     args = parser.parse_args(argv)
     try:
-        expected = render(build())
+        data = build()
+        validate_v1(data)
+        expected = render(data)
     except RegistryError as exc:
         print(f"registry.json 生成失败：{exc}", file=sys.stderr)
         return 1

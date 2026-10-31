@@ -77,6 +77,7 @@ TelePilot 0.113.0+ 的“插件市场”默认从本仓库根目录的 `registry
 - 改了任何插件的 `plugin.json` 后运行 `python scripts/build_registry.py` 并一起提交；
 - PR 上 CI 用 `--check` 校验；合并到 main 后若仍不一致，CI 会自动重新生成并提交；
 - 真正安装 / 更新时宿主仍会克隆本仓库并完整校验插件自己的 `plugin.json`，索引只用于浏览、更新角标和兼容性预判。
+- **目录版本 1 已定死**（TelePilot Plugin API 1.0 冻结范围）：`schema_version` 固定为 1，顶层与条目只能用冻结清单里的字段（见 `scripts/build_registry.py` 的 `REGISTRY_V1_*`，与主仓库一致），`kind` / `trust` 只能取冻结的取值；生成与 `--check` 越界即失败。第三方插件源可以放心按这个格式提供 `registry.json`。
 
 ## 开发新插件
 
@@ -121,7 +122,8 @@ def callback_routing_supported(ctx) -> bool:
 
 ### 版本要求与兼容性检查
 
-- `plugin.json` 与 `manifest.py` 的 `version`、`min_telepilot_version`、`permissions`、`config_schema` 等字段必须一致。
+- `plugin.json` 与 `manifest.py` 的 `version`、`min_telepilot_version`、`permissions`、`config_schema` 等字段必须一致。以 `plugin.json` 为准：TelePilot 0.115.0-beta.4+ 的宿主还会按 Plugin API 1.0 冻结范围补查 `name/key`、`display_name`、`capabilities`、`config_actions`、`interaction_profile`、`agent_tools` 等（两边都写了且不一致才报错，一边没写不算），`author` / `description` / `usage` 不一致只给警告。
+- 哪些接口稳定、哪些是实验（例如动作的 `send_via` / `rich_message`、事件信封的 `raw`、入站 Webhook 信封），`ctx.client` 为何只算“高级 / 兼容”，见主仓库 [Plugin API 1.0 冻结计划](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-API-1.0-PLAN.md) 第 0 节与 [插件稳定契约](https://github.com/Anoyou/Telebot/blob/Beta/docs/PLUGIN-CONTRACT.md) 第 2.6 节。新插件优先只用稳定部分。
 - `min_telepilot_version` 要覆盖插件实际用到的能力。`manifest.py` 向 `Manifest(...)` 传 `requires_platform_capabilities`（新装/升级必填）时，最低版本不得低于 `0.72.0-beta.2`——更早的 TelePilot 导入 manifest 会直接 `TypeError`。用到 `send_rich`、`ctx.skills`、识图、`compact_tables` 等新能力时，要么提高最低版本，要么先用能力标记（如 `getattr(ctx.messages, "rich_table_compact", False)`）探测再调用。版本比较：TelePilot 0.107.0-beta.1 起声明带 beta 号（如 `0.106.0-beta.12`）时按完整 SemVer 比较，不带 beta 号时仍只比 `x.y.z`；更早的宿主一律只比 `x.y.z`，所以依赖某个 beta 才有的能力仍要同时做能力探测。
 - 用 TelePilot 主仓库的真实运行时检查全部插件（安装期校验、加载、manifest 一致性、权限、Host API 方法与参数、最低版本推断、`on_startup` 初始化）：
 
