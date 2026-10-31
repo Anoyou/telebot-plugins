@@ -28,6 +28,9 @@
    只保留注册表出现之前的历史门槛；同时校验 ``plugin_api`` 范围、对弃用接口（``DEPRECATIONS``）给警告。
 7. 初始化：实例化插件类，用平台 ``PluginContext`` + 内存版 storage/scheduler 跑一次 ``on_startup`` /
    ``on_shutdown``（超时 5 秒；失败记为警告，因为真实环境还会注入 Telegram client）。
+8. 契约版本：报告宿主承诺的插件稳定契约版本（TelePilot 0.114.0+ / Plugin API 1.7+ 的
+   ``versioning.PLUGIN_CONTRACT_VERSION``；更早的 0.112.0-beta.4+ 宿主回退读 ``contract.PLUGIN_CONTRACT_VERSION``，
+   再早的宿主为 ``None``）。只做展示，不影响检查结论。
 
 退出码：存在错误为 1；``--strict`` 时警告也算失败。
 """
@@ -228,6 +231,11 @@ def prepare_host(repo: Path, installed_dir: Path) -> dict[str, Any]:
     capabilities = _optional("app.worker.plugins.capabilities", "CAPABILITIES") or ()
     deprecations = _optional("app.worker.plugins.deprecations", "DEPRECATION_INDEX") or {}
     plugin_api_version = _optional("app.worker.plugins.versioning", "PLUGIN_API_VERSION")
+    # 插件稳定契约版本：0.114.0+ 在 versioning（插件运行时 ctx.capabilities.contract_version 读同一个值）；
+    # 0.112.0-beta.4 起只在 contract 模块；更早的宿主没有契约，记为 None。
+    contract_version = _optional("app.worker.plugins.versioning", "PLUGIN_CONTRACT_VERSION") or _optional(
+        "app.worker.plugins.contract", "PLUGIN_CONTRACT_VERSION"
+    )
     plugin_api_satisfies = _optional("app.worker.plugins.versioning", "plugin_api_satisfies")
     compare_versions = _optional("app.worker.plugins.versioning", "compare_versions")
     known_permissions = set(sandbox.ALLOWED_API) | set(getattr(sandbox, "_NON_CLIENT_PERMISSIONS", ()))
@@ -260,6 +268,7 @@ def prepare_host(repo: Path, installed_dir: Path) -> dict[str, Any]:
         "capabilities": {str(c.name): (str(c.since), str(c.summary)) for c in capabilities},
         "deprecations": dict(deprecations),
         "plugin_api_version": plugin_api_version,
+        "contract_version": str(contract_version) if contract_version else None,
         "plugin_api_satisfies": plugin_api_satisfies,
         "compare_versions": compare_versions,
     }
@@ -1076,7 +1085,12 @@ def run(
             if only and plugin_dir.name not in only:
                 continue
             reports.append(check_plugin(plugin_dir, host, run_startup=run_startup))
-    return {"host_repo": str(repo), "host_version": host["version"]}, reports
+    return {
+        "host_repo": str(repo),
+        "host_version": host["version"],
+        "plugin_api_version": host.get("plugin_api_version"),
+        "contract_version": host.get("contract_version"),
+    }, reports
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1100,6 +1114,10 @@ def main(argv: list[str] | None = None) -> int:
         plugins_root=Path(args.plugins_root).resolve() if args.plugins_root else None,
     )
     print(f"TelePilot 宿主: {info['host_version']}（{info['host_repo']}）")
+    print(
+        f"Plugin API: {info.get('plugin_api_version') or '-'}；"
+        f"插件稳定契约: {info.get('contract_version') or '无（宿主早于契约 1.0）'}"
+    )
     counts = {"OK": 0, "WARN": 0, "ERROR": 0}
     for rep in reports:
         counts[rep.status] += 1

@@ -49,6 +49,15 @@ def compat_report(tmp_path_factory: pytest.TempPathFactory) -> dict:
     return json.loads(out.read_text(encoding="utf-8"))
 
 
+def test_report_includes_host_contract_version(compat_report: dict) -> None:
+    """报告带宿主的 Plugin API 与契约版本；契约版本在旧宿主上为 None（只展示，不影响结论）。"""
+
+    assert "plugin_api_version" in compat_report
+    assert "contract_version" in compat_report
+    contract = compat_report["contract_version"]
+    assert contract is None or contract.split(".")[0].isdigit()
+
+
 def _plugin_keys() -> list[str]:
     return sorted(p.parent.name for p in ROOT.glob("*/plugin.json"))
 
