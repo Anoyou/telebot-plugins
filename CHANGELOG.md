@@ -4,6 +4,12 @@
 
 TelePilot 主仓库的 `CHANGELOG.md` 只写主仓库（服务器、Web、iOS）的改动；涉及插件的版本号与改动说明统一记在这里。下面「配合 TelePilot x.y.z」表示该批插件改用的新能力从哪个服务器版本开始可用；除特别说明外都**不抬高 `min_telepilot_version`**，旧服务器照旧可用。
 
+## 2026-10-31 · 配合 TelePilot 0.114.0-beta.2（契约版本探测，Plugin API 1.7）
+
+- `scripts/check_host_compat.py` 报告并打印宿主的 Plugin API 版本与插件稳定契约版本（JSON 报告新增 `plugin_api_version`、`contract_version`；宿主早于契约 1.0 时为 `null`）。只做展示，不影响检查结论。
+- 插件作者如需在运行时读契约版本：`getattr(getattr(ctx, "capabilities", None), "contract_version", None)`，旧服务器为 `None`，回退即可；不要因此抬 `min_telepilot_version`。本批**不改任何插件**。
+- TelePilot 侧兼容层（`on_interaction` 迁移桥、旧按钮 `callback_data`、兜底入口表等）按 10-31 决定全部保留，官方插件无需迁移；清单见主仓库 `docs/PLUGIN-API-1.0-PLAN.md`。
+
 ## 2026-10-30 · 插件市场索引
 
 - 新增 `scripts/build_registry.py` 与根目录 `registry.json`（42 个插件），CI 在 PR 上校验、main 推送后自动重新生成提交；配合 TelePilot 0.113.0 插件市场（官方源读取本仓库 `registry.json`）。不改插件。
