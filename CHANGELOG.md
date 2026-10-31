@@ -4,6 +4,13 @@
 
 TelePilot 主仓库的 `CHANGELOG.md` 只写主仓库（服务器、Web、iOS）的改动；涉及插件的版本号与改动说明统一记在这里。下面「配合 TelePilot x.y.z」表示该批插件改用的新能力从哪个服务器版本开始可用；除特别说明外都**不抬高 `min_telepilot_version`**，旧服务器照旧可用。
 
+## 2026-11-01 · 配合 TelePilot 0.115.0-beta.4（Plugin API 1.0 冻结范围已定）
+
+- `scripts/check_host_compat.py`：宿主提供 `app.worker.plugins.stability.manifest_parity_problems`（TelePilot 0.115.0-beta.4+）时，按冻结范围补查 `manifest.py` 与 `plugin.json` 的其余稳定字段（`name/key`、`display_name`、`capabilities`、`config_actions`、`interaction_profile`、`agent_tools`）：两边都写了且不一致才报错，以 `plugin.json` 为准；`author` / `description` / `usage` 不一致只给警告。旧宿主没有这个函数，检查结论与之前完全相同。
+- 现状：42 个插件补查后 0 个错误；4 个插件有说明文字不一致的警告（`codex_image`、`dead_revolver` 的 `author`，`lottery_plus`、`ten_half` 的 `description`），以 `plugin.json` 为准，不影响安装与运行，本批不改插件。
+- `scripts/build_registry.py`：`registry.json` **目录版本 1 定死**——`schema_version` 必须为 1，顶层 / 条目字段、`kind`、`trust` 只能取冻结清单里的值（与主仓库 `stability.REGISTRY_V1_*` 一致），生成与 `--check` 越界即失败；新增 `tests/test_registry_v1.py`（宿主有冻结清单时还核对两边一致）。`registry.json` 内容不变。
+- 本批**不改任何插件**、不抬任何 `min_telepilot_version`；TelePilot 侧 20 项兼容层全部保留。
+
 ## 2026-10-31 · 配合 TelePilot 0.114.0-beta.2（契约版本探测，Plugin API 1.7）
 
 - `scripts/check_host_compat.py` 报告并打印宿主的 Plugin API 版本与插件稳定契约版本（JSON 报告新增 `plugin_api_version`、`contract_version`；宿主早于契约 1.0 时为 `null`）。只做展示，不影响检查结论。

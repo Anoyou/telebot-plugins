@@ -15,7 +15,10 @@
    ``lint_plugin_metadata_files``（安装时给出的规范警告）。
 2. 加载：``loader._load_dir(path, "installed")``——与 worker 加载第三方插件同一路径（静态预检、
    ``min_telepilot_version`` 对比、``PLUGIN_CLASS``/``MANIFEST`` 身份一致性）。
-3. ``manifest.py`` 与 ``plugin.json`` 一致：版本、最低版本、权限、分类、平台能力、config_schema 等。
+3. ``manifest.py`` 与 ``plugin.json`` 一致：版本、最低版本、权限、分类、平台能力、config_schema 等。宿主提供
+   Plugin API 1.0 冻结范围的一致性检查（TelePilot 0.115.0-beta.4+ ``stability.manifest_parity_problems``）时，
+   再按宿主清单补查 key/display_name/capabilities/config_actions/interaction_profile/agent_tools 等字段
+   （两边都写了且不一致才报错，以 plugin.json 为准；author/description/usage 只警告）；旧宿主只做上面的检查。
 4. 权限：只能是宿主认识的权限；用到的 facade / Telethon 方法必须有对应权限
    （``ctx.ai`` → ``ai_text``/``ai_agent``、``ctx.http`` → ``external_http``+``allowed_hosts``、
    ``ctx.skills`` → ``agent_skills``、识图 → ``ai_vision``、``client.X`` → ``sandbox.ALLOWED_API``）。
@@ -237,6 +240,8 @@ def prepare_host(repo: Path, installed_dir: Path) -> dict[str, Any]:
         "app.worker.plugins.contract", "PLUGIN_CONTRACT_VERSION"
     )
     plugin_api_satisfies = _optional("app.worker.plugins.versioning", "plugin_api_satisfies")
+    # Plugin API 1.0 冻结范围（TelePilot 0.115.0-beta.4+）：manifest.py ↔ plugin.json 一致性检查与稳定 / 实验划分。
+    manifest_parity = _optional("app.worker.plugins.stability", "manifest_parity_problems")
     compare_versions = _optional("app.worker.plugins.versioning", "compare_versions")
     known_permissions = set(sandbox.ALLOWED_API) | set(getattr(sandbox, "_NON_CLIENT_PERMISSIONS", ()))
     known_permissions |= set(getattr(loader, "_SUPPORTED_FACADE_PERMISSIONS", ()))
@@ -271,6 +276,7 @@ def prepare_host(repo: Path, installed_dir: Path) -> dict[str, Any]:
         "contract_version": str(contract_version) if contract_version else None,
         "plugin_api_satisfies": plugin_api_satisfies,
         "compare_versions": compare_versions,
+        "manifest_parity": manifest_parity,
     }
 
 
@@ -533,7 +539,11 @@ def check_plugin(plugin_dir: Path, host: dict[str, Any], *, run_startup: bool = 
 
     # 5. manifest.py 与 plugin.json 一致
     if manifest is not None:
-        report.errors.extend(_check_parity(raw, manifest, host))
+        parity_errors = _check_parity(raw, manifest, host)
+        report.errors.extend(parity_errors)
+        extra_errors, extra_warnings = _check_parity_with_host(raw, manifest, host, parity_errors)
+        report.errors.extend(extra_errors)
+        report.warnings.extend(extra_warnings)
 
     # 6. 插件类与 hook 签名
     if cls is not None:
@@ -907,6 +917,43 @@ def _check_parity(raw: dict[str, Any], manifest: Any, host: dict[str, Any]) -> l
     if raw_hosts is not None and sorted(raw_hosts) != sorted(manifest.allowed_hosts or []):
         problems.append("plugin.json 与 manifest.py 的 allowed_hosts 不一致")
     return problems
+
+
+# 本仓库自带的一致性检查已覆盖的字段；宿主检查里同名字段不再重复报告。
+_LOCAL_PARITY_FIELDS = frozenset(
+    {
+        "version",
+        "min_telepilot_version",
+        "permissions",
+        "category",
+        "requires_platform_capabilities",
+        "config_schema",
+        "event_subscriptions",
+        "interaction_entries",
+        "allowed_hosts",
+    }
+)
+
+
+def _parity_field(message: str) -> str:
+    tail = message.split("manifest.py 的 ", 1)[-1]
+    return tail.split(" ", 1)[0].split("（", 1)[0]
+
+
+def _check_parity_with_host(
+    raw: dict[str, Any], manifest: Any, host: dict[str, Any], local_errors: list[str]
+) -> tuple[list[str], list[str]]:
+    """宿主提供 Plugin API 1.0 的一致性检查时补查其余稳定字段；旧宿主返回空（行为与之前一致）。"""
+
+    check = host.get("manifest_parity")
+    if check is None:
+        return [], []
+    try:
+        errors, warnings = check(raw, manifest)
+    except Exception as exc:  # noqa: BLE001
+        return [], [f"宿主 manifest 一致性检查执行异常: {type(exc).__name__}: {exc}"]
+    errors = [item for item in errors if _parity_field(item) not in _LOCAL_PARITY_FIELDS]
+    return errors, [f"{item}（说明文字，只警告）" for item in warnings]
 
 
 def _check_hooks(cls: Any, host: dict[str, Any]) -> list[str]:
