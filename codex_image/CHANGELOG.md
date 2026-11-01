@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.2.2 (2026-11-01)
+- 元数据：`manifest.py` 的作者由 `TeleBoxOrg` 改为 `TelePilot Official`，与 `plugin.json` 一致（Plugin API 1.0 的 manifest 一致性检查不再提醒）。功能无变化。
+
 ## 1.2.1 (2026-10-29)
 - `plugin.json` 声明 `provides: ["ai.image_backend"]`：TelePilot 0.112.0-beta.2+ 的 AI 指令模板选“图片插件（自动选择）”时按这个声明找到本插件。旧宿主忽略该字段，照旧按名字调用本插件。功能无变化。
 

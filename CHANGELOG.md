@@ -4,6 +4,11 @@
 
 TelePilot 主仓库的 `CHANGELOG.md` 只写主仓库（服务器、Web、iOS）的改动；涉及插件的版本号与改动说明统一记在这里。下面「配合 TelePilot x.y.z」表示该批插件改用的新能力从哪个服务器版本开始可用；除特别说明外都**不抬高 `min_telepilot_version`**，旧服务器照旧可用。
 
+## 2026-11-01 · 统一 4 个插件的 manifest 说明文字
+
+- 上一批 manifest 一致性补查给出的 4 条警告全部消除，以 `plugin.json` 为准改 `manifest.py`：`codex_image` 1.2.2（作者 `TeleBoxOrg` → `TelePilot Official`）、`dead_revolver` 1.0.17（作者 `builtin` → `Anoyou`）、`lottery_plus` 1.0.20、`ten_half` 0.4.23（简介与 `plugin.json` 相同）。
+- 只改元数据，插件行为、游戏币结算与派奖均无变化；不抬 `min_telepilot_version`。manifest 一致性补查现为 0 个错误、0 条说明文字警告（`interaction-ai-chat` 原有的“疑似硬编码命令前缀”安装规范警告与本批无关，保持不变）。
+
 ## 2026-11-01 · 配合 TelePilot 0.115.0-beta.4（Plugin API 1.0 冻结范围已定）
 
 - `scripts/check_host_compat.py`：宿主提供 `app.worker.plugins.stability.manifest_parity_problems`（TelePilot 0.115.0-beta.4+）时，按冻结范围补查 `manifest.py` 与 `plugin.json` 的其余稳定字段（`name/key`、`display_name`、`capabilities`、`config_actions`、`interaction_profile`、`agent_tools`）：两边都写了且不一致才报错，以 `plugin.json` 为准；`author` / `description` / `usage` 不一致只给警告。旧宿主没有这个函数，检查结论与之前完全相同。
