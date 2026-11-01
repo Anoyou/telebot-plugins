@@ -57,3 +57,44 @@ def test_v1_fields_match_host_when_available() -> None:
     assert stability.REGISTRY_SCHEMA_VERSION == build_registry.SCHEMA_VERSION == 1
     assert tuple(stability.REGISTRY_V1_TOP_FIELDS) == build_registry.REGISTRY_V1_TOP_FIELDS
     assert tuple(stability.REGISTRY_V1_ENTRY_FIELDS) == build_registry.REGISTRY_V1_ENTRY_FIELDS
+    additive = getattr(stability, "REGISTRY_V1_ADDITIVE_ENTRY_FIELDS", None)
+    if additive is not None:  # TelePilot 0.117.0+ 登记了目录版本 1.1 追加字段；更早的宿主忽略这些字段
+        assert tuple(additive) == build_registry.REGISTRY_V1_ADDITIVE_ENTRY_FIELDS
+
+
+def test_additive_fields_are_optional_and_old_fields_unchanged() -> None:
+    """1.1 追加字段只增不减：原 16 个字段照旧，summary 仍是字符串（旧服务器照读）。"""
+
+    data = build_registry.build()
+    for entry in data["plugins"]:
+        assert set(build_registry.REGISTRY_V1_ENTRY_FIELDS) - {"repository", "trust"} <= set(entry)
+        assert isinstance(entry["summary"], str)
+        assert entry["summary_i18n"]["zh"] == entry["summary"]
+        assert entry["channel_versions"]["stable"] == entry["version"]
+        assert entry["homepage"].endswith("/" + entry["key"])
+    stripped = copy.deepcopy(data)
+    for entry in stripped["plugins"]:
+        for field in build_registry.REGISTRY_V1_ADDITIVE_ENTRY_FIELDS:
+            entry.pop(field, None)
+    build_registry.validate_v1(stripped)
+
+
+def test_release_notes_only_for_current_version(tmp_path: Path) -> None:
+    plugin = tmp_path / "demo"
+    plugin.mkdir()
+    (plugin / "CHANGELOG.md").write_text("# 更新日志\n\n## 1.2.0 (2026-10-30)\n- 新功能\n\n## 1.1.0 (2026-10-01)\n- 旧\n", encoding="utf-8")
+    assert build_registry._release_notes(plugin, "1.2.0") == ("- 新功能", "2026-10-30")
+    assert build_registry._release_notes(plugin, "1.3.0") == (None, None)
+    (plugin / "CHANGELOG.md").write_text("## 1.0.0（2026-10-29）\n\n- 首个版本\n", encoding="utf-8")
+    assert build_registry._release_notes(plugin, "1.0.0") == ("- 首个版本", "2026-10-29")
+
+
+def test_asset_urls(tmp_path: Path) -> None:
+    plugin = tmp_path / "demo"
+    (plugin / "docs").mkdir(parents=True)
+    (plugin / "docs" / "shot.png").write_bytes(b"x")
+    assert build_registry._asset_url(plugin, "docs/shot.png").endswith("/demo/docs/shot.png")
+    assert build_registry._asset_url(plugin, "https://example.com/a.png") == "https://example.com/a.png"
+    for bad in ("http://example.com/a.png", "../x.png", "/etc/x.png", "missing.png"):
+        with pytest.raises(build_registry.RegistryError):
+            build_registry._asset_url(plugin, bad)

@@ -4,6 +4,13 @@
 
 TelePilot 主仓库的 `CHANGELOG.md` 只写主仓库（服务器、Web、iOS）的改动；涉及插件的版本号与改动说明统一记在这里。下面「配合 TelePilot x.y.z」表示该批插件改用的新能力从哪个服务器版本开始可用；除特别说明外都**不抬高 `min_telepilot_version`**，旧服务器照旧可用。
 
+## 2026-11-01 · 插件市场详情页字段（配合 TelePilot 0.117.0 插件市场，目录版本 1.1 追加）
+
+- `scripts/build_registry.py`：`registry.json` 每个插件新增可选字段，供 TelePilot 插件市场的“应用商店式”详情页显示：完整简介 `description`、使用说明 `usage`、指令 `commands`、最新版本说明 `release_notes` 与发布日期 `released_at`（取插件自己 `CHANGELOG.md` 第一段，标题版本必须等于当前版本）、插件主页 `homepage`、许可证 `license`、多语言简介 `summary_i18n`、各通道版本 `channel_versions`；插件 `plugin.json` 写了 `icon_url` / `screenshots`（https 链接或插件目录里的图片）时一并输出。
+- 兼容：原有 16 个字段与取值完全不变，`summary` 仍是字符串；旧服务器读索引时忽略不认识的字段，照旧显示。目录版本仍是 1（新字段登记为 1.1 追加字段，与主仓库 `stability.REGISTRY_V1_ADDITIVE_ENTRY_FIELDS` 一致；宿主没有这份清单时测试跳过对照）。
+- 现状：42 个插件都只有稳定通道（`main`）；官方插件暂无截图，详情页用“使用说明 + 指令”作预览。`reply_anchor_test` 的 CHANGELOG 最新段落（0.2.5）落后于插件版本（0.2.6），所以它不输出版本说明。
+- 本批**不改任何插件**、不抬任何 `min_telepilot_version`。
+
 ## 2026-11-01 · 统一 4 个插件的 manifest 说明文字
 
 - 上一批 manifest 一致性补查给出的 4 条警告全部消除，以 `plugin.json` 为准改 `manifest.py`：`codex_image` 1.2.2（作者 `TeleBoxOrg` → `TelePilot Official`）、`dead_revolver` 1.0.17（作者 `builtin` → `Anoyou`）、`lottery_plus` 1.0.20、`ten_half` 0.4.23（简介与 `plugin.json` 相同）。
