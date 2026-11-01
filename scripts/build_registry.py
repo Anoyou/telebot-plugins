@@ -20,6 +20,19 @@ TelePilot（0.113.0+）的“插件市场”从这里读取官方插件的元数
 - ``min_telepilot_version`` / ``plugin_api`` / ``permissions`` / ``reads`` / ``tags`` 原样复制；
 - ``channels.stable`` = ``main``（本仓库 main 分支即稳定通道）。
 
+目录版本 1.1 追加字段（TelePilot 0.117.0+ 的插件市场详情页读取；全部可选，旧服务器忽略不认识的字段，
+``summary`` 仍是字符串）：
+
+- ``summary_i18n``：``{"zh": summary, "en": description_en 截断}``（没有英文简介就只有 ``zh``）；
+- ``description``：完整简介（最多 1000 字）；``usage``：使用说明（最多 1500 字，保留 ``{prefix}`` 占位）；
+- ``commands``：``plugin.json`` 的 ``commands``（指令名，最多 24 个）；
+- ``release_notes`` / ``released_at``：插件自己 ``CHANGELOG.md`` 第一段（标题版本必须等于 ``version``，否则不写），最多 1500 字；
+- ``homepage``：插件在本仓库里的目录链接；``license``：``plugin.json`` 的 ``license``；
+- ``icon_url`` / ``screenshots``：``plugin.json`` 的同名字段；相对路径必须是插件目录里真实存在的文件，转成 raw 链接；
+- ``channel_versions``：``{"stable": version}``（以后有测试通道分支时再加 ``beta``）。
+
+空值不写，保证索引体积小、同样的插件内容总是生成同样的文件。
+
 索引里不写生成时间，保证同样的插件内容总是生成同样的文件（``--check`` 才能稳定）。
 
 **目录版本 1 已定死**（TelePilot Plugin API 1.0 冻结范围，第 22 轮）：``schema_version`` 固定为 1，顶层与条目只能
@@ -60,10 +73,31 @@ REGISTRY_V1_ENTRY_FIELDS = (
     "repository",
     "trust",
 )
+# 目录版本 1.1 追加字段（可选，只增不减；与主仓库 stability.REGISTRY_V1_ADDITIVE_ENTRY_FIELDS 一致）。
+REGISTRY_V1_ADDITIVE_ENTRY_FIELDS = (
+    "summary_i18n",
+    "description",
+    "usage",
+    "commands",
+    "release_notes",
+    "released_at",
+    "homepage",
+    "license",
+    "icon_url",
+    "screenshots",
+    "channel_versions",
+)
 TRUST_LEVELS = ("official", "community", "unreviewed")
 REPOSITORY = "https://github.com/Anoyou/telebot-plugins.git"
 HOMEPAGE = "https://github.com/Anoyou/telebot-plugins"
 SUMMARY_MAX = 200
+DESCRIPTION_MAX = 1000
+USAGE_MAX = 1500
+RELEASE_NOTES_MAX = 1500
+MAX_COMMANDS = 24
+MAX_SCREENSHOTS = 8
+RAW_BASE = "https://raw.githubusercontent.com/Anoyou/telebot-plugins/main"
+TREE_BASE = "https://github.com/Anoyou/telebot-plugins/tree/main"
 KINDS = ("interactive", "automation", "utility", "middleware", "payment_source", "ui")
 DEFAULT_ICONS = {
     "interactive": "🎮",
@@ -75,6 +109,10 @@ DEFAULT_ICONS = {
 }
 _KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
 _VERSION_RE = re.compile(r"^\d+\.\d+\.\d+([-+][0-9A-Za-z.\-]+)?$")
+_CHANGELOG_HEADING_RE = re.compile(
+    r"^##\s+v?(?P<version>\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?)\s*(?:[（(]\s*(?P<date>\d{4}-\d{2}-\d{2})\s*[）)])?",
+    re.M,
+)
 
 
 class RegistryError(Exception):
@@ -99,6 +137,83 @@ def _str_list(value: object) -> list[str]:
 def _summary(text: str) -> str:
     text = " ".join(str(text or "").split())
     return text if len(text) <= SUMMARY_MAX else text[: SUMMARY_MAX - 1] + "…"
+
+
+def _clip(text: str, limit: int) -> str:
+    text = str(text or "").strip()
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _release_notes(plugin_dir: Path, version: str) -> tuple[str | None, str | None]:
+    """插件 CHANGELOG.md 第一段：标题版本等于当前版本才返回（避免显示过期说明）。"""
+
+    path = plugin_dir / "CHANGELOG.md"
+    if not path.is_file():
+        return None, None
+    text = path.read_text(encoding="utf-8")
+    match = _CHANGELOG_HEADING_RE.search(text)
+    if not match or match.group("version") != version:
+        return None, None
+    body = text[match.end():]
+    body = body.split("\n", 1)[1] if "\n" in body else ""
+    following = re.search(r"^##\s", body, re.M)
+    if following:
+        body = body[: following.start()]
+    notes = _clip(body.strip(), RELEASE_NOTES_MAX)
+    return (notes or None), match.group("date")
+
+
+def _asset_url(plugin_dir: Path, value: object) -> str | None:
+    """https 链接原样保留；相对路径必须是插件目录里真实存在的文件，转成 raw 链接。"""
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.startswith("https://"):
+        return text
+    if "://" in text or text.startswith("/") or ".." in text.split("/"):
+        raise RegistryError(f"{plugin_dir.name}: 图片地址 {text!r} 必须是 https 链接或插件目录内的相对路径")
+    if not (plugin_dir / text).is_file():
+        raise RegistryError(f"{plugin_dir.name}: 图片文件 {text} 不存在")
+    return f"{RAW_BASE}/{plugin_dir.name}/{text}"
+
+
+def _additive_fields(plugin_dir: Path, meta: dict, summary: str, version: str) -> dict:
+    """目录版本 1.1 追加字段；空值不写。"""
+
+    out: dict = {}
+    i18n = {"zh": summary}
+    summary_en = _summary(str(meta.get("description_en") or ""))
+    if summary_en:
+        i18n["en"] = summary_en
+    out["summary_i18n"] = i18n
+    description = _clip(" ".join(str(meta.get("description") or "").split()), DESCRIPTION_MAX)
+    if description and description != summary:
+        out["description"] = description
+    usage = _clip(str(meta.get("usage") or ""), USAGE_MAX)
+    if usage:
+        out["usage"] = usage
+    commands = _str_list(meta.get("commands"))[:MAX_COMMANDS]
+    if commands:
+        out["commands"] = commands
+    notes, released_at = _release_notes(plugin_dir, version)
+    if notes:
+        out["release_notes"] = notes
+    if released_at:
+        out["released_at"] = released_at
+    out["homepage"] = f"{TREE_BASE}/{plugin_dir.name}"
+    if isinstance(meta.get("license"), str) and meta["license"].strip():
+        out["license"] = meta["license"].strip()[:40]
+    icon_url = _asset_url(plugin_dir, meta.get("icon_url"))
+    if icon_url:
+        out["icon_url"] = icon_url
+    screenshots = meta.get("screenshots")
+    if isinstance(screenshots, list):
+        urls = [url for url in (_asset_url(plugin_dir, item) for item in screenshots) if url]
+        if urls:
+            out["screenshots"] = urls[:MAX_SCREENSHOTS]
+    out["channel_versions"] = {"stable": version}
+    return out
 
 
 def entry_for(plugin_dir: Path) -> dict:
@@ -131,6 +246,7 @@ def entry_for(plugin_dir: Path) -> dict:
         "path": key,
         "channels": {"stable": "main"},
     }
+    entry.update(_additive_fields(plugin_dir, meta, entry["summary"], version))
     return entry
 
 
@@ -165,7 +281,7 @@ def validate_v1(data: dict) -> None:
     if data.get("trust") not in TRUST_LEVELS:
         raise RegistryError(f"trust={data.get('trust')!r} 不是目录版本 1 的信任等级")
     for entry in data.get("plugins") or []:
-        extra = sorted(set(entry) - set(REGISTRY_V1_ENTRY_FIELDS))
+        extra = sorted(set(entry) - set(REGISTRY_V1_ENTRY_FIELDS) - set(REGISTRY_V1_ADDITIVE_ENTRY_FIELDS))
         if extra:
             raise RegistryError(f"{entry.get('key')}: 条目字段超出目录版本 1：{', '.join(extra)}")
         if entry.get("kind") not in KINDS:
