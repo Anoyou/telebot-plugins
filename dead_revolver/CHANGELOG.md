@@ -1,5 +1,8 @@
 # 更新日志
 
+## 1.0.17 (2026-11-01)
+- 元数据：`manifest.py` 的作者由占位值 `builtin` 改为 `Anoyou`，与 `plugin.json` 一致（Plugin API 1.0 的 manifest 一致性检查不再提醒）。玩法、游戏币结算与派奖无变化。
+
 ## 1.0.16 (2026-10-28)
 - 兼容性：`min_telepilot_version` 提高到 `0.72.0-beta.2`。`manifest.py` 向 `Manifest` 传入了 `requires_platform_capabilities`，该参数 TelePilot 0.72.0 起才支持，更早的版本导入插件时直接报 `TypeError`（宿主兼容性检查在 0.59.1 / 0.71.3 上实测）；提高后旧版本会在加载前给出“请先更新 TelePilot”的明确提示。功能无变化。
 
