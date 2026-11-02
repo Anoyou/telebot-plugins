@@ -5,11 +5,13 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 
-VERSION = "0.1.5"
+VERSION = "0.2.0"
 USAGE = (
     "在需要监听私聊的账号上安装并启用插件，填写本插件专用的 Telegram Bot Token 和通知接收 Chat ID。"
     "接收人必须先私聊该 Bot 并点击开始。插件只监听该账号收到的 incoming 私聊，不处理群聊或账号自己发出的消息；"
-    "同一发送者在 60 秒窗口内的多条消息会合并为一条通知。运行问题可在插件日志与外部 HTTP 记录中排查。"
+    "同一发送者在汇总窗口内的多条消息合并通知（默认 60 秒）。默认跳过监控账号 A 已读的消息，只把仍未读的内容通知接收账号 B；"
+    "查询失败时不发送并有限次重试，重试前重新检查已读状态。升级前缓存中缺少消息 ID 的待通知内容会跳过；通知预览未产生已读回执时仍算未读。"
+    "需要 TelePilot 0.118.0-beta.2 或以上。运行问题可在插件日志与外部 HTTP 记录中排查。"
 )
 EVENT_SUBSCRIPTIONS = [
     {
@@ -59,6 +61,13 @@ CONFIG_SCHEMA = {
             "maximum": 600,
             "level": "account",
         },
+        "skip_read_messages": {
+            "type": "boolean",
+            "title": "跳过监控账号已读消息",
+            "description": "默认开启。汇总发送前按被监控账号 A 的已读状态逐条过滤，与接收账号 B 是否已读通知无关；关闭后通知全部收到的私聊。",
+            "default": True,
+            "level": "account",
+        },
     },
     "required": ["bot_token", "recipient_chat_id"],
 }
@@ -67,13 +76,14 @@ MANIFEST = Manifest(
     key="private_chat_assistant",
     display_name="私聊助理",
     version=VERSION,
-    min_telepilot_version="0.97.0-beta.1",
+    min_telepilot_version="0.118.0-beta.2",
     author="Anoyou",
     description="监听账号收到的私聊消息，并通过插件专用 Bot 向指定账号发送聚合提醒",
     usage=USAGE,
     category="automation",
     permissions=["read_chat", "resolve_entity", "external_http"],
     allowed_hosts=["api.telegram.org"],
+    reads=["chat.read_state@1"],
     event_subscriptions=EVENT_SUBSCRIPTIONS,
     requires_platform_capabilities=[],
     capabilities=CAPABILITIES,

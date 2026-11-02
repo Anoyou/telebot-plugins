@@ -1335,16 +1335,18 @@
       "kind": "automation",
       "icon": "⚙️",
       "summary": "监听账号收到的私聊消息，并通过插件专用 Bot 向指定账号发送聚合提醒",
-      "version": "0.1.5",
+      "version": "0.2.0",
       "author": "Anoyou",
-      "min_telepilot_version": "0.97.0-beta.1",
+      "min_telepilot_version": "0.118.0-beta.2",
       "plugin_api": null,
       "permissions": [
         "read_chat",
         "resolve_entity",
         "external_http"
       ],
-      "reads": [],
+      "reads": [
+        "chat.read_state@1"
+      ],
       "tags": [
         "private-chat",
         "notification",
@@ -1357,13 +1359,13 @@
       "summary_i18n": {
         "zh": "监听账号收到的私聊消息，并通过插件专用 Bot 向指定账号发送聚合提醒"
       },
-      "usage": "在需要监听私聊的账号上安装并启用插件，填写本插件专用的 Telegram Bot Token 和通知接收 Chat ID。接收人必须先私聊该 Bot 并点击开始。插件只监听该账号收到的 incoming 私聊，不处理群聊或账号自己发出的消息；同一发送者在 60 秒窗口内的多条消息会合并为一条通知。运行问题可在插件日志与外部 HTTP 记录中排查。",
-      "release_notes": "- 新增保存校验 `on_config_validate`（TelePilot 0.110.0+）：「专用通知 Bot Token」填了但不是 @BotFather 给出的「数字:密钥」格式时，配置页提示并拒绝保存（以前保存成功后通知静默发不出去）。只检查格式、不联网；留空照旧不发通知。旧平台不调用，行为不变。",
-      "released_at": "2026-10-29",
+      "usage": "在需要监听私聊的账号上安装并启用插件，填写本插件专用的 Telegram Bot Token 和通知接收 Chat ID。接收人必须先私聊该 Bot 并点击开始。插件只监听该账号收到的 incoming 私聊，不处理群聊或账号自己发出的消息；同一发送者在汇总窗口内的多条消息合并通知（默认 60 秒）。默认跳过监控账号 A 已读的消息，只把仍未读的内容通知接收账号 B；查询失败时不发送并有限次重试，重试前重新检查已读状态。升级前缓存中缺少消息 ID 的待通知内容会跳过；通知预览未产生已读回执时仍算未读。需要 TelePilot 0.118.0-beta.2 或以上。运行问题可在插件日志与外部 HTTP 记录中排查。",
+      "release_notes": "- 新增「跳过监控账号已读消息」，默认开启：在原有汇总窗口结束时按账号 A 的 Telegram 已读位置逐条过滤，只将剩余未读内容通知账号 B；全部已读则取消通知。\n- 待通知内容保存消息 ID，失败重试、worker 重启恢复后仍会重新检查；已读查询失败时不发送，沿用最多 3 次自动重试。旧版本缓存中缺少 ID 的消息在开启过滤时跳过并记录原因。\n- 需要 TelePilot 0.118.0-beta.2 的通用只读接口 `chat.read_state@1`。未产生已读回执的通知预览仍视为未读；查询与发送之间无法保证原子性，已发出的通知不会自动撤回。\n- 可关闭新开关恢复全部私聊通知；汇总窗口、专用 Bot 和通知接收账号配置继续沿用。",
+      "released_at": "2026-11-02",
       "homepage": "https://github.com/Anoyou/telebot-plugins/tree/main/private_chat_assistant",
       "license": "MIT",
       "channel_versions": {
-        "stable": "0.1.5"
+        "stable": "0.2.0"
       }
     },
     {

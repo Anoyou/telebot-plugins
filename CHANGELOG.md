@@ -4,6 +4,10 @@
 
 TelePilot 主仓库的 `CHANGELOG.md` 只写主仓库（服务器、Web、iOS）的改动；涉及插件的版本号与改动说明统一记在这里。下面「配合 TelePilot x.y.z」表示该批插件改用的新能力从哪个服务器版本开始可用；除特别说明外都**不抬高 `min_telepilot_version`**，旧服务器照旧可用。
 
+## 2026-11-02 · 私聊助理 0.2.0（配合 TelePilot 0.118.0-beta.2 只读已读查询）
+
+- 私聊助理在汇总发送前默认跳过被监控账号 A 已读的消息，只将 A 仍未读的原会话内容通知账号 B；失败重试和恢复待通知消息时重新检查。插件升级最低宿主版本为 0.118.0-beta.2，市场索引同步。
+
 ## 2026-11-01 · 插件市场详情页字段（配合 TelePilot 0.117.0 插件市场，目录版本 1.1 追加）
 
 - `scripts/build_registry.py`：`registry.json` 每个插件新增可选字段，供 TelePilot 插件市场的“应用商店式”详情页显示：完整简介 `description`、使用说明 `usage`、指令 `commands`、最新版本说明 `release_notes` 与发布日期 `released_at`（取插件自己 `CHANGELOG.md` 第一段，标题版本必须等于当前版本）、插件主页 `homepage`、许可证 `license`、多语言简介 `summary_i18n`、各通道版本 `channel_versions`；插件 `plugin.json` 写了 `icon_url` / `screenshots`（https 链接或插件目录里的图片）时一并输出。

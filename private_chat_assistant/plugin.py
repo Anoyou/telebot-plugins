@@ -10,7 +10,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "0.1.4"
+VERSION = "0.2.0"
 PENDING_PREFIX = "pending:"
 MAX_PENDING_MESSAGES = 50
 MAX_MESSAGE_LENGTH = 1200
@@ -142,7 +142,9 @@ def _format_notification(state: dict[str, Any]) -> str:
     sender_name = html_escape(_identity_label(sender_name, username), quote=False)
 
     raw_messages = state.get("messages") if isinstance(state.get("messages"), list) else []
-    messages = [str(item).strip() for item in raw_messages if str(item).strip()]
+    messages = [str(item.get("text") or "").strip() if isinstance(item, dict) else str(item).strip()
+                for item in raw_messages]
+    messages = [item for item in messages if item]
     if not messages:
         messages = ["[非文本消息]"]
     if len(messages) == 1:
@@ -188,6 +190,7 @@ class PrivateChatAssistantPlugin(Plugin):
         self._monitored_account_id = 0
         self._monitored_account_name = ""
         self._sender_identity_cache: dict[int, tuple[str, str]] = {}
+        self._stopped = False
 
     def _sender_lock(self, sender_id: int) -> asyncio.Lock:
         return self._sender_locks.setdefault(sender_id, asyncio.Lock())
@@ -204,6 +207,7 @@ class PrivateChatAssistantPlugin(Plugin):
         return None
 
     async def on_startup(self, ctx: PluginContext) -> None:
+        self._stopped = False
         await self._resolve_monitored_account(ctx)
         if ctx.log is not None:
             missing = []
@@ -241,6 +245,7 @@ class PrivateChatAssistantPlugin(Plugin):
             self._schedule_sender(ctx, sender_id, str(restored.get("fire_at") or ""))
 
     async def on_shutdown(self, ctx: PluginContext) -> None:
+        self._stopped = True
         if ctx.scheduler is not None:
             ctx.scheduler.unregister_all()
         if ctx.log is not None:
@@ -250,6 +255,8 @@ class PrivateChatAssistantPlugin(Plugin):
         self, ctx: PluginContext, payload: dict[str, Any]
     ) -> list[dict[str, Any]] | None:
         source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+        if self._stopped:
+            return None
         if source.get("channel") != "userbot" or source.get("type") != "message":
             return None
         if not _is_private_chat(payload):
@@ -296,7 +303,10 @@ class PrivateChatAssistantPlugin(Plugin):
                 state["username"] = username or state.get("username")
 
             messages = state.get("messages") if isinstance(state.get("messages"), list) else []
-            state["messages"] = [*messages, _message_content(payload)][-MAX_PENDING_MESSAGES:]
+            message = payload.get("message") or {}
+            item = {"id": _positive_int(message.get("message_id") or message.get("id")),
+                    "text": _message_content(payload)}
+            state["messages"] = [*messages, item][-MAX_PENDING_MESSAGES:]
             state["updated_at"] = now.isoformat()
             await self._save_pending(ctx, sender_id, state)
             if not immediate_flush:
@@ -365,12 +375,30 @@ class PrivateChatAssistantPlugin(Plugin):
 
     async def _flush_sender(self, ctx: PluginContext, sender_id: int) -> None:
         async with self._sender_lock(sender_id):
+            if self._stopped:
+                return
             state = await self._load_pending(ctx, sender_id)
             if not state:
                 return
+            query_failed = False
+            if (ctx.config or {}).get("skip_read_messages", True):
+                try:
+                    state = await self._filter_unread(ctx, sender_id, state)
+                except Exception as exc:
+                    query_failed = True
+                    if ctx.log is not None:
+                        await ctx.log("warn", "[private_chat_assistant] 无法查询监控账号已读状态，本次不发送，稍后重试",
+                                      sender_id=sender_id, error_type=type(exc).__name__)
+            if self._stopped:
+                return
             await self._delete_pending(ctx, sender_id)
+            if self._stopped:
+                await self._save_pending(ctx, sender_id, state)
+                return
+            if not state.get("messages"):
+                return
 
-            sent = await self._send_notification(ctx, _format_notification(state))
+            sent = not query_failed and await self._send_notification(ctx, _format_notification(state))
             if sent:
                 if ctx.log is not None:
                     await ctx.log(
@@ -386,7 +414,7 @@ class PrivateChatAssistantPlugin(Plugin):
                 if ctx.log is not None:
                     await ctx.log(
                         "error",
-                        "[private_chat_assistant] 私聊通知连续发送失败，已停止自动重试，请检查 Bot Token、接收 Chat ID 与代理配置",
+                        "[private_chat_assistant] 私聊通知或已读查询连续失败，已停止自动重试，请检查宿主版本、账号连接及通知配置",
                         sender_id=sender_id,
                     )
                 return
@@ -406,6 +434,32 @@ class PrivateChatAssistantPlugin(Plugin):
                     sender_id=sender_id,
                     retry_count=retry_count,
                 )
+
+    async def _filter_unread(
+        self, ctx: PluginContext, sender_id: int, state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """按 A 的已读位置逐条过滤，B 是否已读通知不参与判断。"""
+        messages = state.get("messages") or []
+        identified = [item for item in messages if isinstance(item, dict) and _positive_int(item.get("id"))]
+        unknown_count = len(messages) - len(identified)
+        if unknown_count and ctx.log is not None:
+            await ctx.log("warn", "[private_chat_assistant] 丢弃无法判定已读状态的旧待通知消息（缺少消息 ID）",
+                          sender_id=sender_id, message_count=unknown_count)
+        filtered = dict(state)
+        if not identified:
+            filtered["messages"] = []
+            return filtered
+        read_state = await ctx.host.read("chat.read_state@1", chat_id=sender_id)
+        read_max = read_state.get("read_inbox_max_id") if isinstance(read_state, dict) else None
+        if (not isinstance(read_max, int) or isinstance(read_max, bool) or read_max < 0
+                or read_state.get("chat_id") != sender_id):
+            raise ValueError("宿主返回无效的已读状态")
+        filtered["messages"] = [item for item in identified if _positive_int(item.get("id")) > read_max]
+        read_count = len(identified) - len(filtered["messages"])
+        if read_count and ctx.log is not None:
+            await ctx.log("info", "[private_chat_assistant] 监控账号已读，跳过通知",
+                          sender_id=sender_id, message_count=read_count)
+        return filtered
 
     async def _send_notification(self, ctx: PluginContext, text: str) -> bool:
         config = ctx.config or {}
