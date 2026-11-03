@@ -10,7 +10,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 PENDING_PREFIX = "pending:"
 MAX_PENDING_MESSAGES = 50
 MAX_MESSAGE_LENGTH = 1200
@@ -190,6 +190,7 @@ class PrivateChatAssistantPlugin(Plugin):
         self._monitored_account_id = 0
         self._monitored_account_name = ""
         self._sender_identity_cache: dict[int, tuple[str, str]] = {}
+        self._sender_bot_cache: dict[int, bool] = {}
         self._stopped = False
 
     def _sender_lock(self, sender_id: int) -> asyncio.Lock:
@@ -270,13 +271,16 @@ class PrivateChatAssistantPlugin(Plugin):
         if not self._monitored_account_id:
             await self._resolve_monitored_account(ctx)
 
-        sender_id, display_name, username = await self._resolve_sender_info(ctx, payload)
+        sender_id, _, _ = _sender_info(payload)
         if (
             not sender_id
             or sender_id == _bot_id_from_token(bot_token)
             or sender_id == self._monitored_account_id
         ):
             return None
+        if await self._should_skip_bot(ctx, sender_id):
+            return None
+        sender_id, display_name, username = await self._resolve_sender_info(ctx, payload)
 
         immediate_flush = ctx.scheduler is None
         async with self._sender_lock(sender_id):
@@ -337,7 +341,7 @@ class PrivateChatAssistantPlugin(Plugin):
         if not sender_id:
             return sender_id, display_name, username
         cached = self._sender_identity_cache.get(sender_id)
-        if cached is not None:
+        if cached is not None and sender_id in self._sender_bot_cache:
             return sender_id, cached[0], cached[1]
         client = getattr(ctx, "client", None)
         get_entity = getattr(client, "get_entity", None) if client is not None else None
@@ -345,11 +349,30 @@ class PrivateChatAssistantPlugin(Plugin):
             try:
                 entity = await get_entity(sender_id)
                 display_name, username = _entity_identity(entity, sender_id)
+                is_bot = getattr(entity, "bot", None)
+                if hasattr(entity, "bot") and (is_bot is None or isinstance(is_bot, bool)):
+                    self._sender_bot_cache[sender_id] = is_bot is True
             except Exception:
-                pass
+                if cached is not None:
+                    display_name, username = cached
         if display_name != str(sender_id) or username:
             self._sender_identity_cache[sender_id] = (display_name, username)
         return sender_id, display_name, username
+
+    async def _should_skip_bot(self, ctx: PluginContext, sender_id: int) -> bool:
+        if not (ctx.config or {}).get("skip_bot_messages", False):
+            return False
+        if sender_id not in self._sender_bot_cache:
+            await self._resolve_sender_info(ctx, {"sender": {"user_id": sender_id}})
+        is_bot = self._sender_bot_cache.get(sender_id)
+        if is_bot is None:
+            if ctx.log is not None:
+                await ctx.log("warn", "[private_chat_assistant] 无法确认私聊对象是否为 Bot，保留通知",
+                              sender_id=sender_id)
+            return False
+        if is_bot and ctx.log is not None:
+            await ctx.log("info", "[private_chat_assistant] 私聊对象为 Bot，跳过通知", sender_id=sender_id)
+        return is_bot
 
     def _schedule_sender(self, ctx: PluginContext, sender_id: int, fire_at: str) -> None:
         if ctx.scheduler is None:
@@ -379,6 +402,9 @@ class PrivateChatAssistantPlugin(Plugin):
                 return
             state = await self._load_pending(ctx, sender_id)
             if not state:
+                return
+            if await self._should_skip_bot(ctx, sender_id):
+                await self._delete_pending(ctx, sender_id)
                 return
             query_failed = False
             if (ctx.config or {}).get("skip_read_messages", True):

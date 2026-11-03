@@ -59,6 +59,7 @@ class FakeClient:
                 first_name="张三",
                 last_name="",
                 username="zhangsan",
+                bot=None,
             )
         }
 
@@ -186,6 +187,80 @@ class PrivateChatAssistantIdentityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<blockquote>1. https://test", text)
         self.assertIn("2. &lt;测试&gt;&amp;内容</blockquote>", text)
         self.assertIn("<i>请及时查看。</i>", text)
+
+
+class PrivateChatAssistantBotTests(unittest.IsolatedAsyncioTestCase):
+    def make_case(self, *, enabled=True, is_bot=True):
+        plugin = plugin_module.PrivateChatAssistantPlugin()
+        ctx = make_context()
+        ctx.config["skip_bot_messages"] = enabled
+        ctx.scheduler = FakeScheduler()
+        ctx.log = AsyncMock()
+        ctx.client.entities[1682400007].bot = is_bot
+        plugin._send_notification = AsyncMock(return_value=True)
+        return plugin, ctx
+
+    async def test_enabled_skips_bot_before_queuing(self):
+        plugin, ctx = self.make_case()
+        await plugin.on_event(ctx, message_payload(1682400007))
+        self.assertEqual(plugin._memory_pending, {})
+        self.assertEqual(ctx.scheduler.jobs, {})
+        ctx.host.read.assert_not_awaited()
+        self.assertIn("私聊对象为 Bot", ctx.log.await_args.args[1])
+
+    async def test_disabled_and_default_preserve_bot_notifications(self):
+        for default in (True, False):
+            plugin, ctx = self.make_case(enabled=False)
+            if default:
+                ctx.config.pop("skip_bot_messages")
+            await plugin.on_event(ctx, message_payload(1682400007))
+            await plugin._flush_sender(ctx, 1682400007)
+            plugin._send_notification.assert_awaited_once()
+
+    async def test_normal_users_are_not_filtered_even_with_bot_like_username(self):
+        for is_bot in (None, False):
+            plugin, ctx = self.make_case(is_bot=is_bot)
+            ctx.client.entities[1682400007].username = "human_bot"
+            await plugin.on_event(ctx, message_payload(1682400007))
+            await plugin._flush_sender(ctx, 1682400007)
+            plugin._send_notification.assert_awaited_once()
+
+    async def test_enabling_filter_cancels_already_queued_bot_notification(self):
+        plugin, ctx = self.make_case(enabled=False)
+        await plugin.on_event(ctx, message_payload(1682400007))
+        ctx.config["skip_bot_messages"] = True
+        await plugin._flush_sender(ctx, 1682400007)
+        self.assertEqual(plugin._memory_pending, {})
+        plugin._send_notification.assert_not_awaited()
+        ctx.host.read.assert_not_awaited()
+
+    async def test_restored_bot_pending_is_not_notified(self):
+        plugin, ctx = self.make_case()
+        ctx.storage = FakeStorage({"pending:1682400007": {
+            "sender_id": 1682400007, "messages": [{"id": 10, "text": "Bot 消息"}]}})
+        await plugin.on_startup(ctx)
+        await plugin._flush_sender(ctx, 1682400007)
+        self.assertEqual(ctx.storage.values, {})
+        plugin._send_notification.assert_not_awaited()
+
+    async def test_failed_identity_lookup_preserves_notification_and_can_recover(self):
+        plugin, ctx = self.make_case()
+        original = ctx.client.get_entity
+        ctx.client.get_entity = AsyncMock(side_effect=RuntimeError("offline"))
+        await plugin.on_event(ctx, message_payload(1682400007))
+        await plugin._flush_sender(ctx, 1682400007)
+        plugin._send_notification.assert_awaited_once()
+        self.assertTrue(any("无法确认" in call.args[1] for call in ctx.log.await_args_list))
+        ctx.client.get_entity = original
+        await plugin.on_event(ctx, message_payload(1682400007, message_id=11))
+        self.assertEqual(plugin._memory_pending, {})
+
+    async def test_bot_identity_lookup_is_cached(self):
+        plugin, ctx = self.make_case()
+        ctx.client.get_entity = AsyncMock(wraps=ctx.client.get_entity)
+        await plugin.on_event(ctx, message_payload(1682400007))
+        await plugin.on_event(ctx, message_payload(1682400007, message_id=11))
+        ctx.client.get_entity.assert_awaited_once_with(1682400007)
 
 
 class PrivateChatAssistantUnreadTests(unittest.IsolatedAsyncioTestCase):
