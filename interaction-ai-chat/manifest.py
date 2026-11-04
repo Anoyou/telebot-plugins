@@ -5,13 +5,13 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.4.13"
+PLUGIN_VERSION = "0.5.0"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
     "支持访客模式（Bot 未加入的群/私聊，Bot API 10.0 Guest Mode）、Bot 已加入的群里 @Bot/回复 Bot，以及与 Bot 私聊。"
     "收到提问先回一条“🤔”占位，答案出来后原地编辑为 Telegram 富文本；可选联网搜索与识图。"
-    "发送“重置”清空自己的记忆。需要在 BotFather 为交互 Bot 开启 Guest Chat Mode 并关闭 Inline Mode。"
+    "发送“重置”清空自己的记忆。需要在 BotFather 为交互 Bot 开启 Guest Chat Mode ；服务器参数“AI 回复方式”选 inline 代发时还需开启 Inline Mode 与 Inline Feedback（账号本人在群里提问会以“你的名字 via @Bot”代发富文本），否则建议关闭 Inline Mode。"
 )
 
 USAGE_PREVIEW = (
@@ -39,7 +39,7 @@ USAGE_PREVIEW = (
     "建议给推理模型把“最大输出 Token”调到 2000 以上。\n\n"
     "【开启前准备】\n"
     "1. 在 Telegram 打开 @BotFather 的 Mini App，进入交互 Bot 设置，开启 Guest Chat Mode（访客模式）。\n"
-    "2. 在 BotFather 关闭该 Bot 的 Inline Mode（/setinline 关闭），避免输入 @Bot 时弹出 Inline 结果抢走访客提问。\n"
+    "2. 一般在 BotFather 关闭该 Bot 的 Inline Mode（/setinline 关闭），避免输入 @Bot 时弹出 Inline 结果抢走访客提问；若服务器参数“AI 回复方式”选了 inline 代发（TelePilot 0.119.0+），则需要用 /setinline 与 /setinlinefeedback 打开。\n"
     "3. 在 TelePilot“账号 → Bot 联动 → 交互 Bot”点“重新检测”，确认“访客模式：已开启”。\n"
     "4. 在 TelePilot 配好至少一个可用的 AI Provider；需要固定模型时在下方选择。\n"
     "5. 群里 @Bot 触发需要 Bot 能收到该消息：建议在 BotFather 关闭 Group Privacy，或把 Bot 设为群管理员；回复 Bot 消息始终可触发。\n\n"

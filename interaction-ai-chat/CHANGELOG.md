@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.5.0 (2026-11-04)
+- 配合 TelePilot 0.119.0 的「AI 回复方式：inline 代发」：账号本人在群里 @Bot、回复 Bot 或用关键词（含 PT 查询）提问，且服务器参数“AI 回复方式”选了 inline 代发时，占位改由平台 `ctx.messages.inline_via_bot` 借交互 Bot 的 inline 模式发出（显示为“你的名字 via @Bot”），答案按 `inline_message_id` 原地编辑成 Rich Message（失败退回 Telegram HTML），触发消息按服务器参数“inline 代发后删除指令消息”删除。
+- inline 代发的占位与访客回复一样只能编辑这一条：超长答案合并截断，失败提示与「🔄 重试」按钮按 inline_message_id 挂在这条消息上。
+- 兼容：只在宿主声明能力 `messages.inline_via_bot` 且 `ctx.messages.live_inline_edit` 为真时使用；旧宿主、设置为普通、不是账号本人、群禁止 inline、等不到回执等情况照旧由交互 Bot 发占位，行为与 0.4.13 相同。`min_telepilot_version` 保持 0.105.0-beta.1。
+- 使用说明更新：一般仍建议关闭 Inline Mode；选了 inline 代发时需要在 @BotFather 用 /setinline 与 /setinlinefeedback 打开。
+
 ## 0.4.13 (2026-10-29)
 - 「🔄 重试」「🔀 换模型重试」按钮（含模型列表、翻页、选择、取消）接入 TelePilot 0.108.0 的通用回调路由：平台支持 `messages.callback_routing` 时按钮写成 `{"callback": {"data": "iac:…"}}`，由平台签发 `cb1.` 按钮令牌，点击只投递回本插件（其它订阅了 callback_query 的插件不再收到这些点击，也不再受 64 字节限制），`payload.callback_data` 仍是原来的 `iac:…`，所以按钮文案、权限（提问者 / 管理员）、30 分钟过期与重放逻辑都不变。
 - 订阅不变（`all_allowed_chats` + `guest_all`），没有新增 `own_buttons` 订阅：平台对同一插件的多条订阅不去重，同一点击会被投递两次；旧平台又会把不认识的 `own_buttons` 当成 `all_allowed_chats`。
