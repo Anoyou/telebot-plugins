@@ -10,7 +10,7 @@ from typing import Any
 from app.worker.plugins.base import Plugin, PluginContext, register
 
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 PENDING_PREFIX = "pending:"
 MAX_PENDING_MESSAGES = 50
 MAX_MESSAGE_LENGTH = 1200
@@ -209,6 +209,7 @@ class PrivateChatAssistantPlugin(Plugin):
 
     async def on_startup(self, ctx: PluginContext) -> None:
         self._stopped = False
+        self._runtime_ctx = ctx
         await self._resolve_monitored_account(ctx)
         if ctx.log is not None:
             missing = []
@@ -360,7 +361,9 @@ class PrivateChatAssistantPlugin(Plugin):
         return sender_id, display_name, username
 
     async def _should_skip_bot(self, ctx: PluginContext, sender_id: int) -> bool:
-        if not (ctx.config or {}).get("skip_bot_messages", False):
+        # 事件 ctx 是副本，排队回调必须读取宿主热更新后的常驻配置。
+        runtime_ctx = getattr(self, "_runtime_ctx", ctx)
+        if not (runtime_ctx.config or {}).get("skip_bot_messages", False):
             return False
         if sender_id not in self._sender_bot_cache:
             await self._resolve_sender_info(ctx, {"sender": {"user_id": sender_id}})
@@ -424,6 +427,12 @@ class PrivateChatAssistantPlugin(Plugin):
             if not state.get("messages"):
                 return
 
+            # 已读查询和存储清理都会让出执行权，期间可能刚开启 Bot 过滤。
+            if not query_failed and await self._should_skip_bot(ctx, sender_id):
+                return
+            if self._stopped:
+                await self._save_pending(ctx, sender_id, state)
+                return
             sent = not query_failed and await self._send_notification(ctx, _format_notification(state))
             if sent:
                 if ctx.log is not None:

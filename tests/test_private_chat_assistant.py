@@ -4,6 +4,7 @@ import importlib.util
 import sys
 import types
 import unittest
+from copy import copy
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -233,6 +234,44 @@ class PrivateChatAssistantBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plugin._memory_pending, {})
         plugin._send_notification.assert_not_awaited()
         ctx.host.read.assert_not_awaited()
+
+    async def test_enabling_filter_updates_captured_event_context_for_queued_bot(self):
+        plugin, ctx = self.make_case(enabled=False)
+        await plugin.on_startup(ctx)
+        event_ctx = copy(ctx)
+        await plugin.on_event(event_ctx, message_payload(1682400007))
+        # 宿主给事件复制 ctx，并在配置热更新时替换常驻 ctx.config。
+        ctx.config = {**ctx.config, "skip_bot_messages": True}
+        callback = ctx.scheduler.jobs["private_digest_1682400007"][1]
+        await callback(None)
+        plugin._send_notification.assert_not_awaited()
+        self.assertEqual(plugin._memory_pending, {})
+
+    async def test_enabling_filter_during_read_query_blocks_pending_bot(self):
+        plugin, ctx = self.make_case(enabled=False)
+        await plugin.on_startup(ctx)
+        await plugin.on_event(copy(ctx), message_payload(1682400007))
+        async def enable_during_query(*args, **kwargs):
+            ctx.config = {**ctx.config, "skip_bot_messages": True}
+            return {"chat_id": 1682400007, "read_inbox_max_id": 0}
+        ctx.host.read.side_effect = enable_during_query
+        await plugin._flush_sender(copy(ctx), 1682400007)
+        plugin._send_notification.assert_not_awaited()
+        self.assertEqual(plugin._memory_pending, {})
+
+    async def test_enabling_filter_during_storage_delete_blocks_pending_bot(self):
+        plugin, ctx = self.make_case(enabled=False)
+        ctx.storage = FakeStorage({})
+        await plugin.on_startup(ctx)
+        await plugin.on_event(copy(ctx), message_payload(1682400007))
+        original_delete = ctx.storage.delete
+        async def enable_during_delete(key):
+            ctx.config = {**ctx.config, "skip_bot_messages": True}
+            await original_delete(key)
+        ctx.storage.delete = enable_during_delete
+        await plugin._flush_sender(copy(ctx), 1682400007)
+        plugin._send_notification.assert_not_awaited()
+        self.assertEqual(ctx.storage.values, {})
 
     async def test_restored_bot_pending_is_not_notified(self):
         plugin, ctx = self.make_case()
