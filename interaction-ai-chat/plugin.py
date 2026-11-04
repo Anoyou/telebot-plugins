@@ -1963,7 +1963,8 @@ class InteractionAIChatPlugin(Plugin):
         store = self._store(ctx)
         record["failure_html"] = reply.segments[0] if reply.segments else ""
         record["failure_parse_mode"] = reply.parse_mode
-        guest = trigger.kind == "guest"
+        # inline 代发的占位（0.119.0+）和访客回复一样只能按 inline_message_id 编辑。
+        guest = trigger.kind == "guest" or bool(placeholder is not None and placeholder.inline_message_id)
         buttons = bool(cfg["retry_buttons_enabled"]) and bool(reply.segments) and (not guest or guest_buttons_supported(getattr(ctx, "messages", None)))
         if not buttons:
             # 旧平台（< 0.106.0-beta.17）的访客回复会剥掉 callback 按钮、也不投递 inline 回调；只支持回复“重试”。
@@ -2498,6 +2499,14 @@ class InteractionAIChatPlugin(Plugin):
                 "title": "AI 答疑",
                 "send_via": ["interaction_bot"],
             }
+        elif placeholder is not None and placeholder.inline_message_id:
+            # inline 代发的占位（TelePilot 0.119.0+ inline_via_bot）：按 inline_message_id 原地编辑。
+            action = {
+                "type": "edit_message",
+                "inline_message_id": placeholder.inline_message_id,
+                "rich_message": rich_message,
+                "send_via": ["interaction_bot"],
+            }
         elif placeholder is not None and placeholder.message_id is not None:
             action = {
                 "type": "edit_message",
@@ -2542,6 +2551,42 @@ class InteractionAIChatPlugin(Plugin):
 
     # -- 占位 ---------------------------------------------------------------
 
+    async def _inline_via_bot_placeholder(self, ctx: Any, trigger: _Trigger, text: str) -> _Placeholder | None:
+        """账号本人在群里触发（含 PT 查询等关键词）时，按服务器「AI 回复方式」= inline 代发发出“用户名 via @Bot”占位。
+
+        TelePilot 0.119.0+ 能力 ``messages.inline_via_bot``：平台借交互 Bot 的 inline 模式代发并返回
+        ``inline_message_id``，后续沿用 inline 消息编辑（Rich Message → HTML）。旧平台、设置为普通、不是账号本人、
+        群禁止 inline 等情况返回 None，照旧用交互 Bot 发占位。
+        """
+
+        if trigger.kind not in GROUP_KINDS or trigger.chat_id is None or trigger.user_id is None:
+            return None
+        messages = getattr(ctx, "messages", None)
+        via = getattr(messages, "inline_via_bot", None)
+        caps = getattr(ctx, "capabilities", None)
+        if via is None or caps is None or getattr(messages, "live_inline_edit", False) is not True:
+            return None
+        try:
+            if not caps.has("messages.inline_via_bot"):
+                return None
+            result = await via(
+                chat_id=trigger.chat_id,
+                requester_user_id=trigger.user_id,
+                reply_to_message_id=trigger.reply_message_id,
+                delete_message_id=trigger.message_id,
+                placeholder=text,
+                parse_mode="html",
+            )
+        except Exception as exc:  # noqa: BLE001 - 代发失败一律退回原来的占位
+            await _log(ctx, "info", "AI 答疑 inline 代发失败，改用交互 Bot 回复", error_type=type(exc).__name__, kind=trigger.kind)
+            return None
+        if not isinstance(result, dict) or not result.get("ok") or not result.get("inline_message_id"):
+            reason = str((result or {}).get("reason") or "") if isinstance(result, dict) else ""
+            if reason and reason not in {"style_normal", "not_owner"}:
+                await _log(ctx, "info", "AI 答疑未使用 inline 代发，改用交互 Bot 回复", reason=_clip(reason, 64), kind=trigger.kind)
+            return None
+        return _Placeholder(inline_message_id=str(result["inline_message_id"]))
+
     async def _send_placeholder(self, ctx: Any, cfg: dict[str, Any], trigger: _Trigger) -> _Placeholder | None:
         """实时发出“🤔”占位，返回可编辑的引用；平台不支持或失败时返回 None（退回一次性回复）。"""
 
@@ -2577,6 +2622,9 @@ class InteractionAIChatPlugin(Plugin):
                     return _Placeholder(inline_message_id=str(inline_id))
                 # 已经回复过但拿不到 inline id：后续只能放弃编辑。
                 return _Placeholder(inline_message_id="")
+            inline_placeholder = await self._inline_via_bot_placeholder(ctx, trigger, text)
+            if inline_placeholder is not None:
+                return inline_placeholder
             reader = getattr(messages, "read_saved_message_id", None)
             if reader is None or trigger.chat_id is None:
                 return None
@@ -2637,6 +2685,21 @@ class InteractionAIChatPlugin(Plugin):
                     "text": text,
                     "parse_mode": parse_mode,
                     "title": "AI 答疑",
+                }
+            ]
+
+        if placeholder is not None and placeholder.inline_message_id:
+            # inline 代发的占位只能编辑这一条（不能续发），超长时与访客回复一样合并截断。
+            text = _single_message(segments, parse_mode)
+            if parse_mode == "html":
+                text = _fit_guest_html(text, segments)
+            return [
+                {
+                    "type": "edit_message",
+                    "inline_message_id": placeholder.inline_message_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "send_via": ["interaction_bot"],
                 }
             ]
 
