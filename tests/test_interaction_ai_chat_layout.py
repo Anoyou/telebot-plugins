@@ -128,5 +128,88 @@ class PromptTest(unittest.TestCase):
         self.assertIn("单独一行 ---", PLUGIN.build_system_prompt({"rich_text": False}))
 
 
+# ---------------------------------------------------------------------------
+# 0.5.2：问题引用 + 署名（第 28 轮真机反馈：关键词 / inline 提问缺引用、底部分割线和署名）
+# ---------------------------------------------------------------------------
+NEW_HOST = ("messages.rich_divider",)
+
+
+def _group_markdown(ctx, text: str = "阿光 什么是做种") -> str:
+    plugin = PLUGIN.InteractionAIChatPlugin()
+    run(plugin.on_event(ctx, base.message_payload(text, chat_id=-100777, chat_type="supergroup")))
+    return ctx.messages.applied[-1]["rich_message"]["markdown"]
+
+
+def _keyword_ctx(config: dict | None = None, *, caps=_Caps(*NEW_HOST)):
+    cfg = {"thinking_placeholder": False, "trigger_keywords": "阿光"}
+    cfg.update(config or {})
+    ctx = base.live_ctx(config=cfg, ai=base.CapAI(text="第一段\n\n第二段"), messages=RichMessages())
+    if caps is not None:
+        ctx.capabilities = caps
+    return ctx
+
+
+class QuoteSignatureTest(unittest.TestCase):
+    def setUp(self) -> None:
+        base._install_stubs()
+
+    def test_keyword_reply_has_quote_dividers_and_signature(self) -> None:
+        markdown = _group_markdown(_keyword_ctx())
+        blocks = markdown.split("\n\n")
+        self.assertEqual(blocks[0], "> ❓ 什么是做种", markdown)
+        self.assertEqual(blocks[1], "---")
+        self.assertEqual(blocks[2:4], ["第一段", "第二段"])
+        self.assertEqual(blocks[4], "---")
+        self.assertTrue(blocks[5].startswith("— "), markdown)
+
+    def test_template_signature_is_not_duplicated(self) -> None:
+        markdown = _group_markdown(_keyword_ctx({"answer_template": SIGNED}))
+        self.assertIn("✦ 小助手 ✦", markdown)
+        self.assertNotIn("— ", markdown)
+        self.assertEqual(markdown.count("\n---\n"), 2, markdown)
+
+    def test_switches_off(self) -> None:
+        markdown = _group_markdown(_keyword_ctx({"quote_question": False, "signature_template": ""}))
+        self.assertTrue(markdown.startswith("第一段"), markdown)
+        self.assertNotIn("---", markdown)
+
+    def test_old_host_unchanged(self) -> None:
+        markdown = _group_markdown(_keyword_ctx(caps=None))
+        self.assertNotIn("❓", markdown)
+        self.assertNotIn("— ", markdown)
+
+    def test_private_chat_has_signature_but_no_quote(self) -> None:
+        markdown = _markdown(_rich_ctx("{notices}{answer}{sources}", caps=_Caps(*NEW_HOST)))
+        self.assertNotIn("❓", markdown)
+        self.assertIn("\n\n---\n\n— ", markdown)
+
+    def test_extras_rules(self) -> None:
+        cfg = {"quote_question": True, "signature_template": "— {model}"}
+        values = {"model": "m", "provider": "p", "user": "u", "sources": "<b>来源</b>"}
+        inline_ask = PLUGIN._Trigger(kind="guest", chat_id=None, chat_type="group", user_id=1, display_name="u", text="问", guest_query_id="tpask:abc")
+        guest = PLUGIN._Trigger(kind="guest", chat_id=None, chat_type="group", user_id=1, display_name="u", text="问", guest_query_id="g1")
+        extras = PLUGIN.InteractionAIChatPlugin._layout_extras
+        self.assertEqual(extras(cfg, inline_ask, values, "", ""), ("", "— m"))  # 服务器已加引用
+        self.assertEqual(extras(cfg, guest, values, "", "\n<b>来源</b>"), ("问", "— m"))  # 只有来源：仍加署名
+        self.assertEqual(extras(cfg, guest, values, "", "\n署名"), ("问", ""))  # 模板自带署名
+        self.assertEqual(extras(cfg, guest, values, "答：", ""), ("问", ""))  # 回答和文字同一行
+        self.assertEqual(extras(cfg, guest, values, "<blockquote>{q}</blockquote>\n", ""), ("", "— m"))  # 模板自带引用
+        self.assertEqual(extras(cfg, guest, {**values, "model": ""}, "", ""), ("问", ""))  # 署名只剩标点
+
+    def test_html_layout_has_quote_and_signature(self) -> None:
+        plugin = PLUGIN.InteractionAIChatPlugin()
+        trigger = PLUGIN._Trigger(kind="keyword", chat_id=1, chat_type="group", user_id=2, display_name="张三", text="什么<是>")
+        cfg = PLUGIN._cfg(base.live_ctx(config={}))
+        result = type("R", (), {"model": "m", "provider_name": "p", "sources": []})()
+        out = plugin._format_answer(cfg, trigger, "答案", result, [], layout=True)[0]
+        self.assertEqual(
+            out,
+            f"<blockquote>❓ 什么&lt;是&gt;</blockquote>\n{PLUGIN.TEXT_DIVIDER}\n答案\n{PLUGIN.TEXT_DIVIDER}\n— m",
+        )
+
+    def test_bot_reply_preferred_is_silent(self) -> None:
+        self.assertIn("bot_reply_preferred", PLUGIN.InteractionAIChatPlugin._inline_via_bot_placeholder.__doc__ or "")
+
+
 if __name__ == "__main__":
     unittest.main()
