@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.worker.plugins.manifest import Manifest
 
 PLUGIN_KEY = "interaction-ai-chat"
-PLUGIN_VERSION = "0.5.1"
+PLUGIN_VERSION = "0.5.2"
 
 USAGE = (
     "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。"
@@ -395,6 +395,25 @@ CONFIG_SCHEMA = {
             "x-ui-section": _SECTION_REPLY,
             "x-ui-columns": 2,
             "x-ui-order": 30,
+        },
+        "quote_question": {
+            "type": "boolean",
+            "title": "回答顶部引用问题",
+            "description": "群里（@Bot、回复 Bot、关键词）和访客模式的回答顶部用引用块显示原来的问题，下面接分割线再接回答。私聊不加；服务器已经加过引用的「@Bot 问题」inline 提问不重复加；回复包装模板里自己写了引用块也不加。需要 TelePilot 0.120.0-beta.2+（旧版本不加）。",
+            "default": True,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 37,
+        },
+        "signature_template": {
+            "type": "string",
+            "title": "署名",
+            "description": "回答最下面单独一行的署名，和回答之间隔一条分割线。可用：{model} {provider} {user}。回复包装模板在 {answer} 后面已经写了署名（除 {sources} 外还有文字）时不再追加；留空则不加。需要 TelePilot 0.120.0-beta.2+。",
+            "default": "— {model}",
+            "maxLength": 300,
+            "x-ui-section": _SECTION_REPLY,
+            "x-ui-columns": 2,
+            "x-ui-order": 38,
         },
         "max_output_chars": {
             "type": "integer",

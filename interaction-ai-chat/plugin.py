@@ -406,6 +406,13 @@ def _cfg(ctx: Any) -> dict[str, Any]:
         "enable_group": _bool(raw.get("enable_group"), True),
         "enable_private": _bool(raw.get("enable_private"), True),
         "thinking_placeholder": _bool(raw.get("thinking_placeholder"), True),
+        # 0.5.2：统一排版（引用问题 → 分割线 → 回答 → 分割线 → 署名），只在宿主声明 messages.rich_divider 时生效。
+        "quote_question": _bool(raw.get("quote_question"), True),
+        "signature_template": (
+            DEFAULT_SIGNATURE_TEMPLATE
+            if raw.get("signature_template") is None
+            else str(raw.get("signature_template") or "").strip()[:300]
+        ),
         "bot_username": bot_username.casefold(),
         "telepilot_provider": str(raw.get("telepilot_provider") or "").strip(),
         "telepilot_model": str(raw.get("telepilot_model") or "").strip(),
@@ -1226,6 +1233,30 @@ def compose_text_layout(head: str, answer: str, tail: str) -> str:
             tail = TEXT_DIVIDER + "\n" + tail
         tail = "\n" + tail
     return f"{head}{answer.strip()}{tail}".strip()
+
+
+DEFAULT_SIGNATURE_TEMPLATE = "— {model}"
+QUOTE_QUESTION_CHARS = 300
+# 服务器已经在顶部加了问题引用的访客消息（TelePilot 0.120.0 「@Bot 问题 → 发送这个问题」）。
+SERVER_QUOTED_GUEST_PREFIX = "tpask:"
+
+
+def _visible(html_fragment: str) -> str:
+    return re.sub(r"<[^>]+>", "", str(html_fragment or "")).strip()
+
+
+def question_quote_html(question: str) -> str:
+    text = _clip(str(question or "").strip(), QUOTE_QUESTION_CHARS)
+    return f"<blockquote>❓ {html_escape(text)}</blockquote>" if text else ""
+
+
+def question_quote_markdown(question: str) -> str:
+    text = _clip(str(question or "").strip(), QUOTE_QUESTION_CHARS)
+    if not text:
+        return ""
+    lines = [html_to_rich_markdown(html_escape(line)) for line in text.split("\n")]
+    lines[0] = "❓ " + lines[0]
+    return "\n".join(f"> {line}" if line.strip() else ">" for line in lines)
 
 
 # ---------------------------------------------------------------------------
@@ -2551,11 +2582,52 @@ class InteractionAIChatPlugin(Plugin):
             # 新排版：模板里的整行横线换成「━」，回答前后补分割线（普通格式没有原生分割线）
             values["answer"] = RICH_ANSWER_SENTINEL
             head, _sep, tail = render_template(template, values).partition(RICH_ANSWER_SENTINEL)
+            question, signature = self._layout_extras(cfg, trigger, values, head, tail)
+            if question:
+                head = question_quote_html(question) + ("\n" + head if head.strip() else "\n")
+            if signature:
+                tail = tail.rstrip() + "\n" + signature
             rendered = compose_text_layout(head, answer_html, tail)
             return split_html(rendered, SEGMENT_LIMIT) or [answer_html]
         values["answer"] = answer_html
         rendered = render_template(template, values)
         return split_html(rendered, SEGMENT_LIMIT) or [answer_html]
+
+    @staticmethod
+    def _layout_extras(
+        cfg: dict[str, Any],
+        trigger: _Trigger,
+        values: dict[str, str],
+        head: str,
+        tail: str,
+        *,
+        rich: bool = False,
+    ) -> tuple[str, str]:
+        """统一排版要补的「问题引用」与「署名」（0.5.2，仅新宿主）。返回 (问题原文, 署名 HTML)，不需要时为空。
+
+        - 问题引用：群里（@Bot / 回复 Bot / 关键词）与访客模式加；私聊不加；服务器已加过引用的
+          inline 提问（guest_query_id 以 ``tpask:`` 开头）不重复加；模板里自己写了引用块也不加。
+        - 署名：模板在 {answer} 后面除了 {sources} 没有别的文字、且回答不是和其它文字写在同一行时，
+          追加「署名」模板（默认 ``— {model}``，留空则不加）。
+        """
+
+        question = ""
+        if cfg.get("quote_question", True) and "<blockquote" not in str(head or "").lower():
+            kind = getattr(trigger, "kind", "")
+            guest_id = str(getattr(trigger, "guest_query_id", "") or "")
+            if kind in GROUP_KINDS or (kind == "guest" and not guest_id.startswith(SERVER_QUOTED_GUEST_PREFIX)):
+                question = str(getattr(trigger, "text", "") or "").strip()
+        signature = ""
+        template = str(cfg.get("signature_template") or "")
+        if template:
+            rest = str(tail or "")
+            if values.get("sources"):
+                rest = rest.replace(values["sources"], "")
+            head_inline = bool(_visible(head)) and _same_line(head, before=True)
+            if not _visible(rest) and not head_inline:
+                rendered = render_template(template, {k: v for k, v in values.items() if k not in {"answer", "sources", "notices"}})
+                signature = rendered if re.search(r"\w", _visible(rendered)) else ""
+        return question, signature
 
     def _format_rich(
         self,
@@ -2591,13 +2663,23 @@ class InteractionAIChatPlugin(Plugin):
         head_md = rich_template_lines(head, dividers=layout)
         tail_md = rich_template_lines(tail, dividers=layout)
         if layout:
+            head_inline = _same_line(head, before=True)
+            tail_inline = _same_line(tail, before=False)
+            question, signature = self._layout_extras(cfg, trigger, values, head, tail, rich=True)
+            if question:
+                head_md = question_quote_markdown(question) + ("\n\n" + head_md if head_md.strip() else "")
+                head_inline = head_inline and bool(head.strip())
+            if signature:
+                sig_md = rich_template_lines(html_to_rich_markdown(signature), dividers=True)
+                tail_md = (tail_md.rstrip() + "\n\n" + sig_md) if tail_md.strip() else sig_md
+                tail_inline = False
             rendered = compose_layout(
                 head_md,
                 answer_md,
                 tail_md,
                 divider=RICH_DIVIDER,
-                head_inline=_same_line(head, before=True),
-                tail_inline=_same_line(tail, before=False),
+                head_inline=head_inline,
+                tail_inline=tail_inline,
             )
         else:
             rendered = "\n\n".join(part for part in (head_md, answer_md, tail_md) if part.strip())
@@ -2700,6 +2782,9 @@ class InteractionAIChatPlugin(Plugin):
     async def _inline_via_bot_placeholder(self, ctx: Any, trigger: _Trigger, text: str) -> _Placeholder | None:
         """账号本人在群里触发（含 PT 查询等关键词）时，按服务器「AI 回复方式」= inline 代发发出“用户名 via @Bot”占位。
 
+        TelePilot 0.120.0-beta.3+ 默认「Bot 在群里时由 Bot 回复」：交互 Bot 就在这个群里时平台返回
+        ``reason="bot_reply_preferred"``，这里照旧由 Bot 发占位（不记日志）。
+
         TelePilot 0.119.0+ 能力 ``messages.inline_via_bot``：平台借交互 Bot 的 inline 模式代发并返回
         ``inline_message_id``，后续沿用 inline 消息编辑（Rich Message → HTML）。旧平台、设置为普通、不是账号本人、
         群禁止 inline 等情况返回 None，照旧用交互 Bot 发占位。
@@ -2728,7 +2813,7 @@ class InteractionAIChatPlugin(Plugin):
             return None
         if not isinstance(result, dict) or not result.get("ok") or not result.get("inline_message_id"):
             reason = str((result or {}).get("reason") or "") if isinstance(result, dict) else ""
-            if reason and reason not in {"style_normal", "not_owner"}:
+            if reason and reason not in {"style_normal", "not_owner", "bot_reply_preferred"}:
                 await _log(ctx, "info", "AI 答疑未使用 inline 代发，改用交互 Bot 回复", reason=_clip(reason, 64), kind=trigger.kind)
             return None
         return _Placeholder(inline_message_id=str(result["inline_message_id"]))
