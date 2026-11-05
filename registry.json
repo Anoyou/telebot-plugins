@@ -885,6 +885,8 @@
         "zh": "交互 Bot 被 @提及/回复（含访客模式）时调用 TelePilot 已配置的 AI Provider 回答，带按会话+用户的短期记忆、白名单与每日限额。"
       },
       "usage": "交互 Bot 被 @提及 或被回复时，调用 TelePilot 已配置的 AI Provider 回答触发者，并按“会话 + 用户”保存短期记忆。支持访客模式（Bot 未加入的群/私聊，Bot API 10.0 Guest Mode）、Bot 已加入的群里 @Bot/回复 Bot，以及与 Bot 私聊。收到提问先回一条“🤔”占位，答案出来后原地编辑为 Telegram 富文本；可选联网搜索与识图。发送“重置”清空自己的记忆。需要在 BotFather 为交互 Bot 开启 Guest Chat Mode ；服务器参数“AI 回复方式”选 inline 代发时还需开启 Inline Mode 与 Inline Feedback（账号本人在群里提问会以“你的名字 via @Bot”代发富文本），否则建议关闭 Inline Mode。",
+      "release_notes": "- 回答排版补齐「问题引用 → 分割线 → 回答 → 分割线 → 署名」：群里（@Bot、回复 Bot、关键词）和访客模式的回答顶部用引用块显示原来的问题；回答最下面单独一行署名。以前关键词触发的回答没有引用、没有署名，所以也看不到分割线；「@Bot 问题 → 发送这个问题」的回答缺底部分割线和署名。\n- 新配置「回答顶部引用问题」（默认开；私聊不加；服务器已加过引用的 inline 提问、模板自带引用块时不重复）与「署名」（默认 `— {model}`，可用 {model} {provider} {user}；回复包装模板在 {answer} 后面已经写了署名时不再追加；留空不加）。\n- 配合 TelePilot 0.120.0-beta.3「Bot 在群里时由 Bot 回复」：你自己在 Bot 所在群里用关键词 / @Bot 提问时，平台返回 `bot_reply_preferred`，插件照旧由 Bot 回复（不再记“未使用 inline 代发”日志）。\n- 兼容：引用和署名只在宿主声明 `messages.rich_divider`（TelePilot 0.120.0-beta.2+）时加，旧服务器输出不变。`min_telepilot_version` 保持 0.105.0-beta.1。",
+      "released_at": "2026-11-05",
       "homepage": "https://github.com/Anoyou/telebot-plugins/tree/main/interaction-ai-chat",
       "channel_versions": {
         "stable": "0.5.2"
