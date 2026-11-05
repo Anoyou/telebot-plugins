@@ -318,7 +318,8 @@ class RichDeliveryTest(base._StubbedTestCase):
         payload["sender"]["display_name"] = "张_三*"
         run(plugin.on_event(ctx, payload))
         markdown = ctx.messages.applied[-1]["rich_message"]["markdown"]
-        self.assertTrue(markdown.startswith("<b>张\\_三\\*</b> 问：\n<i>当前模型不支持联网搜索"))
+        # 0.5.1：模板里的单个换行保留为 <br>（不再被 Markdown 并成一行）
+        self.assertTrue(markdown.startswith("<b>张\\_三\\*</b> 问：<br><i>当前模型不支持联网搜索"))
         self.assertIn("\n\n答案 *重点*", markdown)
         self.assertNotIn("\n\n\n", markdown)
 

@@ -203,8 +203,9 @@ FORMAT_RULE_RICH = (
     "Markdown 表格（不超过 20 列）、<details><summary>标题</summary>内容</details> 折叠次要内容、$$公式$$。"
     "不要声称自己只能发纯文字或发不了富文本；除上面列出的标签外不要输出 HTML，不要插入图片、按钮或自定义表情；"
     "正文里的美元符号写成 \\$（避免被当成公式）。排版保持简洁：段落之间最多空一行，列表项之间不空行。"
+    "需要把回答分成几部分时，用单独一行 --- 作分隔（前后各空一行），不要手打整行横线（如 ———— 或 ━━━）。"
 )
-FORMAT_RULE_PLAIN = "使用纯文本回答，不要使用 Markdown 或 HTML；"
+FORMAT_RULE_PLAIN = "使用纯文本回答，不要使用 Markdown 或 HTML；需要分成几部分时用单独一行 --- 作分隔；"
 
 THINK_RE = re.compile(r"<think(?:ing)?\b[^>]*>[\s\S]*?</think(?:ing)?>", re.IGNORECASE)
 # 推理草稿识别：模型（或旧版平台）把思考过程当答案返回时，开头常是这些英文自言自语。
@@ -1110,6 +1111,124 @@ def _format_sources(sources: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 回答排版：引用 → 分割线 → 回答 → 分割线 → 署名（0.5.1）
+# ---------------------------------------------------------------------------
+
+# 宿主能力：Rich Markdown 单独一行 ``---`` = 原生分割线、``<br>`` = 段内换行（TelePilot 0.120.0-beta.2+）。
+RICH_DIVIDER_CAPABILITY = "messages.rich_divider"
+RICH_DIVIDER = "---"
+# 普通（HTML / 纯文本）回复没有原生分割线，用整行「━」，与 TelePilot 自己的 AI 回复一致。
+TEXT_DIVIDER = "━━━━━━━━━━━━"
+_RULE_LINE_RE = re.compile(r"^[-—–─━═_=＝~～·•*]{3,}$")
+_LIST_LINE_RE = re.compile(r"^(?:\d{1,3}[.)]|[-+*])\s")
+
+
+def host_supports_layout(ctx: Any) -> bool:
+    """宿主声明了 ``messages.rich_divider`` 才用新排版；旧宿主 / 探测失败按原格式输出。"""
+
+    caps = getattr(ctx, "capabilities", None)
+    if caps is None:
+        return False
+    try:
+        return bool(caps.has(RICH_DIVIDER_CAPABILITY))
+    except Exception:  # noqa: BLE001 - 探测失败按旧格式
+        return False
+
+
+def is_rule_line(line: str) -> bool:
+    """整行横线（手打的 ———— / ━━━ / --- / ___ 等，Markdown 转义的反斜杠不计）。"""
+
+    return bool(_RULE_LINE_RE.match(str(line or "").replace("\\", "").replace(" ", "").strip()))
+
+
+def rich_template_lines(markdown: str, *, dividers: bool) -> str:
+    """模板部分（已转成 Rich Markdown）按字面保留换行。
+
+    Markdown 会把单个换行并成空格（手打的横线和署名因此挤成一行）；这里同一段里的行用 ``<br>`` 连接，
+    空行分段，列表行保持原样；``dividers=True`` 时整行横线换成原生分割线 ``---``。
+    """
+
+    blocks: list[str] = []
+    para: list[str] = []
+    items: list[str] = []
+
+    def flush() -> None:
+        if para:
+            blocks.append("<br>".join(para))
+            para.clear()
+        if items:
+            blocks.append("\n".join(items))
+            items.clear()
+
+    for raw in str(markdown or "").split("\n"):
+        line = raw.strip()
+        if not line:
+            flush()
+            continue
+        if dividers and is_rule_line(line):
+            flush()
+            if not blocks or blocks[-1] != RICH_DIVIDER:
+                blocks.append(RICH_DIVIDER)
+            continue
+        if _LIST_LINE_RE.match(line):
+            if para:
+                blocks.append("<br>".join(para))
+                para.clear()
+            items.append(line)
+            continue
+        if items:
+            flush()
+        para.append(line)
+    flush()
+    return "\n\n".join(blocks)
+
+
+def _same_line(fragment: str, *, before: bool) -> bool:
+    """模板里回答和其它文字写在同一行（如 ``答：{answer}``）时不补分割线。"""
+
+    text = str(fragment or "").replace(" ", "").replace("\t", "")
+    if not text.strip():
+        return False
+    return not text.endswith("\n") if before else not text.startswith("\n")
+
+
+def compose_layout(head: str, answer: str, tail: str, *, divider: str, head_inline: bool, tail_inline: bool) -> str:
+    """引用 / 标题 → 分割线 → 回答 → 分割线 → 署名；模板已有分割线不重复，同一行的文字不补。"""
+
+    head = head.strip()
+    tail = tail.strip()
+    parts: list[str] = []
+    if head:
+        parts.append(head)
+        if not head_inline and not head.endswith(divider) and not answer.lstrip().startswith(divider):
+            parts.append(divider)
+    parts.append(answer.strip())
+    if tail:
+        if not tail_inline and not tail.startswith(divider) and not answer.rstrip().endswith(divider):
+            parts.append(divider)
+        parts.append(tail)
+    return "\n\n".join(part for part in parts if part)
+
+
+def compose_text_layout(head: str, answer: str, tail: str) -> str:
+    """普通（HTML）回复的同一排版：模板换行原样保留，整行横线换成「━」，回答前后补一行「━」。"""
+
+    head = "\n".join(TEXT_DIVIDER if is_rule_line(line) else line for line in str(head or "").split("\n"))
+    tail = "\n".join(TEXT_DIVIDER if is_rule_line(line) else line for line in str(tail or "").split("\n"))
+    if head.strip() and not _same_line(head, before=True):
+        head = head.rstrip()
+        if not head.endswith(TEXT_DIVIDER) and not answer.lstrip().startswith(TEXT_DIVIDER):
+            head += "\n" + TEXT_DIVIDER
+        head += "\n"
+    if tail.strip() and not _same_line(tail, before=False):
+        tail = tail.lstrip()
+        if not tail.startswith(TEXT_DIVIDER) and not answer.rstrip().endswith(TEXT_DIVIDER):
+            tail = TEXT_DIVIDER + "\n" + tail
+        tail = "\n" + tail
+    return f"{head}{answer.strip()}{tail}".strip()
+
+
+# ---------------------------------------------------------------------------
 # 插件
 # ---------------------------------------------------------------------------
 
@@ -1656,8 +1775,13 @@ class InteractionAIChatPlugin(Plugin):
             return guarded_reply
         answer = truncate(answer, cfg["max_output_chars"])
         await self._record_turn(store, cfg, mem_key, history, question, answer, replay=replay)
-        segments = self._format_answer(cfg, trigger, answer, result, notices, sources=sources)
-        rich = self._format_rich(cfg, trigger, answer, result, notices, sources=sources) if cfg["rich_text"] else None
+        layout = host_supports_layout(ctx)
+        segments = self._format_answer(cfg, trigger, answer, result, notices, sources=sources, layout=layout)
+        rich = (
+            self._format_rich(cfg, trigger, answer, result, notices, sources=sources, layout=layout)
+            if cfg["rich_text"]
+            else None
+        )
         await _log(
             ctx,
             "info",
@@ -2401,6 +2525,7 @@ class InteractionAIChatPlugin(Plugin):
         notices: list[str],
         *,
         sources: Any = None,
+        layout: bool = False,
     ) -> list[str]:
         raw_sources = sources if sources is not None else getattr(result, "sources", None)
         if not cfg["rich_text"]:
@@ -2420,9 +2545,15 @@ class InteractionAIChatPlugin(Plugin):
             model=str(getattr(result, "model", "") or ""),
             provider=str(getattr(result, "provider_name", "") or ""),
         )
-        values["answer"] = answer_html
         values["sources"] = _format_sources(raw_sources)
         values["notices"] = "".join(f"<i>{item}</i>\n\n" for item in notices if item)
+        if layout:
+            # 新排版：模板里的整行横线换成「━」，回答前后补分割线（普通格式没有原生分割线）
+            values["answer"] = RICH_ANSWER_SENTINEL
+            head, _sep, tail = render_template(template, values).partition(RICH_ANSWER_SENTINEL)
+            rendered = compose_text_layout(head, answer_html, tail)
+            return split_html(rendered, SEGMENT_LIMIT) or [answer_html]
+        values["answer"] = answer_html
         rendered = render_template(template, values)
         return split_html(rendered, SEGMENT_LIMIT) or [answer_html]
 
@@ -2435,6 +2566,7 @@ class InteractionAIChatPlugin(Plugin):
         notices: list[str],
         *,
         sources: Any = None,
+        layout: bool = False,
     ) -> str | None:
         """按“最终回复包装”模板拼出 Rich Markdown；模板、提示、来源是 HTML，嵌入时转义 Markdown 标点。"""
 
@@ -2454,7 +2586,21 @@ class InteractionAIChatPlugin(Plugin):
         values["sources"] = _format_sources(raw_sources)
         values["notices"] = "".join(f"<i>{item}</i>\n\n" for item in notices if item)
         rendered = html_to_rich_markdown(render_template(template, values))
-        rendered = rendered.replace(RICH_ANSWER_SENTINEL, f"\n\n{answer_md}\n\n", 1)
+        head, _sep, tail = rendered.partition(RICH_ANSWER_SENTINEL)
+        # 模板按字面保留换行（单个换行不再被 Markdown 并成一行）；新宿主上整行横线换成原生分割线
+        head_md = rich_template_lines(head, dividers=layout)
+        tail_md = rich_template_lines(tail, dividers=layout)
+        if layout:
+            rendered = compose_layout(
+                head_md,
+                answer_md,
+                tail_md,
+                divider=RICH_DIVIDER,
+                head_inline=_same_line(head, before=True),
+                tail_inline=_same_line(tail, before=False),
+            )
+        else:
+            rendered = "\n\n".join(part for part in (head_md, answer_md, tail_md) if part.strip())
         rendered = re.sub(r"\n{3,}", "\n\n", rendered).strip()
         if not rendered or len(rendered) > RICH_TEXT_LIMIT - 768:
             return None

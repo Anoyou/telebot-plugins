@@ -4,6 +4,10 @@
 
 TelePilot 主仓库的 `CHANGELOG.md` 只写主仓库（服务器、Web、iOS）的改动；涉及插件的版本号与改动说明统一记在这里。下面「配合 TelePilot x.y.z」表示该批插件改用的新能力从哪个服务器版本开始可用；除特别说明外都**不抬高 `min_telepilot_version`**，旧服务器照旧可用。
 
+## 2026-11-05 · AI 答疑（交互 Bot）0.5.1：回答排版与模板换行
+
+- 「最终回复包装」模板的单个换行在富文本里保留；宿主声明 `messages.rich_divider`（TelePilot 0.120.0-beta.2+）时按「引用 → 分割线 → 回答 → 分割线 → 署名」排版（原生分割线，普通格式用整行「━」），旧服务器不加分割线；系统提示要求分节用单独一行 `---`。`min_telepilot_version` 不变。市场索引同步。
+
 ## 2026-11-04 · AI 答疑（交互 Bot）0.5.0：配合 TelePilot 0.119.0 的 AI 回复 inline 代发
 
 - 账号本人在群里触发 AI 答疑时，按服务器参数“AI 回复方式”用 `ctx.messages.inline_via_bot` 代发“你的名字 via @Bot”占位并编辑成富文本；能力探测不到时行为不变，`min_telepilot_version` 不变。市场索引同步。
